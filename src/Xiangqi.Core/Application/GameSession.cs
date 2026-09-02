@@ -1,0 +1,106 @@
+using Xiangqi.Core.Domain;
+
+namespace Xiangqi.Core.Application;
+
+/// <summary>
+/// UI-facing match facade. It exposes immutable snapshots and intention-level commands only.
+/// The same facade can be driven by local input, a replay, or validated network messages.
+/// </summary>
+public sealed class GameSession
+{
+    private readonly IReadOnlyList<IPositionPatternDetector> _patternDetectors;
+    private ChessGame _game;
+
+    public GameSession(IEnumerable<IPositionPatternDetector>? patternDetectors = null)
+    {
+        _patternDetectors = patternDetectors?.ToArray() ?? [];
+        _game = ChessGame.CreateStandard();
+    }
+
+    public event Action<GameSnapshot>? StateChanged;
+    public event Action<PresentationCue>? CueRaised;
+
+    public GameSnapshot Snapshot => _game.Snapshot;
+    public bool CanUndo => _game.CanUndo;
+
+    public IReadOnlyList<BoardPosition> GetLegalDestinations(BoardPosition from) =>
+        _game.GetLegalDestinations(from);
+
+    public MoveResult TryMove(BoardPosition from, BoardPosition to)
+    {
+        var before = _game.Snapshot;
+        var result = _game.TryMove(new ChessMove(from, to));
+        if (!result.IsSuccess)
+        {
+            CueRaised?.Invoke(new PresentationCue(
+                PresentationCueKind.IllegalMove, result.Move, Message: GetRejectionText(result.Rejection)));
+            return result;
+        }
+
+        var after = _game.Snapshot;
+        CueRaised?.Invoke(new PresentationCue(
+            result.CapturedPiece is null ? PresentationCueKind.Move : PresentationCueKind.Capture,
+            result.Move, result.MovedPiece));
+
+        if (after.IsFinished)
+        {
+            var kind = after.EndReason == GameEndReason.Stalemate
+                ? PresentationCueKind.Stalemate
+                : PresentationCueKind.Checkmate;
+            CueRaised?.Invoke(new PresentationCue(kind, result.Move, result.MovedPiece));
+        }
+        else if (after.IsInCheck)
+        {
+            CueRaised?.Invoke(new PresentationCue(PresentationCueKind.Check, result.Move, result.MovedPiece));
+        }
+
+        foreach (var detector in _patternDetectors)
+        foreach (var cue in detector.Detect(before, after, result))
+            CueRaised?.Invoke(cue);
+
+        StateChanged?.Invoke(after);
+        return result;
+    }
+
+    public bool Undo()
+    {
+        if (!_game.Undo()) return false;
+        CueRaised?.Invoke(new PresentationCue(PresentationCueKind.Undo));
+        StateChanged?.Invoke(_game.Snapshot);
+        return true;
+    }
+
+    public void NewGame()
+    {
+        _game = ChessGame.CreateStandard();
+        CueRaised?.Invoke(new PresentationCue(PresentationCueKind.NewGame));
+        StateChanged?.Invoke(_game.Snapshot);
+    }
+
+    public bool DeclareTimeout(PieceSide loser)
+    {
+        if (!_game.DeclareLoss(loser, GameEndReason.Timeout)) return false;
+        CueRaised?.Invoke(new PresentationCue(PresentationCueKind.Timeout,
+            Message: loser == PieceSide.Red ? "红方超时" : "黑方超时"));
+        StateChanged?.Invoke(_game.Snapshot);
+        return true;
+    }
+
+    public bool DeclareDraw()
+    {
+        if (!_game.DeclareDraw()) return false;
+        CueRaised?.Invoke(new PresentationCue(PresentationCueKind.Draw, Message: "双方同意和棋"));
+        StateChanged?.Invoke(_game.Snapshot);
+        return true;
+    }
+
+    private static string GetRejectionText(MoveRejection rejection) => rejection switch
+    {
+        MoveRejection.GameAlreadyFinished => "对局已经结束",
+        MoveRejection.NotPlayersTurn => "还没有轮到这一方",
+        MoveRejection.OccupiedByFriendlyPiece => "目标位置已有己方棋子",
+        MoveRejection.PieceRuleViolation => "该棋子不能这样走",
+        MoveRejection.WouldLeaveGeneralInCheck => "这步会使己方将帅受攻击",
+        _ => "无效着法"
+    };
+}

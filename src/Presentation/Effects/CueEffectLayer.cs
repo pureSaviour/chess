@@ -1,0 +1,127 @@
+using Godot;
+using Xiangqi.Core.Application;
+using Xiangqi.Core.Domain;
+
+namespace Xiangqi.Presentation.Effects;
+
+/// <summary>
+/// Maps semantic cues to Godot visuals. Pattern detectors never reference this class; alternate
+/// themes can replace this player while consuming the same cue IDs.
+/// </summary>
+public partial class CueEffectLayer : Control
+{
+    private readonly ColorRect _flash = new() { MouseFilter = MouseFilterEnum.Ignore };
+    private readonly Label _title = new()
+    {
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center,
+        MouseFilter = MouseFilterEnum.Ignore
+    };
+    private readonly EffectBurstView _burst = new();
+    private Tween? _tween;
+
+    public CueEffectLayer()
+    {
+        MouseFilter = MouseFilterEnum.Ignore;
+        SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        _flash.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        _flash.Modulate = new Color(1, 1, 1, 0);
+        AddChild(_flash);
+        AddChild(_burst);
+
+        _title.SetAnchorsPreset(LayoutPreset.Center);
+        _title.OffsetLeft = -300;
+        _title.OffsetRight = 300;
+        _title.OffsetTop = -80;
+        _title.OffsetBottom = 80;
+        _title.AddThemeFontSizeOverride("font_size", 64);
+        _title.AddThemeColorOverride("font_shadow_color", new Color(0, 0, 0, 0.92f));
+        _title.AddThemeConstantOverride("shadow_offset_x", 5);
+        _title.AddThemeConstantOverride("shadow_offset_y", 6);
+        _title.Modulate = new Color(1, 1, 1, 0);
+        AddChild(_title);
+    }
+
+    public bool EnabledBySettings { get; set; } = true;
+
+    public void Play(PresentationCue cue)
+    {
+        if (!EnabledBySettings && cue.Kind != PresentationCueKind.IllegalMove) return;
+        var style = ResolveStyle(cue);
+        if (style.Text is null) return;
+
+        Animate(style);
+    }
+
+    public void PlaySettlement(string text, bool? victory, GameEndReason reason)
+    {
+        if (!EnabledBySettings) return;
+        var color = victory switch
+        {
+            true => new Color("#FFE6A1"),
+            false => new Color("#D2C7BA"),
+            null => new Color("#E8D8AC")
+        };
+        var flash = victory switch
+        {
+            true => new Color("#9A3C25"),
+            false => new Color("#252A31"),
+            null => new Color("#4E493C")
+        };
+        var suffix = reason == GameEndReason.Timeout
+            ? victory == true ? "\n对方超时" : "\n己方超时"
+            : string.Empty;
+        Animate(new EffectStyle(text + suffix, color, flash, victory switch
+        {
+            true => 0.38f,
+            false => 0.28f,
+            null => 0.32f
+        }, victory switch { true => 44, false => 20, null => 32 }, 2.2f));
+    }
+
+    private void Animate(EffectStyle style)
+    {
+
+        _tween?.Kill();
+        _title.Text = style.Text;
+        _title.AddThemeColorOverride("font_color", style.Color);
+        _title.Scale = Vector2.One * 0.72f;
+        _title.PivotOffset = _title.Size / 2f;
+        _title.Modulate = new Color(1, 1, 1, 0);
+        _flash.Color = style.Flash;
+        _flash.Modulate = new Color(1, 1, 1, 0);
+        _burst.Configure(style.Color, style.Rays);
+        _burst.SetProgress(0);
+
+        _tween = CreateTween();
+        _tween.SetParallel(true);
+        _tween.TweenProperty(_flash, "modulate:a", style.FlashAlpha, 0.10f);
+        _tween.TweenProperty(_title, "modulate:a", 1.0f, 0.12f);
+        _tween.TweenProperty(_title, "scale", Vector2.One, 0.24f)
+            .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+        _tween.TweenMethod(Callable.From<float>(_burst.SetProgress), 0.0f, 1.0f, style.Duration * 0.8f);
+        _tween.Chain().TweenInterval(style.Duration * 0.58f);
+        _tween.Chain().TweenProperty(_title, "modulate:a", 0.0f, 0.28f);
+        _tween.TweenProperty(_flash, "modulate:a", 0.0f, 0.38f);
+    }
+
+    private static EffectStyle ResolveStyle(PresentationCue cue) => cue.Kind switch
+    {
+        PresentationCueKind.Capture => new("吃", new Color("#F0B55A"), new Color("#5C241A"), 0.12f, 14, 0.75f),
+        PresentationCueKind.Check => new("将军", new Color("#FFCF73"), new Color("#8D1F27"), 0.20f, 20, 1.05f),
+        PresentationCueKind.Checkmate => new("绝杀", new Color("#FFE29A"), new Color("#A6262E"), 0.28f, 28, 1.35f),
+        PresentationCueKind.Stalemate => new("困毙", new Color("#E1C591"), new Color("#3D2C25"), 0.18f, 12, 1.1f),
+        PresentationCueKind.SpecialPattern => new(cue.Message ?? "妙手", new Color("#FFF0B2"),
+            new Color("#8B261F"), 0.32f, 36, 1.7f),
+        PresentationCueKind.Timeout => new("超时", new Color("#FFD18A"),
+            new Color("#6E2525"), 0.24f, 22, 1.2f),
+        PresentationCueKind.Draw => new("和棋", new Color("#E8D8AC"),
+            new Color("#4E493C"), 0.22f, 24, 1.2f),
+        PresentationCueKind.IllegalMove => new(cue.Message ?? "无效着法", new Color("#E4D9CA"),
+            new Color("#3B3029"), 0.08f, 8, 0.65f),
+        _ => default
+    };
+
+    private readonly record struct EffectStyle(
+        string? Text, Color Color, Color Flash, float FlashAlpha, int Rays, float Duration);
+}
