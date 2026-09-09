@@ -1,6 +1,6 @@
 # 中国象棋（Godot 4 / C#）
 
-一个以 C# 编写逻辑的 Godot 4.5 中国象棋游戏。当前支持经典象棋四种入口、本地双人、ENet 局域网、Steam 好友和外接 UCI AI（如皮卡鱼）对弈，并提供棋盘路数、可切换棋盘皮肤及局面候选走法询问。
+一个以 C# 编写逻辑的 Godot 4.7.2 中国象棋游戏。当前支持经典象棋四种入口、本地双人、ENet 局域网、Steam 好友和外接 UCI AI（如皮卡鱼）对弈，并提供棋盘路数、可切换棋盘皮肤及局面候选走法询问。
 
 画廊新增“三国象棋”：正六边形三国棋盘、收编、三人计时/悔棋/和棋、国号聊天、本地三人及 LAN/Steam 三席入口；选中红光和最近着法白光共用 shader。LAN 默认 TCP 48028，支持保留房间时自动重连与房主迁移（真实回环三端测试通过）；Steam 三账号实联仍待验收。规则和网络边界见 [三国象棋说明](docs/three-kingdoms.md)。
 
@@ -8,28 +8,29 @@
 
 ## 运行
 
-环境变量 `GODOT_PATH` 应指向 Godot Mono 发行版目录。用该目录中的 Godot 可执行文件打开本目录，或在 PowerShell 中运行：
+环境变量 `GODOT_NEW_PATH` 应指向 Godot 4.7.2 .NET 发行版目录。用该目录中的 Godot 可执行文件打开本目录，或在 PowerShell 中运行：
 
 ```powershell
-& (Join-Path $env:GODOT_PATH 'Godot_v4.5.1-stable_mono_win64.exe') --path .
+& (Join-Path $env:GODOT_NEW_PATH 'Godot_v4.7.2-stable_mono_win64.exe') --path .
 ```
 
 构建与规则测试：
 
 ```powershell
 dotnet build .\Xiangqi.sln
-dotnet .\tests\Xiangqi.Core.Tests\bin\Debug\net8.0\Xiangqi.Core.Tests.dll
+dotnet run --project .\tests\Xiangqi.Core.Tests\Xiangqi.Core.Tests.csproj
+dotnet run --project .\tests\Xiangqi.ThreeNetwork.Tests\Xiangqi.ThreeNetwork.Tests.csproj
 ```
 
 ### Android 导出
 
-主项目默认使用 `net8.0`，当 Godot 以 Android 为目标平台构建时自动切换为 `net9.0`，以满足 Godot 4.5 的 C# Android 导出要求。规则库和桌面测试继续使用 `net8.0`。
+主项目默认使用 `net8.0`，当 Godot 以 Android 为目标平台构建时自动切换为 `net9.0`，以满足 Godot C# Android 导出要求。规则库和桌面测试继续使用 `net8.0`。本次只迁移 Godot，尚未迁移项目的 .NET 目标框架；评估与审批门见 [Godot 4.7 迁移记录](docs/godot-4.7-migration.md)。
 
-本机还需要在 Godot 的“编辑器设置 → 导出 → Android”中配置 Java SDK 与 Android SDK。Godot 4.5 推荐 OpenJDK 17，并需要 Android Platform-Tools 35.0.0 或更高版本、Build-Tools 35.0.0、Platform 35、最新 Command-line Tools、CMake 3.10.2.4988404 和 NDK 28.1.13356709。安装与路径配置完成后，可从导出窗口使用 `Android` 预设，或运行：
+本机还需要在 Godot 的“编辑器设置 → 导出 → Android”中配置 Java SDK 与 Android SDK。Godot 4.7 推荐 OpenJDK 17，并需要 Android Platform-Tools 35.0.0 或更高版本、Build-Tools 35.0.1、Platform 35、最新 Command-line Tools、CMake 3.10.2.4988404 和 NDK 28.1.13356709。安装与路径配置完成后，可从导出窗口使用 `Android` 预设，或运行：
 
 ```powershell
 New-Item -ItemType Directory .\build\android -Force | Out-Null
-& (Join-Path $env:GODOT_PATH 'Godot_v4.5.1-stable_mono_win64_console.exe') `
+& (Join-Path $env:GODOT_NEW_PATH 'Godot_v4.7.2-stable_mono_win64_console.exe') `
 	--headless --path . --export-debug Android .\build\android\Xiangqi-debug.apk
 ```
 

@@ -200,7 +200,7 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 `ReplayAnalysisCoordinator` 输入一个 IXiangqiAiEngine、不可变复盘局面序列和 100..10000 ms 搜索时长。`SelectAndSweepAsync(index)` 取消上一代操作、先算 index，再按距离补齐缓存；AnalysisAvailable 在调用上下文连续发布，UI 仍必须在 Godot 主线程调用。BestMove 经临时 ChessGame 重验，非法输出以 InvalidDataException 失败；分数约定为 UCI 行棋方视角并归一为红方视角，mate 映射到有界哨兵值。协调器拥有引擎，DisposeAsync 取消活动操作并释放进程；消费者不得再单独释放同一引擎。
 
-测试入口：核心自运行测试覆盖经典 FEN/PGN 往返、非法主线、两种试下隔离、三国扩展 PGN 重放，以及复盘评分归一/缓存/引擎释放。Godot smoke 应覆盖画廊结构和页面加载，但本轮本机 Godot 4.5.1 Mono headless 在进入托管页面前发生原生 signal 11，未取得 UI smoke 结果；真实 Pikafish 长棋谱性能、头像跨重启显示、动画手感和不同分辨率仍需人工视觉验收。
+测试入口：核心自运行测试覆盖经典 FEN/PGN 往返、非法主线、两种试下隔离、三国扩展 PGN 重放，以及复盘评分归一/缓存/引擎释放。2026-09-09 使用 `GODOT_NEW_PATH` 下 Godot 4.7.2 .NET 执行 `--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均通过，并检查了兼容渲染器 GPU 截图；真实 Pikafish 长棋谱性能、头像跨重启显示、动画手感和不同分辨率仍需人工视觉验收。
 
 ## 12. 新增抽象的验收清单
 

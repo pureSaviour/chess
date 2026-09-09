@@ -43,7 +43,7 @@ public partial class MainMenuScreen : Control
 
         var version = new Label
         {
-            Text = "C# · Godot 4.5",
+            Text = "C# · Godot 4.7",
             HorizontalAlignment = HorizontalAlignment.Center,
             CustomMinimumSize = new Vector2(0, 38),
             VerticalAlignment = VerticalAlignment.Bottom
@@ -52,4 +52,3 @@ public partial class MainMenuScreen : Control
         column.AddChild(version);
     }
 }
-

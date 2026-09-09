@@ -81,6 +81,7 @@ UI 根据“轮到谁、是否协商、是否结束”关闭按钮属于交互�
 | [揭棋玩法](docs/jieqi.md) | 暗/明身份、槽位首步、确定性洗牌、棋谱与联机保密边界 |
 | [架构检查记录](docs/architecture-review.md) | 2026-09-07 代码证据、分层评估、待改进项与验证范围 |
 | [Steam 集成](docs/steam-integration.md) | 平台配置、开发 App ID、验收；三国细节路由到对应玩法文档 |
+| [Godot 4.7 迁移记录](docs/godot-4.7-migration.md) | 4.5→4.7 配置、API 取舍、验证证据与 .NET 迁移审批门 |
 | [坐标方案](docs/three-kingdoms-coordinate-proposal.md) | 三国历史设计依据；已确认实现以 three-kingdoms.md 和代码为准 |
 | [AGENTS.md](AGENTS.md) | 全仓库 Agent 开发与交付约束 |
 | [XML 主题包与 shader 接口](docs/theme-package-proposal.md) | 已实现的 schema v1、双目录、安全边界、atlas/uniform 契约与当前限制 |
@@ -276,7 +277,7 @@ dotnet build .\Xiangqi.csproj -p:GodotTargetPlatform=android
 
 测试工程是自运行控制台程序，不能以 dotnet test 没报错替代实际用例执行。不同 GodotTargetPlatform 构建共享输出，需串行；运行桌面 Godot 前最后构建 Windows 目标。
 
-Godot 路径由 GODOT_PATH 提供；Debug 参数在 -- 后传入：
+Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于构建或验收。Debug 参数在 `--` 后传入：
 
 | 参数 | 验证目标 |
 | --- | --- |
@@ -299,6 +300,8 @@ Godot 路径由 GODOT_PATH 提供；Debug 参数在 -- 后传入：
 2026-09-09 揭棋本地领域、Seed 棋谱、记录/复盘及三卡画廊通过 48 项核心测试和 Windows Godot C# 编译。揭棋 LAN/Steam 权威脱敏协议、长打与 120 步无吃子裁决尚未实现。揭棋专属卡图由内置图像生成工具产出并保存为项目资源，仍需在实际画廊遮罩下做人工构图验收。
 
 2026-09-09 暗子背面/翻面修复通过 48 项核心回归、Android 与最终 Windows 构建（均 0 警告/错误）。揭子平移和翻面现共用同一时间线，不再在落点后追加翻面阶段。`--smoke-feedback` 已增加无字背面、covered→明子翻面和动画释放断言；本机 Godot 4.7.2 headless 可初始化 .NET，但多种启动参数均在主场景 `_Ready` 前以 0 退出、没有 PASS/FAIL，因此该 smoke 和实际翻面观感仍记为未验收。
+
+2026-09-09 Godot 4.7.2 迁移复核使用机器级 `GODOT_NEW_PATH` 的官方 .NET 发行版完成：解决方案、Android/Windows 条件构建均为 0 警告/错误，48 项核心测试和三人网络测试通过，`--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均输出 PASS。项目仍保持桌面/Core `net8.0`、Android `net9.0`；更高 .NET 目标框架只完成评估，未经维护者批准不得修改。详见 [迁移记录](docs/godot-4.7-migration.md)。
 
 仍未实现或未验收：
 

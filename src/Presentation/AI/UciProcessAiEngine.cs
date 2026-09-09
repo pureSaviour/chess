@@ -6,7 +6,7 @@ using Xiangqi.Core.Domain;
 namespace Xiangqi.Presentation.AI;
 
 /// <summary>
-/// Godot-owned adapter for UCI xiangqi engines such as Pikafish. It uses Godot 4.5's
+/// Godot-owned adapter for UCI xiangqi engines such as Pikafish. It uses Godot 4.7's
 /// non-blocking redirected process API and drains output from _Process, so engine analysis never
 /// blocks rendering or input. The child process and both pipes are released with this node.
 /// </summary>
