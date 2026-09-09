@@ -26,7 +26,7 @@ public readonly record struct MatchWireMessage(MatchWireMessageType Type, object
 /// </summary>
 public static class MatchWireProtocol
 {
-    public const byte Version = 4;
+    public const byte Version = 5;
     public const int MaximumPacketBytes = 16600;
     public const int MaximumChatUtf8Bytes = RoomChatManager.MaximumTextUtf8Bytes;
     public const int MaximumProfileTextUtf8Bytes = 96;
@@ -50,11 +50,12 @@ public static class MatchWireProtocol
 
     public static byte[] Encode(NetworkMatchConfiguration configuration)
     {
-        using var stream = new MemoryStream(11);
+        using var stream = new MemoryStream(12);
         using var writer = Writer(stream, MatchWireMessageType.Configuration);
         writer.Write(configuration.TimeControl.GameSeconds);
         writer.Write(configuration.TimeControl.MoveSeconds);
         writer.Write((byte)configuration.HostSide);
+        writer.Write((byte)configuration.Mode);
         return stream.ToArray();
     }
 
@@ -181,13 +182,14 @@ public static class MatchWireProtocol
         byte[] packet, out NetworkMatchConfiguration configuration)
     {
         configuration = default;
-        if (packet.Length != 11) return false;
+        if (packet.Length != 12) return false;
         using var reader = ReaderAfterHeader(packet);
         var gameSeconds = reader.ReadInt32();
         var moveSeconds = reader.ReadInt32();
         var hostSide = (PieceSide)reader.ReadByte();
-        if (gameSeconds < 0 || moveSeconds < 0 || !Enum.IsDefined(hostSide)) return false;
-        configuration = new NetworkMatchConfiguration(new TimeControl(gameSeconds, moveSeconds), hostSide);
+        var mode = (TwoPlayerGameMode)reader.ReadByte();
+        if (gameSeconds < 0 || moveSeconds < 0 || !Enum.IsDefined(hostSide) || !Enum.IsDefined(mode)) return false;
+        configuration = new NetworkMatchConfiguration(new TimeControl(gameSeconds, moveSeconds), hostSide, mode);
         return true;
     }
 

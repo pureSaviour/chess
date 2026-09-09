@@ -20,6 +20,7 @@ public partial class GalleryScreen : Control
     private readonly Action<int, NetworkMatchConfiguration> _host;
     private readonly Action<string, int> _join;
     private readonly Action<NetworkMatchConfiguration> _steamInvite;
+    private readonly TwoPlayerGameMode _mode;
     private readonly VBoxContainer _page = new();
 
     public GalleryScreen(
@@ -28,13 +29,15 @@ public partial class GalleryScreen : Control
         Action<int, NetworkMatchConfiguration> host,
         Action<string, int> join,
         Action<NetworkMatchConfiguration> steamInvite,
-        ClassicGalleryEntry initialEntry)
+        ClassicGalleryEntry initialEntry,
+        TwoPlayerGameMode mode = TwoPlayerGameMode.Classic)
     {
         _back = back;
         _startLocal = startLocal;
         _host = host;
         _join = join;
         _steamInvite = steamInvite;
+        _mode = mode;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(54, 34);
         AddChild(margin);
@@ -54,10 +57,11 @@ public partial class GalleryScreen : Control
         ClearPage();
         AddHeader("本地对决", _back);
         var content = AddSettingsCard(600, 380);
-        AddDescription(content, "两名玩家共用当前设备。可启用局时与步时。", "本地房间设置");
-        var time = AddTimeControls(content);
+        AddDescription(content, _mode == TwoPlayerGameMode.Classic ? "两名玩家共用当前设备。可启用局时与步时。" :
+            "两名玩家共用当前设备，本玩法当前不启用计时。", "本地房间设置");
+        var time = _mode == TwoPlayerGameMode.Classic ? AddTimeControls(content) : null;
         var start = UiStyle.CreateButton("开始本地对决", true);
-        start.Pressed += () => _startLocal(time.Value);
+        start.Pressed += () => _startLocal(time?.Value ?? TimeControl.Unlimited);
         content.AddChild(start);
     }
 
@@ -67,8 +71,10 @@ public partial class GalleryScreen : Control
         AddHeader("局域网联机", _back);
         var content = AddSettingsCard(720, 540);
         AddDescription(content, "房主配置房间并告知另一位玩家局域网 IPv4 地址；加入方只需填写地址与端口。", "ENet / UDP");
-        var side = AddSideControl(content, "房主执红", "房主执黑", "随机猜先");
-        var time = AddTimeControls(content);
+        var side = _mode == TwoPlayerGameMode.Junqi
+            ? AddSideControl(content, "房主为先手", "房主为后手", "随机猜先")
+            : AddSideControl(content, "房主执红", "房主执黑", "随机猜先");
+        var time = _mode == TwoPlayerGameMode.Classic ? AddTimeControls(content) : null;
         var form = new GridContainer { Columns = 2 };
         form.AddThemeConstantOverride("h_separation", 10);
         form.AddThemeConstantOverride("v_separation", 10);
@@ -84,7 +90,7 @@ public partial class GalleryScreen : Control
         form.AddChild(port);
         var hostButton = UiStyle.CreateButton("创建房间", true);
         hostButton.Pressed += () => _host((int)port.Value,
-            new NetworkMatchConfiguration(time.Value, ResolveSide(side.Selected)));
+            new NetworkMatchConfiguration(time?.Value ?? TimeControl.Unlimited, ResolveSide(side.Selected), _mode));
         form.AddChild(hostButton);
         var joinButton = UiStyle.CreateButton("加入房间");
         joinButton.Pressed += () => _join(address.Text.Trim(), (int)port.Value);
@@ -104,11 +110,13 @@ public partial class GalleryScreen : Control
         AddHeader("邀请 Steam 好友", _back);
         var content = AddSettingsCard(620, 430);
         AddDescription(content, "创建仅好友可见的双人 Lobby，随后打开 Steam 好友邀请界面。", "Steam Lobby / P2P");
-        var side = AddSideControl(content, "房主执红", "房主执黑", "随机猜先");
-        var time = AddTimeControls(content);
+        var side = _mode == TwoPlayerGameMode.Junqi
+            ? AddSideControl(content, "房主为先手", "房主为后手", "随机猜先")
+            : AddSideControl(content, "房主执红", "房主执黑", "随机猜先");
+        var time = _mode == TwoPlayerGameMode.Classic ? AddTimeControls(content) : null;
         var start = UiStyle.CreateButton("创建房间并邀请好友", true);
         start.Pressed += () => _steamInvite(
-            new NetworkMatchConfiguration(time.Value, ResolveSide(side.Selected)));
+            new NetworkMatchConfiguration(time?.Value ?? TimeControl.Unlimited, ResolveSide(side.Selected), _mode));
         content.AddChild(start);
     }
 

@@ -1,6 +1,9 @@
 using Godot;
 using Xiangqi.Core.Application;
+using Xiangqi.Core.Application.Jieqi;
+using Xiangqi.Core.Application.Junqi;
 using Xiangqi.Core.Domain;
+using Xiangqi.Core.Domain.Junqi;
 using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Profiles;
@@ -66,10 +69,15 @@ public partial class Main : Control
         () => ShowThreeRecords(false),
         () => ShowThreeRecords(true),
         StartJieqiLocal,
-        () => ShowJieqiNetworkPending("局域网联机"),
-        () => ShowJieqiNetworkPending("Steam 邀请好友"),
+        () => ShowJieqiGallery(ClassicGalleryEntry.Lan),
+        () => ShowJieqiGallery(ClassicGalleryEntry.Steam),
         () => ShowJieqiRecords(false),
-        () => ShowJieqiRecords(true)));
+        () => ShowJieqiRecords(true),
+        StartJunqiLocal,
+        () => ShowJunqiGallery(ClassicGalleryEntry.Lan),
+        () => ShowJunqiGallery(ClassicGalleryEntry.Steam),
+        () => ShowJunqiRecords(false),
+        () => ShowJunqiRecords(true)));
 
     private void StartJieqiLocal()
     {
@@ -81,11 +89,72 @@ public partial class Main : Control
     private void ShowJieqiRecords(bool saved) => SwitchTo(new JieqiRecordScreen(saved, ShowGallery,
         record => SwitchTo(new JieqiReplayScreen(_settings, _themes, record, () => ShowJieqiRecords(saved)))));
 
-    private void ShowJieqiNetworkPending(string route)
+    private void ShowJieqiGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
+        ShowGallery, _ => StartJieqiLocal(), StartJieqiLanHost, StartJieqiLanClient,
+        StartJieqiSteamInvite, entry, TwoPlayerGameMode.Jieqi));
+
+    private void StartJieqiLanHost(int port, NetworkMatchConfiguration configuration)
     {
-        _errorDialog.DialogText = $"揭棋{route}需要房主权威的脱敏状态协议，不能复用会泄露随机种子的经典锁步协议；该入口已预留，但本轮尚未开放。";
-        _errorDialog.PopupCentered(new Vector2I(620, 190));
+        try
+        {
+            var transport = EnetMatchTransport.Host(port);
+            var controller = new NetworkJieqiMatchController(transport, configuration.HostSide);
+            SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
+                $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
     }
+
+    private void StartJieqiLanClient(string address, int port)
+    {
+        try
+        {
+            var transport = EnetMatchTransport.Join(address, port);
+            var controller = new NetworkJieqiMatchController(transport, null);
+            SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
+                $"客户端 · {address}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJieqiSteamInvite(NetworkMatchConfiguration configuration) =>
+        StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Jieqi });
+
+    private void StartJunqiLocal() => SwitchTo(new JunqiGameScreen(ShowGallery));
+
+    private void ShowJunqiRecords(bool saved) => SwitchTo(new JunqiRecordScreen(saved, ShowGallery,
+        record => SwitchTo(new JunqiReplayScreen(record, () => ShowJunqiRecords(saved)))));
+
+    private void ShowJunqiGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
+        ShowGallery, _ => StartJunqiLocal(), StartJunqiLanHost, StartJunqiLanClient,
+        StartJunqiSteamInvite, entry, TwoPlayerGameMode.Junqi));
+
+    private void StartJunqiLanHost(int port, NetworkMatchConfiguration configuration)
+    {
+        try
+        {
+            var transport = EnetMatchTransport.Host(port);
+            var controller = new NetworkJunqiMatchController(transport, ToJunqiSide(configuration.HostSide));
+            SwitchTo(new JunqiGameScreen(controller, $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJunqiLanClient(string address, int port)
+    {
+        try
+        {
+            var transport = EnetMatchTransport.Join(address, port);
+            var controller = new NetworkJunqiMatchController(transport, null);
+            SwitchTo(new JunqiGameScreen(controller, $"客户端 · {address}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJunqiSteamInvite(NetworkMatchConfiguration configuration) =>
+        StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Junqi });
+
+    private static JunqiSide ToJunqiSide(PieceSide side) => side == PieceSide.Red ? JunqiSide.First : JunqiSide.Second;
 
     private void ShowAiSettings() => SwitchTo(new AiSettingsScreen(_settings, saved =>
     {
@@ -286,6 +355,19 @@ public partial class Main : Control
 
     private void OnSteamMatchReady(SteamMatchReady match)
     {
+        if (match.Configuration.Mode == TwoPlayerGameMode.Jieqi)
+        {
+            var controller = new NetworkJieqiMatchController(match.Transport, match.Configuration.HostSide);
+            SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
+                $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            return;
+        }
+        if (match.Configuration.Mode == TwoPlayerGameMode.Junqi)
+        {
+            var controller = new NetworkJunqiMatchController(match.Transport, ToJunqiSide(match.Configuration.HostSide));
+            SwitchTo(new JunqiGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            return;
+        }
         var custom = CustomPlayerProfileFactory.Create(_settings, match.Profiles.Local.DisplayName);
         if (custom is not null) match.Profiles.ReplaceLocal(custom);
         SwitchTo(new GameScreen(
@@ -438,8 +520,8 @@ public partial class Main : Control
         {
             ShowGallery();
             await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not ModeGalleryScreen { CardCount: 3, OptionCount: 19 })
-                throw new InvalidOperationException("Gallery must expose three horizontal mode cards and nineteen leaf routes.");
+            if (_currentScreen is not ModeGalleryScreen { CardCount: 4, OptionCount: 24 })
+                throw new InvalidOperationException("Gallery must expose four horizontal mode cards and twenty-four leaf routes.");
             if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
             {
                 await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
@@ -449,6 +531,20 @@ public partial class Main : Control
                 if (image.SavePng(System.IO.Path.Combine(directory, "mode-gallery.png")) != Error.Ok)
                     throw new IOException("Gallery capture failed.");
             }
+            StartJunqiLocal();
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not JunqiGameScreen junqi)
+                throw new InvalidOperationException("Junqi local screen failed to instantiate.");
+            if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
+            {
+                junqi.RevealForSmoke();
+                await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+                var directory = ProjectSettings.GlobalizePath("res://build/ui-qa");
+                System.IO.Directory.CreateDirectory(directory);
+                using var image = GetViewport().GetTexture().GetImage();
+                if (image.SavePng(System.IO.Path.Combine(directory, "junqi-board.png")) != Error.Ok)
+                    throw new IOException("Junqi capture failed.");
+            }
             ShowSettings();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             var smokeSettings = _settings.Copy();
@@ -456,7 +552,7 @@ public partial class Main : Control
             smokeSettings.ShowBoardCoordinates = true;
             SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
-            GD.Print("[Xiangqi.UI.Smoke] Three gallery cards, nineteen routes, settings and spring-board local match instantiated.");
+            GD.Print("[Xiangqi.UI.Smoke] Four gallery cards, twenty-four routes, Junqi, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }
         catch (Exception error)

@@ -9,7 +9,9 @@ internal static class JieqiTests
     [
         ("揭棋同一种子产生完全相同的暗子排列", DeterministicSeed),
         ("揭棋公开局面隐藏真实身份且首步按槽位走法", RedactionAndCoverMove),
-        ("揭棋落子后翻明并在棋谱中往返种子", RevealAndRecordRoundTrip)
+        ("揭棋落子后翻明并在棋谱中往返种子", RevealAndRecordRoundTrip),
+        ("揭棋未结束时不允许释放种子棋谱", LiveRecordIsBlocked),
+        ("揭棋房主权威协议只同步脱敏局面", AuthoritativeNetworkRedaction)
     ];
 
     private static void DeterministicSeed()
@@ -49,6 +51,30 @@ internal static class JieqiTests
         False(JieqiPgnCodec.TryParse(text.Replace("splitmix64-fy-v1", "unknown"), out _, out _));
     }
 
+    private static void LiveRecordIsBlocked()
+    {
+        var session = new JieqiGameSession(123);
+        try { _ = session.CreateRecord(); throw new InvalidOperationException("Expected live record rejection."); }
+        catch (InvalidOperationException error) when (error.Message.Contains("结束", StringComparison.Ordinal)) { }
+    }
+
+    private static void AuthoritativeNetworkRedaction()
+    {
+        const ulong seed = 0x123456789ABCDEF0;
+        var hostTransport = new FakePacketTransport(true); var clientTransport = new FakePacketTransport(false);
+        hostTransport.Peer = clientTransport; clientTransport.Peer = hostTransport;
+        var host = new NetworkJieqiMatchController(hostTransport, PieceSide.Black, seed);
+        var client = new NetworkJieqiMatchController(clientTransport, PieceSide.Black);
+        hostTransport.Connect(); clientTransport.Connect();
+        Equal(30, client.Snapshot.Pieces.Count(x => x.Piece.Kind == BuiltInPieceKinds.Covered));
+        False(clientTransport.ReceivedText.Any(x => x.Contains(seed.ToString("X16"), StringComparison.OrdinalIgnoreCase)));
+        var submit = client.SubmitMoveAsync(new(0, 3), new(0, 4)).AsTask().GetAwaiter().GetResult();
+        True(submit.Accepted); Equal(1, host.Snapshot.PlyNumber); Equal(1, client.Snapshot.PlyNumber);
+        True(host.Snapshot.Pieces.SequenceEqual(client.Snapshot.Pieces));
+        False(clientTransport.ReceivedText.Any(x => x.Contains(seed.ToString("X16"), StringComparison.OrdinalIgnoreCase)));
+        host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
     private static void True(bool value) { if (!value) throw new InvalidOperationException("Expected true."); }
     private static void False(bool value) => True(!value);
     private static void Equal<T>(T expected, T actual)
@@ -56,4 +82,28 @@ internal static class JieqiTests
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
             throw new InvalidOperationException($"Expected '{expected}', received '{actual}'.");
     }
+}
+
+internal sealed class FakePacketTransport(bool host) : ITwoPlayerPacketTransport
+{
+    public FakePacketTransport? Peer { get; set; }
+    public List<string> ReceivedText { get; } = [];
+    public event Action<ReadOnlyMemory<byte>>? PacketReceived;
+    public event Action<TransportStatus>? PacketStatusChanged;
+    public bool IsPacketConnected { get; private set; }
+    public bool IsPacketHost { get; } = host;
+    public void Connect()
+    {
+        IsPacketConnected = true;
+        if (Peer is not null) Peer.IsPacketConnected = true;
+        PacketStatusChanged?.Invoke(new TransportStatus(TransportConnectionState.Connected));
+    }
+    public ValueTask SendPacketAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsPacketConnected || Peer is null) throw new InvalidOperationException("Disconnected fake.");
+        Peer.ReceivedText.Add(System.Text.Encoding.UTF8.GetString(packet.Span));
+        Peer.PacketReceived?.Invoke(packet.ToArray()); return ValueTask.CompletedTask;
+    }
+    public ValueTask DisposeAsync() { IsPacketConnected = false; return ValueTask.CompletedTask; }
 }

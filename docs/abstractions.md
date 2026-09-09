@@ -123,6 +123,12 @@ GameSession 是具体门面而非接口，其私有 ChessGame 防止 UI 直接�
 
 目前 Session 返回具体 ThreeMatchSession，Game 又是可变 ThreeKingdomsGame，IsRunning 可公开设置。**只读查询是使用约定，不是类型系统保证。** 不可通过 Session.Game.Move/Undo 或 Session.Advance 绕过计时、投票、日志与鉴权。后续收窄查询面时，应提供快照、状态、目标查询和能力信息，UI 只保留 Submit/Tick，不让网络历史暴露出去。
 
+### 揭棋与军旗控制器
+
+`IJieqiMatchController` 与 `IJunqiMatchController` 是新增玩法的引擎无关 UI 边界。两者均只发布脱敏快照、当前本地席位、能力状态、权威合法目标和异步走子意图；本地与网络实现都经过同一接口实际注入对应 Screen。UI 不得持有其权威聚合、修改快照或自行计算规则。
+
+网络实现使用房主权威裁决。揭棋客户端永远不接收直播 Seed/暗子提示，连接时仅接收 SHA-256 Seed 承诺，终局后验证 Seed 与完整重放；军旗房主为每个玩家生成不同的 `JunqiPlayerSnapshot`，双方完整布阵只在终局后释放以建立 AC2 棋谱。P2P 房主在两种玩法中都是可信裁判；端口认证不等于无信任公平性。详细前置条件、事件顺序、错误、资源所有权与限制分别见 [揭棋玩法](jieqi.md) 和 [军旗玩法](junqi.md)。
+
 ## 7. 跨玩法房管消息板：RoomChatManager
 
 定义：[RoomChat.cs](../src/Xiangqi.Core/Application/RoomChat.cs)。RoomChatManager 是纯 C#、有界、进程内的消息板，经典 NetworkGameCoordinator 和三国 IThreeMatchController 都实际持有并向 UI 暴露同一契约。它不拥有 transport、文件、线程或 Godot 节点，也不负责平台认证、加密或决定谁是游戏权威。
@@ -131,7 +137,7 @@ RoomChatEntry 使用稳定房间席位而非 Steam64/公钥指纹：SenderSeat �
 
 AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并传入 authenticatedSenderSeat；消息自述 SenderSeat 不匹配、结构非法或 ID 重复时返回 false。ImportTrustedHistory 只用于已认证房间同伴提供的有界历史页，逐条复验结构并去重，但不会替调用者建立信任。三国协议为保持房主迁移/断线恢复，把消息复制到可信房间副本；IsVisibleTo 只让全房间消息、发送者和目标席呈现定向消息。这是目标可见性，不是端到端加密。
 
-经典协调器通过 MatchWireProtocol v4 发送 RoomChatEntry，并按唯一对手的认证连接绑定远端席位；经典没有历史重连。三国聊天独立于游戏 ThreeCommand/哈希棋谱，SendChat 不要求三席满员、对局开始或当前房主在线；周期 hello 交换 chat-state 历史，后加入者和重连者可以补齐。所有事件在控制器 Poll/调用所在主线程同步发布；退出房间时 Screen 先解绑 MessageAdded，再由控制器释放 transport，Manager 本身无需 Dispose。
+经典协调器通过 MatchWireProtocol v5 发送 RoomChatEntry，并按唯一对手的认证连接绑定远端席位；经典没有历史重连。三国聊天独立于游戏 ThreeCommand/哈希棋谱，SendChat 不要求三席满员、对局开始或当前房主在线；周期 hello 交换 chat-state 历史，后加入者和重连者可以补齐。所有事件在控制器 Poll/调用所在主线程同步发布；退出房间时 Screen 先解绑 MessageAdded，再由控制器释放 transport，Manager 本身无需 Dispose。
 
 测试：[Program.cs](../tests/Xiangqi.Core.Tests/Program.cs) 覆盖正常/目标/越界/去重/伪造/协议畸形；[RoomChatNetworkTests.cs](../tests/Xiangqi.ThreeNetwork.Tests/RoomChatNetworkTests.cs) 覆盖两席发言、第三席历史、断线目标恢复和原房主离线后继续发言。常见误用包括用昵称鉴权、把 TargetSeat 当加密、把聊天塞回棋谱阻塞走子、让后台 I/O 直接更新控件。
 
@@ -147,6 +153,8 @@ AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并�
 | 后端 | ENet、SteamMatchTransport | ThreeLanTransport、SteamThreeRoomTransport |
 
 共同要求：可靠传递、输入有界、合法身份、状态通知、清晰队列/线程/释放语义。类型化消息合法并不代表着法合法；接收端必须继续走协调器与领域。
+
+`ITwoPlayerPacketTransport` 与 `IMatchTransport` 定义在同一文件，是双人新玩法使用的原始可靠包端口：它只传递有界、不透明的 `ReadOnlyMemory<byte>`，报告连接/房主身份并由屏幕退出路径 `DisposeAsync`；它不解析玩法、序号、棋位、Seed 或私密布阵。`EnetMatchTransport` 与 `SteamMatchTransport` 同时实现两个端口，但一次房间只订阅一种接收事件。揭棋和军旗分别在 Core 控制器中拥有独立版本头和最大 16,000 字节 JSON，不能把原始包直接交给 UI。
 
 三人名册满席后固定，离线只改变 Connected，不能补位；Poll 回调在调用线程发出，后台 I/O 只能入队。Send 不携带 UI Node/Steam handle。SetAuthority 是同步平台房主归属的钩子，不允许 transport 自行决定游戏权威。
 
@@ -186,13 +194,15 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 ## 11. 棋谱与试下抽象
 
-`ClassicGameRecord` / `ThreeGameRecord` / `JieqiGameRecord` 是不可变初始状态、主线着法和标签的快照，不拥有文件，也不允许消费者修改权威会话。`Replay()` 每次创建新聚合并逐手验证；非法着法以 `InvalidDataException` 失败，不返回部分可信结果。经典导入入口是 `XiangqiPgnCodec.TryParse`，三国扩展入口是 `ThreeKingdomsPgnCodec.TryParse`，揭棋入口是 `JieqiPgnCodec.TryParse`；三者同步、无 I/O，调用者负责读取有界文本并展示错误。
+`ClassicGameRecord` / `ThreeGameRecord` / `JieqiGameRecord` / `JunqiGameRecord` 是不可变初始状态、主线着法和标签的快照，不拥有文件，也不允许消费者修改权威会话。`Replay()` 每次创建新聚合并逐手验证；非法着法以 `InvalidDataException` 失败，不返回部分可信结果。经典导入入口是 `XiangqiPgnCodec.TryParse`，三国扩展入口是 `ThreeKingdomsPgnCodec.TryParse`，揭棋入口是 `JieqiPgnCodec.TryParse`，军旗入口是 `JunqiAc2Codec.TryParse`；四者同步、无 I/O，调用者负责读取有界文本并展示错误。
 
 经典 PGN 写出固定 `Game=Chinese Chess`、`Variant=Xiangqi`、`Format=ICCS`，非标准开局增加 `SetUp=1` 与 `FEN`。导入支持 PGN 主线、标签、花括号/分号注释、NAG 与跳过 RAV，但只接受 ICCS；不得看到 `.pgn` 后跳过 `Replay()` 校验。三国扩展固定 `Variant=Xiangqi-ThreeKingdoms`，`TKFEN` 是 UTF-8 JSON 的 Base64 表示，保存存活、国土控制、出生国、当前控制者和兵出境状态；这只是本项目的版本 1 扩展，不是 WXF 标准。
 
-`ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` 是 Godot 表现层的本地文件所有者：调用者传入已经可重放的记录，store 在 `user://records/<mode>` 写文本。recent 的容量策略为每玩法十局，saved 永久保留；删除只针对解析后的固定目录枚举结果。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
+`ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` / `JunqiRecordStore` 是 Godot 表现层的本地文件所有者：调用者传入已经可重放的记录，store 在 `user://records/<mode>` 写文本。recent 的容量策略为每玩法十局，saved 永久保留；删除只针对解析后的固定目录枚举结果。前三种为 UTF-8 PGN/扩展，军旗按 AC2 规范使用 GB2312 `.ac2`。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
 
 揭棋使用 `Variant=Jieqi`、`Format=ICCS`、十六进制 `Seed` 与 `Shuffle=splitmix64-fy-v1`。`JieqiSnapshot.ToPublicPosition` 是直播脱敏边界；`HiddenIdentityHints` 只允许赛后复盘。未知随机算法必须拒绝，联机中不得把 Seed 或 hints 发给非权威端。详细契约见 [揭棋玩法](jieqi.md)。
+
+军旗使用 AC2 `INFO[1.0]`，A-L/0-4 坐标、a-l 棋子码，以及 AA/AB、MA/MB、RA/RB、FA/FB、EA/EB 属性；`JunqiGameRecord.Replay` 复验声明战果和亮旗，不信任文本。`JunqiSnapshot.ForPlayer` 是直播脱敏边界，`ForReplay` 只供赛后。完整映射与限制见 [军旗玩法](junqi.md)。
 
 经典记录额外使用同名 `.pgn.meta.json` sidecar 保存纯展示信息。Presentation 包含 PlayedAt、Mode、Red/Black Player 和 Result；Player 只允许 64 字名称及 0..64 像素 RGBA8，不保存原头像路径或平台凭证。sidecar 损坏时记录页告警并回退 PGN 标签；PGN 本身不依赖 sidecar。ClassicRecordScreen 创建的 ImageTexture 由该页面持有并在 `_ExitTree` 释放。
 

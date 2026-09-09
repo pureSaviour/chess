@@ -39,6 +39,7 @@ tests = tests.Concat(ThreeKingdomsTests.All).ToArray();
 tests = tests.Concat(ThreeKingdomsRuleTests.All).ToArray();
 tests = tests.Concat(ThreeExtensionTests.All).ToArray();
 tests = tests.Concat(JieqiTests.All).ToArray();
+tests = tests.Concat(JunqiTests.All).ToArray();
 var failures = 0;
 foreach (var test in tests)
 {

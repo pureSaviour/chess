@@ -31,6 +31,7 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
     private const string GameSecondsKey = "xq_game_seconds";
     private const string MoveSecondsKey = "xq_move_seconds";
     private const string HostSideKey = "xq_host_side";
+    private const string ModeKey = "xq_two_player_mode";
 
     private readonly Callback<GameLobbyJoinRequested_t> _joinRequestedCallback;
     private readonly Callback<LobbyEnter_t> _lobbyEnterCallback;
@@ -433,7 +434,9 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
         SteamMatchmaking.SetLobbyData(lobby, MoveSecondsKey,
             configuration.TimeControl.MoveSeconds.ToString(CultureInfo.InvariantCulture)) &&
         SteamMatchmaking.SetLobbyData(lobby, HostSideKey,
-            ((byte)configuration.HostSide).ToString(CultureInfo.InvariantCulture));
+            ((byte)configuration.HostSide).ToString(CultureInfo.InvariantCulture)) &&
+        SteamMatchmaking.SetLobbyData(lobby, ModeKey,
+            ((byte)configuration.Mode).ToString(CultureInfo.InvariantCulture));
 
     private static bool TryReadLobbyConfiguration(
         CSteamID lobby, out NetworkMatchConfiguration configuration)
@@ -447,10 +450,13 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
             !int.TryParse(SteamMatchmaking.GetLobbyData(lobby, MoveSecondsKey),
                 NumberStyles.None, CultureInfo.InvariantCulture, out var moveSeconds) ||
             !byte.TryParse(SteamMatchmaking.GetLobbyData(lobby, HostSideKey),
-                NumberStyles.None, CultureInfo.InvariantCulture, out var hostSideValue)) return false;
+                NumberStyles.None, CultureInfo.InvariantCulture, out var hostSideValue) ||
+            !byte.TryParse(SteamMatchmaking.GetLobbyData(lobby, ModeKey),
+                NumberStyles.None, CultureInfo.InvariantCulture, out var modeValue)) return false;
         var hostSide = (PieceSide)hostSideValue;
-        if (gameSeconds < 0 || moveSeconds < 0 || !Enum.IsDefined(hostSide)) return false;
-        configuration = new NetworkMatchConfiguration(new TimeControl(gameSeconds, moveSeconds), hostSide);
+        var mode = (TwoPlayerGameMode)modeValue;
+        if (gameSeconds < 0 || moveSeconds < 0 || !Enum.IsDefined(hostSide) || !Enum.IsDefined(mode)) return false;
+        configuration = new NetworkMatchConfiguration(new TimeControl(gameSeconds, moveSeconds), hostSide, mode);
         return true;
     }
 
