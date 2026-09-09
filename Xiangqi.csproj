@@ -1,9 +1,9 @@
 <Project Sdk="Godot.NET.Sdk/4.7.2">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <!-- Godot C# Android exports require .NET 9 or later for the Android runtime and
-         16 KiB memory-page compatibility. Keep desktop/editor builds on the
-         engine's default .NET 8 target and raise only the Android export TFM. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Godot 4.7.2's prebuilt Android export template currently reports net9.0 as
+         its supported TFM. Keep Android on net9.0 until a supported net10.0 export
+         path has been confirmed with official guidance and an actual export. -->
     <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <RootNamespace>Xiangqi</RootNamespace>

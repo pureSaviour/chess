@@ -24,7 +24,7 @@ dotnet run --project .\tests\Xiangqi.ThreeNetwork.Tests\Xiangqi.ThreeNetwork.Tes
 
 ### Android 导出
 
-主项目默认使用 `net8.0`，当 Godot 以 Android 为目标平台构建时自动切换为 `net9.0`，以满足 Godot C# Android 导出要求。规则库和桌面测试继续使用 `net8.0`。本次只迁移 Godot，尚未迁移项目的 .NET 目标框架；评估与审批门见 [Godot 4.7 迁移记录](docs/godot-4.7-migration.md)。
+桌面主项目和测试使用 `net10.0`；规则库与传输层同时提供 `net9.0` 和 `net10.0`，供对应平台选择。Godot 4.7.2 的预编译 Android 导出模板目前只接受 `net9.0`，因此 Android 条件目标暂时保持 `net9.0`。兼容依据、实际验证和 Android `net10.0` 调研见 [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md)。
 
 本机还需要在 Godot 的“编辑器设置 → 导出 → Android”中配置 Java SDK 与 Android SDK。Godot 4.7 推荐 OpenJDK 17，并需要 Android Platform-Tools 35.0.0 或更高版本、Build-Tools 35.0.1、Platform 35、最新 Command-line Tools、CMake 3.10.2.4988404 和 NDK 28.1.13356709。安装与路径配置完成后，可从导出窗口使用 `Android` 预设，或运行：
 
