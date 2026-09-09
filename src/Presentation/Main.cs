@@ -1,6 +1,7 @@
 using Godot;
 using Xiangqi.Core.Application;
 using Xiangqi.Core.Domain;
+using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Profiles;
 using Xiangqi.Presentation.Screens;
@@ -16,6 +17,7 @@ namespace Xiangqi.Presentation;
 public partial class Main : Control
 {
     private AppSettings _settings = null!;
+    private IBoardThemeCatalog _themes = null!;
     private Control? _currentScreen;
     private AcceptDialog _errorDialog = null!;
     private bool _debugNetworkSmoke;
@@ -31,10 +33,12 @@ public partial class Main : Control
         _errorDialog = new AcceptDialog { Title = "提示" };
         AddChild(_errorDialog);
         _settings = AppSettings.Load();
+        _themes = ThemePackageCatalog.CreateDefault();
         _settings.Apply();
         // Steam Overlay and its client APIs require an interactive display. Keeping headless
         // smoke/tests out of the native initialization path also makes server-side CI deterministic.
-        if (!string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase) &&
+            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback")))
             InitializeSteam();
         if (TryStartDebugSmokeMode()) return;
         ShowMainMenu();
@@ -45,15 +49,84 @@ public partial class Main : Control
         ShowSettings,
         () => GetTree().Quit()));
 
-    private void ShowGallery() => SwitchTo(new GalleryScreen(
+    private void ShowGallery() => SwitchTo(new ModeGalleryScreen(
         ReturnFromGallery,
+        () => ShowClassicGallery(ClassicGalleryEntry.Local),
+        () => ShowClassicGallery(ClassicGalleryEntry.Lan),
+        () => ShowClassicGallery(ClassicGalleryEntry.Steam),
+        StartConfiguredAiMatch,
+        ShowAiSettings,
+        () => ShowClassicRecords(false),
+        () => ShowClassicRecords(true),
+        () => ShowClassicImport(false),
+        () => ShowClassicImport(true),
+        () => ShowThreeGallery(ThreeGalleryEntry.Local),
+        () => ShowThreeGallery(ThreeGalleryEntry.Lan),
+        () => ShowThreeGallery(ThreeGalleryEntry.Steam),
+        () => ShowThreeRecords(false),
+        () => ShowThreeRecords(true),
+        StartJieqiLocal,
+        () => ShowJieqiNetworkPending("局域网联机"),
+        () => ShowJieqiNetworkPending("Steam 邀请好友"),
+        () => ShowJieqiRecords(false),
+        () => ShowJieqiRecords(true)));
+
+    private void StartJieqiLocal()
+    {
+        Span<byte> bytes = stackalloc byte[8]; System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        var seed = BitConverter.ToUInt64(bytes);
+        SwitchTo(new JieqiGameScreen(_settings, _themes, seed, ShowGallery));
+    }
+
+    private void ShowJieqiRecords(bool saved) => SwitchTo(new JieqiRecordScreen(saved, ShowGallery,
+        record => SwitchTo(new JieqiReplayScreen(_settings, _themes, record, () => ShowJieqiRecords(saved)))));
+
+    private void ShowJieqiNetworkPending(string route)
+    {
+        _errorDialog.DialogText = $"揭棋{route}需要房主权威的脱敏状态协议，不能复用会泄露随机种子的经典锁步协议；该入口已预留，但本轮尚未开放。";
+        _errorDialog.PopupCentered(new Vector2I(620, 190));
+    }
+
+    private void ShowAiSettings() => SwitchTo(new AiSettingsScreen(_settings, saved =>
+    {
+        _settings = saved;
+        _settings.SaveAndApply();
+        ShowGallery();
+    }, ShowGallery));
+
+    private void StartConfiguredAiMatch()
+    {
+        var side = _settings.AiSideChoice switch
+        {
+            1 => PieceSide.Black,
+            2 => Random.Shared.Next(2) == 0 ? PieceSide.Red : PieceSide.Black,
+            _ => PieceSide.Red
+        };
+        StartAiMatch(new AiMatchConfiguration(
+            new TimeControl(_settings.AiGameSeconds, _settings.AiMoveSeconds), side,
+            _settings.AiThinkMilliseconds, _settings.AiEnginePath));
+    }
+
+    private void ShowClassicImport(bool puzzle) => SwitchTo(new ClassicImportScreen(
+        puzzle, ShowGallery,
+        record => SwitchTo(new ClassicReplayScreen(_settings, _themes, record, ShowGallery)),
+        session => SwitchTo(new GameScreen(_settings, ShowGallery, "残局", localTimeControl: TimeControl.Unlimited,
+            themes: _themes, session: session))));
+
+    private void ShowClassicRecords(bool saved) => SwitchTo(new ClassicRecordScreen(saved, ShowGallery,
+        record => SwitchTo(new ClassicReplayScreen(_settings, _themes, record, () => ShowClassicRecords(saved)))));
+
+    private void ShowClassicGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
+        ShowGallery,
         StartLocalMatch,
         StartLanHost,
         StartLanClient,
-        StartSteamInvite));
+        StartSteamInvite,
+        entry));
 
     private void ShowSettings() => SwitchTo(new SettingsScreen(
         _settings,
+        _themes,
         saved =>
         {
             _settings = saved;
@@ -62,10 +135,35 @@ public partial class Main : Control
         },
         ShowMainMenu));
 
-    private void StartLocalMatch()
+    private void StartLocalMatch(TimeControl timeControl)
     {
         CancelWaitingSteamLobby();
-        SwitchTo(new GameScreen(_settings, ShowGallery));
+        SwitchTo(new GameScreen(_settings, ShowGallery, localTimeControl: timeControl,
+            playerProfiles: CreateOfflineProfiles("本地玩家 2"), themes: _themes));
+    }
+
+    private void StartAiMatch(AiMatchConfiguration configuration)
+    {
+        CancelWaitingSteamLobby();
+        try
+        {
+            configuration = configuration.Validate();
+            if (!System.IO.File.Exists(configuration.EnginePath))
+                throw new FileNotFoundException("找不到所选 AI 引擎程序。", configuration.EnginePath);
+            var engine = new UciProcessAiEngine(configuration.EnginePath);
+            SwitchTo(new GameScreen(
+                _settings,
+                ShowGallery,
+                "人机对决",
+                playerProfiles: CreateOfflineProfiles("AI 引擎"),
+                aiConfiguration: configuration,
+                aiEngine: engine,
+                themes: _themes));
+        }
+        catch (Exception error)
+        {
+            ShowError(error.Message);
+        }
     }
 
     private void StartLanHost(int port, NetworkMatchConfiguration configuration)
@@ -85,7 +183,8 @@ public partial class Main : Control
                 _debugNetworkSmoke,
                 _debugTimeoutSmoke,
                 CreateLanProfiles(),
-                _settings.HasCustomProfile));
+                _settings.HasCustomProfile,
+                themes: _themes));
         }
         catch (Exception error)
         {
@@ -109,7 +208,8 @@ public partial class Main : Control
                 _debugNetworkSmoke,
                 _debugTimeoutSmoke,
                 CreateLanProfiles(),
-                _settings.HasCustomProfile));
+                _settings.HasCustomProfile,
+                themes: _themes));
         }
         catch (Exception error)
         {
@@ -170,6 +270,7 @@ public partial class Main : Control
             return;
         }
         _steam = service;
+        InitializeThreeSteam();
         _steam.StatusChanged += OnSteamStatusChanged;
         _steam.LobbyJoinRequested += OnSteamLobbyJoinRequested;
         _steam.MatchReady += OnSteamMatchReady;
@@ -197,13 +298,15 @@ public partial class Main : Control
             _debugNetworkSmoke,
             _debugTimeoutSmoke,
             match.Profiles,
-            custom is not null));
+            custom is not null,
+            themes: _themes));
     }
 #endif
 
     private void ReturnFromGallery()
     {
 #if GODOT_WINDOWS
+        _threeSteam?.Cancel();
         _steam?.CancelCurrentLobby();
 #endif
         ShowMainMenu();
@@ -212,6 +315,7 @@ public partial class Main : Control
     private void CancelWaitingSteamLobby()
     {
 #if GODOT_WINDOWS
+        _threeSteam?.Cancel();
         _steam?.CancelCurrentLobby();
 #endif
     }
@@ -219,6 +323,7 @@ public partial class Main : Control
     public override void _ExitTree()
     {
 #if GODOT_WINDOWS
+        _threeSteam?.Dispose();
         if (_steam is null) return;
         _steam.StatusChanged -= OnSteamStatusChanged;
         _steam.LobbyJoinRequested -= OnSteamLobbyJoinRequested;
@@ -239,6 +344,16 @@ public partial class Main : Control
     {
         if (!OS.IsDebugBuild()) return false;
         var arguments = OS.GetCmdlineUserArgs();
+        if (arguments.Contains("--smoke-three"))
+        {
+            SwitchTo(new Diagnostics.ThreeBoardSmoke(_settings));
+            return true;
+        }
+        if (arguments.Contains("--smoke-feedback"))
+        {
+            SwitchTo(new Diagnostics.BoardFeedbackSmoke());
+            return true;
+        }
 #if GODOT_WINDOWS
         if (arguments.Contains("--smoke-steam-init"))
         {
@@ -270,20 +385,7 @@ public partial class Main : Control
 #endif
         if (arguments.Contains("--smoke-ui"))
         {
-            ShowGallery();
-            GetTree().CreateTimer(0.15).Timeout += () =>
-            {
-                ShowSettings();
-                GetTree().CreateTimer(0.15).Timeout += () =>
-                {
-                    StartLocalMatch();
-                    GetTree().CreateTimer(0.25).Timeout += () =>
-                    {
-                        GD.Print("[Xiangqi.UI.Smoke] Gallery, settings and local match instantiated.");
-                        GetTree().Quit();
-                    };
-                };
-            };
+            _ = RunUiSmokeAsync(arguments.Contains("--capture-ui"));
             return true;
         }
         if (arguments.Contains("--smoke-profile-ui"))
@@ -293,7 +395,7 @@ public partial class Main : Control
                     CreateSmokeAvatar(142, 59, 53)),
                 new PlayerProfileSnapshot("测试", "remote-002", "远端玩家",
                     CreateSmokeAvatar(52, 55, 61)));
-            SwitchTo(new GameScreen(_settings, ShowGallery, playerProfiles: profiles));
+            SwitchTo(new GameScreen(_settings, ShowGallery, playerProfiles: profiles, themes: _themes));
             GetTree().CreateTimer(0.3).Timeout += () =>
             {
                 GD.Print("[Xiangqi.Profile.UI.Smoke] Player cards and temporary avatar textures instantiated.");
@@ -328,6 +430,40 @@ public partial class Main : Control
             return true;
         }
         return false;
+    }
+
+    private async Task RunUiSmokeAsync(bool capture)
+    {
+        try
+        {
+            ShowGallery();
+            await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not ModeGalleryScreen { CardCount: 3, OptionCount: 19 })
+                throw new InvalidOperationException("Gallery must expose three horizontal mode cards and nineteen leaf routes.");
+            if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
+            {
+                await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+                var directory = ProjectSettings.GlobalizePath("res://build/ui-qa");
+                System.IO.Directory.CreateDirectory(directory);
+                using var image = GetViewport().GetTexture().GetImage();
+                if (image.SavePng(System.IO.Path.Combine(directory, "mode-gallery.png")) != Error.Ok)
+                    throw new IOException("Gallery capture failed.");
+            }
+            ShowSettings();
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            var smokeSettings = _settings.Copy();
+            smokeSettings.BoardSkin = BoardSkinKind.Spring;
+            smokeSettings.ShowBoardCoordinates = true;
+            SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
+            await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
+            GD.Print("[Xiangqi.UI.Smoke] Three gallery cards, nineteen routes, settings and spring-board local match instantiated.");
+            GetTree().Quit();
+        }
+        catch (Exception error)
+        {
+            GD.PushError($"[Xiangqi.UI.Smoke] FAIL {error}");
+            GetTree().Quit(3);
+        }
     }
 
 #if GODOT_WINDOWS
@@ -372,9 +508,19 @@ public partial class Main : Control
 
     private MatchPlayerProfiles CreateLanProfiles()
     {
-        var local = new PlayerProfileSnapshot("本地", "本地棋手", "本地玩家");
+        var displayName = string.IsNullOrWhiteSpace(_settings.CustomPlayerId) ? "本地玩家" : _settings.CustomPlayerId;
+        var local = new PlayerProfileSnapshot("本地", "本地棋手", displayName);
         var custom = CustomPlayerProfileFactory.Create(_settings, local.DisplayName);
         return new MatchPlayerProfiles(custom ?? local,
             new PlayerProfileSnapshot("联机", "远端棋手", "联机对手"));
+    }
+
+    private MatchPlayerProfiles CreateOfflineProfiles(string opponentName)
+    {
+        var displayName = string.IsNullOrWhiteSpace(_settings.CustomPlayerId) ? "本地玩家" : _settings.CustomPlayerId;
+        var local = new PlayerProfileSnapshot("本地", "本地棋手", displayName);
+        var custom = CustomPlayerProfileFactory.Create(_settings, local.DisplayName);
+        return new MatchPlayerProfiles(custom ?? local,
+            new PlayerProfileSnapshot("本地", opponentName, opponentName));
     }
 }

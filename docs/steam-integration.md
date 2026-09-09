@@ -1,5 +1,7 @@
 # Steam 好友联机
 
+> 本文主要说明经典双人 Steam 适配与平台配置。三国三席 Lobby、模式路由、全连接消息和房主迁移见 [三国象棋](three-kingdoms.md)；端口/生命周期约束见 [抽象层使用手册](abstractions.md)。全项目关系见 [总架构](../TECHNICAL_ARCHITECTURE.md)。
+
 ## 当前状态
 
 Windows x64 版本已经接入 Steamworks SDK 1.65，并使用 Spacewar App ID `480` 进行开发测试。当前已实现：
@@ -19,7 +21,7 @@ Windows x64 版本已经接入 Steamworks SDK 1.65，并使用 Spacewar App ID `
 
 1. 启动并登录 Steam 客户端。
 2. Debug 构建会在进程工作目录缺少 `steam_appid.txt` 时自动生成内容 `480`；该文件已被 Git 忽略。
-3. 从 Godot 编辑器运行项目，在 Gallery 选择计时和先后手后点击“创建 Steam 房间并邀请好友”。
+3. 从 Godot 编辑器运行项目，在玩法画廊进入“经典象棋”→“邀请 Steam 好友”，配置计时和先后手后创建房间。三国需进入“三国象棋”对应的 Steam 入口，不能使用双人房间配置。
 4. 好友接受邀请后双方自动进入对局；若好友当时未运行游戏，Steam 会使用 `+connect_lobby <LobbyId>` 启动参数，本项目也会自动处理该参数。
 
 可用的 Debug 自检参数：
@@ -27,7 +29,6 @@ Windows x64 版本已经接入 Steamworks SDK 1.65，并使用 Spacewar App ID `
 ```text
 --smoke-steam-init   验证 SteamAPI、App ID 和登录用户
 --smoke-steam-lobby  连续创建、退出并重新创建两个测试 Lobby
---smoke-steam-lobby  创建测试 Lobby 后自动退出
 ```
 
 ## 版本与文件

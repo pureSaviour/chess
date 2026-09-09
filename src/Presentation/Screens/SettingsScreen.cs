@@ -7,14 +7,19 @@ namespace Xiangqi.Presentation.Screens;
 public partial class SettingsScreen : Control
 {
     private readonly AppSettings _draft;
+    private readonly IBoardThemeCatalog _themes;
+    private readonly List<string> _themeIds = [];
     private readonly CheckButton _fullscreen = new() { Text = "全屏模式" };
     private readonly CheckButton _vsync = new() { Text = "垂直同步" };
     private readonly CheckButton _effects = new() { Text = "棋局特效" };
+    private readonly CheckButton _coordinates = new() { Text = "显示棋盘路数" };
     private readonly OptionButton _fps = new();
+    private readonly OptionButton _skin = new();
+    private readonly Label _themeStatus = new();
     private readonly HSlider _master = VolumeSlider();
     private readonly HSlider _music = VolumeSlider();
     private readonly HSlider _sfx = VolumeSlider();
-    private readonly LineEdit _playerId = new() { MaxLength = 32, PlaceholderText = "留空则使用 Steam / 默认 ID" };
+    private readonly LineEdit _playerId = new() { MaxLength = 32, PlaceholderText = "留空则使用 Steam 昵称 / 默认标识" };
     private readonly Label _avatarPath = new();
     private readonly FileDialog _avatarDialog = new()
     {
@@ -23,9 +28,11 @@ public partial class SettingsScreen : Control
         Filters = new[] { "*.png, *.jpg, *.jpeg, *.webp ; 图片" }
     };
 
-    public SettingsScreen(AppSettings current, Action<AppSettings> save, Action cancel)
+    public SettingsScreen(AppSettings current, IBoardThemeCatalog themes,
+        Action<AppSettings> save, Action cancel)
     {
         _draft = current.Copy();
+        _themes = themes ?? throw new ArgumentNullException(nameof(themes));
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(110, 46);
         AddChild(margin);
@@ -70,6 +77,23 @@ public partial class SettingsScreen : Control
         _effects.ButtonPressed = _draft.EffectsEnabled;
         grid.AddChild(_effects);
         grid.AddChild(new Control());
+        PopulateThemes(_draft.ThemeId);
+        AddRow(grid, "棋盘皮肤", _skin);
+        var themeTools = new HBoxContainer();
+        var rescan = UiStyle.CreateButton("重新扫描主题");
+        rescan.Pressed += () =>
+        {
+            var selected = SelectedThemeId();
+            _themes.Rescan();
+            PopulateThemes(selected);
+        };
+        _themeStatus.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        UiStyle.SetMuted(_themeStatus, 12);
+        themeTools.AddChild(rescan); themeTools.AddChild(_themeStatus);
+        AddRow(grid, "主题目录", themeTools);
+        _coordinates.ButtonPressed = _draft.ShowBoardCoordinates;
+        grid.AddChild(_coordinates);
+        grid.AddChild(new Control());
 
         AddSection(grid, "声音", "音频总线音量；后续素材会自动遵循这些设置");
         _master.Value = _draft.MasterVolume * 100;
@@ -113,6 +137,8 @@ public partial class SettingsScreen : Control
             _draft.VSync = _vsync.ButtonPressed;
             _draft.MaxFps = _fps.GetItemId(_fps.Selected);
             _draft.EffectsEnabled = _effects.ButtonPressed;
+            _draft.ThemeId = SelectedThemeId();
+            _draft.ShowBoardCoordinates = _coordinates.ButtonPressed;
             _draft.MasterVolume = (float)_master.Value / 100f;
             _draft.MusicVolume = (float)_music.Value / 100f;
             _draft.EffectsVolume = (float)_sfx.Value / 100f;
@@ -121,6 +147,28 @@ public partial class SettingsScreen : Control
         };
         page.AddChild(saveButton);
     }
+
+    private void PopulateThemes(string selectedId)
+    {
+        _skin.Clear();
+        _themeIds.Clear();
+        foreach (var theme in _themes.Themes)
+        {
+            _themeIds.Add(theme.Id);
+            _skin.AddItem(theme.DisplayName);
+        }
+        var selected = _themeIds.FindIndex(id => id.Equals(selectedId, StringComparison.OrdinalIgnoreCase));
+        _skin.Select(Math.Max(0, selected));
+        var errors = _themes.Diagnostics.Count(diagnostic => diagnostic.IsError);
+        _themeStatus.Text = errors == 0
+            ? $"已载入 {_themeIds.Count} 个 · 对局中不热重载"
+            : $"已载入 {_themeIds.Count} 个 · {errors} 个包被跳过（详见日志）";
+        foreach (var diagnostic in _themes.Diagnostics)
+            GD.PushWarning($"[Theme] {diagnostic.PackagePath}: {diagnostic.Message}");
+    }
+
+    private string SelectedThemeId() => _skin.Selected >= 0 && _skin.Selected < _themeIds.Count
+        ? _themeIds[_skin.Selected] : "classic";
 
     private static HSlider VolumeSlider() => new()
     {

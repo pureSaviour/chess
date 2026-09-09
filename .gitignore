@@ -18,3 +18,5 @@ steam_appid.txt
 *.user
 *.userprefs
 *.csproj.old
+*.csproj.old.*
+/export*.zip

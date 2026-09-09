@@ -30,6 +30,37 @@ public sealed class ChessGame
     public static ChessGame CreateStandard(PieceRuleRegistry? rules = null) =>
         new(StandardPosition.Create(), rules ?? PieceRuleRegistry.CreateStandard());
 
+    /// <summary>
+    /// Recreates a playable aggregate from an immutable position. Terminal/result flags are not
+    /// trusted: callers import a position and must replay moves or declare an outcome through the
+    /// normal command methods. Piece ids and occupancy are preserved.
+    /// </summary>
+    public static ChessGame FromPosition(GameSnapshot position, PieceRuleRegistry? rules = null)
+    {
+        ArgumentNullException.ThrowIfNull(position);
+        if (position.Pieces.Any(item => !item.Position.IsInside) ||
+            position.Pieces.Select(item => item.Position).Distinct().Count() != position.Pieces.Count ||
+            position.Pieces.Select(item => item.Piece.PieceInstanceId).Distinct().Count() != position.Pieces.Count)
+            throw new ArgumentException("Position contains an invalid square or duplicate identity.", nameof(position));
+        if (position.Pieces.Count(item => item.Piece.Kind == BuiltInPieceKinds.General && item.Piece.Side == PieceSide.Red) != 1 ||
+            position.Pieces.Count(item => item.Piece.Kind == BuiltInPieceKinds.General && item.Piece.Side == PieceSide.Black) != 1)
+            throw new ArgumentException("A Xiangqi position must contain exactly one general for each side.", nameof(position));
+        return new ChessGame(new BoardState(position.Pieces), rules ?? PieceRuleRegistry.CreateStandard(), position.SideToMove)
+        {
+            _plyNumber = Math.Max(0, position.PlyNumber)
+        };
+    }
+
+    /// <summary>Creates an isolated analysis copy. Mutating it cannot change the authoritative match.</summary>
+    public ChessGame Fork() => new(_board, _rules, _sideToMove)
+    {
+        _isInCheck = _isInCheck,
+        _isFinished = _isFinished,
+        _winner = _winner,
+        _endReason = _endReason,
+        _plyNumber = _plyNumber
+    };
+
     public GameSnapshot Snapshot => new(
         _board.GetPieces().OrderBy(p => p.Position.Rank).ThenBy(p => p.Position.File).ToArray(),
         _sideToMove, _isInCheck, _isFinished, _winner, _endReason, _plyNumber);

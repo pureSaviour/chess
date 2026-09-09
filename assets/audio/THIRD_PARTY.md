@@ -14,4 +14,3 @@ The three gameplay sounds in this directory are selected from **Kenney Interface
 | `piece_capture.ogg` | `drop_004.ogg` |
 
 Attribution is not required by CC0. This notice is retained for provenance and easy replacement.
-

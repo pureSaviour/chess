@@ -5,7 +5,7 @@ namespace Xiangqi.Core.Application;
 public readonly record struct MoveCommand(long Sequence, ChessMove Move);
 public readonly record struct TimeoutCommand(long PlyNumber, PieceSide Loser);
 public readonly record struct ClockSyncCommand(long PlyNumber, ClockSnapshot Clock);
-public readonly record struct ChatCommand(string Text);
+public readonly record struct ChatCommand(RoomChatEntry Entry);
 public readonly record struct PlayerProfileCommand(
     string PlayerId, string DisplayName, int AvatarWidth, int AvatarHeight, byte[] AvatarRgba);
 
@@ -72,15 +72,17 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         _transport.MatchOfferReceived += OnMatchOfferReceived;
         _transport.MatchOfferResponseReceived += OnMatchOfferResponseReceived;
         _transport.StatusChanged += OnTransportStatusChanged;
+        Chat = new RoomChatManager(2);
     }
 
     public event Action<string>? SynchronizationFailed;
     public event Action<TransportStatus>? StatusChanged;
-    public event Action<string>? ChatReceived;
     public event Action<MatchOfferRequest>? MatchOfferReceived;
     public event Action<MatchOfferResolution>? MatchOfferResolved;
     public event Action<bool>? MatchOfferPendingChanged;
     public PieceSide LocalSide { get; }
+    /// <summary>Bounded message board shared with three-player rooms; transport IDs never become display names.</summary>
+    public RoomChatManager Chat { get; }
     public bool HasPendingOffer => _outgoingOffer is not null || _incomingOffer is not null;
     public bool CanRequestLocalUndo => _transport.IsConnected && !_session.Snapshot.IsFinished &&
                                        _session.CanUndo &&
@@ -113,11 +115,13 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         await _transport.DisposeAsync();
     }
 
-    public async ValueTask SendChatAsync(string text, CancellationToken cancellationToken = default)
+    public async ValueTask<string?> SendChatAsync(
+        string text, int? targetSeat = null, CancellationToken cancellationToken = default)
     {
-        var normalized = text.Trim();
-        if (normalized.Length == 0) return;
-        await _transport.SendChatAsync(new ChatCommand(normalized), cancellationToken);
+        var error = Chat.Post((int)LocalSide, targetSeat, text, out var entry);
+        if (error is not null) return error;
+        await _transport.SendChatAsync(new ChatCommand(entry!), cancellationToken);
+        return null;
     }
 
     /// <summary>
@@ -212,7 +216,8 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         StatusChanged?.Invoke(status);
     }
 
-    private void OnChatReceived(ChatCommand command) => ChatReceived?.Invoke(command.Text);
+    private void OnChatReceived(ChatCommand command) =>
+        Chat.AcceptLive(command.Entry, (int)LocalSide.Opponent());
 
     private void OnMatchOfferReceived(MatchOfferRequest request)
     {

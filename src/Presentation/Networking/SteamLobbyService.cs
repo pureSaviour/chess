@@ -60,6 +60,12 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
     }
 
     public event Action<SteamLobbyId>? LobbyJoinRequested;
+    public event Action<SteamLobbyId>? ThreeLobbyEntered;
+    // Transfer ownership of a three-player lobby to its dedicated adapter without leaving it.
+    public void ReleaseThreeLobby(ulong lobby)
+    {
+        if (_currentLobby is { } current && (ulong)current == lobby) _currentLobby = null;
+    }
     public event Action<SteamMatchReady>? MatchReady;
     public event Action<string>? StatusChanged;
     public bool IsAvailable => !_disposed;
@@ -289,6 +295,12 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
         var lobby = new CSteamID(callback.m_ulSteamIDLobby);
         _currentLobby = lobby;
         var isOwner = SteamMatchmaking.GetLobbyOwner(lobby) == SteamUser.GetSteamID();
+        if (SteamMatchmaking.GetLobbyData(lobby, SteamThreeLobbyService.ModeKey) == SteamThreeLobbyService.Mode)
+        {
+            _currentLobby = null;
+            ThreeLobbyEntered?.Invoke(new SteamLobbyId((ulong)lobby));
+            return;
+        }
         if (!isOwner && !TryReadLobbyConfiguration(lobby, out _))
         {
             SteamMatchmaking.LeaveLobby(lobby);
@@ -326,6 +338,7 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
     {
         if (_currentLobby is not { } lobby || _activeTransport is not null ||
             SteamMatchmaking.GetNumLobbyMembers(lobby) != 2) return;
+        if (SteamMatchmaking.GetLobbyData(lobby, SteamThreeLobbyService.ModeKey) == SteamThreeLobbyService.Mode) return;
         if (!TryReadLobbyConfiguration(lobby, out var configuration))
         {
             StatusChanged?.Invoke("Steam 房间配置缺失或版本不兼容。");
@@ -405,7 +418,7 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
             : SteamFriends.GetFriendPersonaName(user);
         profile = new PlayerProfileSnapshot(
             "Steam", userId.ToString(CultureInfo.InvariantCulture),
-            string.IsNullOrWhiteSpace(displayName) ? userId.ToString(CultureInfo.InvariantCulture) : displayName,
+            string.IsNullOrWhiteSpace(displayName) ? "Steam 玩家" : displayName,
             avatar);
         _profileCache[userId] = profile;
         return true;

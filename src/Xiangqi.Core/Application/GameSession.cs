@@ -10,11 +10,22 @@ public sealed class GameSession
 {
     private readonly IReadOnlyList<IPositionPatternDetector> _patternDetectors;
     private ChessGame _game;
+    private GameSnapshot _initialPosition;
+    private readonly List<ChessMove> _moves = [];
 
     public GameSession(IEnumerable<IPositionPatternDetector>? patternDetectors = null)
     {
         _patternDetectors = patternDetectors?.ToArray() ?? [];
         _game = ChessGame.CreateStandard();
+        _initialPosition = _game.Snapshot;
+    }
+
+    /// <summary>Creates a match from a verified FEN/puzzle position without bypassing ChessGame.</summary>
+    public GameSession(GameSnapshot initialPosition, IEnumerable<IPositionPatternDetector>? patternDetectors = null)
+    {
+        _patternDetectors = patternDetectors?.ToArray() ?? [];
+        _game = ChessGame.FromPosition(initialPosition);
+        _initialPosition = _game.Snapshot;
     }
 
     public event Action<GameSnapshot>? StateChanged;
@@ -22,6 +33,10 @@ public sealed class GameSession
 
     public GameSnapshot Snapshot => _game.Snapshot;
     public bool CanUndo => _game.CanUndo;
+    public ClassicGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null) => new(
+        _initialPosition, Array.AsReadOnly(_moves.ToArray()),
+        tags ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    public ClassicTrialSession BeginTrial() => new(Snapshot);
 
     public IReadOnlyList<BoardPosition> GetLegalDestinations(BoardPosition from) =>
         _game.GetLegalDestinations(from);
@@ -38,6 +53,7 @@ public sealed class GameSession
         }
 
         var after = _game.Snapshot;
+        _moves.Add(result.Move);
         CueRaised?.Invoke(new PresentationCue(
             result.CapturedPiece is null ? PresentationCueKind.Move : PresentationCueKind.Capture,
             result.Move, result.MovedPiece));
@@ -65,6 +81,7 @@ public sealed class GameSession
     public bool Undo()
     {
         if (!_game.Undo()) return false;
+        if (_moves.Count > 0) _moves.RemoveAt(_moves.Count - 1);
         CueRaised?.Invoke(new PresentationCue(PresentationCueKind.Undo));
         StateChanged?.Invoke(_game.Snapshot);
         return true;
@@ -73,6 +90,8 @@ public sealed class GameSession
     public void NewGame()
     {
         _game = ChessGame.CreateStandard();
+        _initialPosition = _game.Snapshot;
+        _moves.Clear();
         CueRaised?.Invoke(new PresentationCue(PresentationCueKind.NewGame));
         StateChanged?.Invoke(_game.Snapshot);
     }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<theme schemaVersion="1" id="spring" displayName="春日新绿" inherits="classic">
+  <supports classic="true" threeKingdoms="true" />
+  <palette boardFill="#F0EBC9" boardEdge="#536333" gridInk="#46552B"
+           pieceFill="#FFF6D6" neutralPieceFill="#D2CEB5" neutralInk="#536052"
+           legalMove="#62A95E" selection="#F06A78" moveFrom="#F7EED1" moveTo="#FFF0A8"
+           classicRed="#C33D45" classicBlack="#263E35"
+           wei="#447FC3" wu="#A97916" shu="#397B4B" />
+  <board mode="classic" shader="shaders/board.gdshader" />
+  <board mode="threeKingdoms" shader="shaders/board.gdshader" />
+  <effect slot="selection" shader="shaders/feedback.gdshader" durationMs="1100" loop="true" />
+  <effect slot="moveFrom" shader="shaders/feedback.gdshader" durationMs="900" loop="true" />
+  <effect slot="landing" shader="shaders/feedback.gdshader" durationMs="650" loop="true" />
+</theme>

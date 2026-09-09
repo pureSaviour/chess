@@ -19,14 +19,26 @@ var tests = new (string Name, Action Run)[]
     ("悔棋完整恢复棋盘与行棋方", UndoRestoresState),
     ("双方同意和棋后对局无胜方结束", DrawAdjudication),
     ("联机聊天消息通过协调器双向传递", NetworkChat),
+    ("共享房管校验目标、可见性、去重与历史导入", RoomChatManagement),
     ("远端悔棋申请获同意后撤销最近一手", NetworkUndoOffer),
     ("本地和棋申请获同意后结束双方对局", NetworkDrawOffer),
     ("拒绝对局申请时保持原有局面", NetworkRejectedOffer),
     ("只有最后行棋方可以申请悔棋", NetworkUndoEligibility),
     ("共享联机协议可往返全部对局消息", MatchWireRoundTrip),
-    ("共享联机协议拒绝越界和畸形数据", MatchWireRejectsMalformedData)
+    ("共享联机协议拒绝越界和畸形数据", MatchWireRejectsMalformedData),
+    ("标准局面可编码为象棋 UCI FEN", UciFen),
+    ("象棋 UCI 坐标可安全往返", UciCoordinates),
+    ("PGN/ICCS 棋谱可合法往返并保留 FEN 残局", PgnRecordRoundTrip),
+    ("棋谱导入拒绝非法着法", PgnRejectsIllegalMove),
+    ("试下分支不修改权威棋局", TrialIsIsolated),
+    ("复盘分析串行缓存并将评分归一到红方", ReplayAnalysis),
+    ("AI 着法经 GameSession 校验且可整回合悔棋", AiCoordinator)
 };
 
+tests = tests.Concat(ThreeKingdomsTests.All).ToArray();
+tests = tests.Concat(ThreeKingdomsRuleTests.All).ToArray();
+tests = tests.Concat(ThreeExtensionTests.All).ToArray();
+tests = tests.Concat(JieqiTests.All).ToArray();
 var failures = 0;
 foreach (var test in tests)
 {
@@ -242,12 +254,29 @@ static void NetworkChat()
     var transport = new FakeTransport();
     var coordinator = new NetworkGameCoordinator(session, transport, PieceSide.Red);
     coordinator.SendChatAsync("你好").AsTask().GetAwaiter().GetResult();
-    Equal("你好", transport.LastChat?.Text);
-    string? received = null;
-    coordinator.ChatReceived += text => received = text;
-    transport.Receive(new ChatCommand("轮到你了"));
-    Equal("轮到你了", received);
+    Equal("你好", transport.LastChat?.Entry.Text);
+    RoomChatEntry? received = null;
+    coordinator.Chat.MessageAdded += message => received = message;
+    transport.Receive(new ChatCommand(new RoomChatEntry(Guid.NewGuid().ToString("N"), 1, 0, "轮到你了")));
+    Equal("轮到你了", received?.Text);
+    Equal(0, received?.TargetSeat);
     coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+}
+
+static void RoomChatManagement()
+{
+    var room = new RoomChatManager(3, 4);
+    Equal<string?>(null, room.Post(0, 2, "  魏对蜀  ", out var directed));
+    Equal("魏对蜀", directed?.Text);
+    True(RoomChatManager.IsVisibleTo(directed!, 0));
+    True(RoomChatManager.IsVisibleTo(directed!, 2));
+    False(RoomChatManager.IsVisibleTo(directed!, 1));
+    True(room.Post(0, 0, "自己", out _) is not null);
+    True(room.Post(3, null, "越界", out _) is not null);
+    var peer = new RoomChatManager(3, 4);
+    Equal(1, peer.ImportTrustedHistory(room.Entries));
+    Equal(0, peer.ImportTrustedHistory(room.Entries));
+    False(peer.AcceptLive(new RoomChatEntry(Guid.NewGuid().ToString("N"), 1, null, "伪造"), 2));
 }
 
 static void NetworkUndoOffer()
@@ -346,7 +375,7 @@ static void MatchWireRoundTrip()
     RoundTrip(new TimeoutCommand(8, PieceSide.Red), MatchWireMessageType.Timeout);
     RoundTrip(new ClockSyncCommand(9,
         new ClockSnapshot(101.5, 82.25, 11, PieceSide.Black)), MatchWireMessageType.ClockSync);
-    RoundTrip(new ChatCommand("你好，Steam 好友"), MatchWireMessageType.Chat);
+    RoundTrip(new ChatCommand(new RoomChatEntry(Guid.NewGuid().ToString("N"), 0, 1, "你好，Steam 好友")), MatchWireMessageType.Chat);
     RoundTrip(new MatchOfferRequest(42, 12, MatchOfferKind.Undo), MatchWireMessageType.MatchOffer);
     RoundTrip(new MatchOfferResponse(43, 15, MatchOfferKind.Draw, true),
         MatchWireMessageType.MatchOfferResponse);
@@ -375,13 +404,105 @@ static void MatchWireRejectsMalformedData()
     var rejectedChat = false;
     try
     {
-        MatchWireProtocol.Encode(new ChatCommand("line\nbreak"));
+        MatchWireProtocol.Encode(new ChatCommand(new RoomChatEntry(Guid.NewGuid().ToString("N"), 0, null, "line\nbreak")));
     }
     catch (ArgumentException)
     {
         rejectedChat = true;
     }
     True(rejectedChat);
+}
+
+static void UciFen()
+{
+    Equal(
+        "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1",
+        XiangqiUciNotation.ToFen(ChessGame.CreateStandard().Snapshot));
+}
+
+static void UciCoordinates()
+{
+    var expected = new ChessMove(new BoardPosition(0, 3), new BoardPosition(0, 4));
+    Equal("a3a4", XiangqiUciNotation.FormatMove(expected));
+    True(XiangqiUciNotation.TryParseMove("A3a4", out var parsed));
+    Equal(expected, parsed);
+    False(XiangqiUciNotation.TryParseMove("j3a4", out _));
+    False(XiangqiUciNotation.TryParseMove("a10a2", out _));
+}
+
+static void PgnRecordRoundTrip()
+{
+    var session = new GameSession();
+    True(session.TryMove(new BoardPosition(0, 3), new BoardPosition(0, 4)).IsSuccess);
+    True(session.TryMove(new BoardPosition(0, 6), new BoardPosition(0, 5)).IsSuccess);
+    var source = session.CreateRecord(new Dictionary<string, string> { ["Event"] = "测试", ["Result"] = "*" });
+    var text = XiangqiPgnCodec.Serialize(source);
+    True(text.Contains("[Format \"ICCS\"]", StringComparison.Ordinal));
+    True(XiangqiPgnCodec.TryParse(text, out var imported, out var error));
+    Equal(2, imported!.Moves.Count);
+    Equal(2, imported.Replay()[^1].PlyNumber);
+
+    const string fen = "4k4/9/9/9/9/9/9/9/9/4K4 b - - 0 7";
+    True(XiangqiUciNotation.TryParseFen(fen, out var position, out error));
+    Equal(PieceSide.Black, position.SideToMove);
+    Equal(13, position.PlyNumber);
+}
+
+static void PgnRejectsIllegalMove()
+{
+    const string invalid = "[Game \"Chinese Chess\"]\n[Format \"ICCS\"]\n\n1. a0a9 *";
+    False(XiangqiPgnCodec.TryParse(invalid, out _, out _));
+}
+
+static void TrialIsIsolated()
+{
+    var session = new GameSession();
+    var trial = session.BeginTrial();
+    True(trial.TryMove(new BoardPosition(0, 3), new BoardPosition(0, 4)).IsSuccess);
+    Equal(1, trial.Snapshot.PlyNumber);
+    Equal(0, session.Snapshot.PlyNumber);
+}
+
+static void ReplayAnalysis()
+{
+    var game = ChessGame.CreateStandard();
+    var first = game.Snapshot;
+    var move = new ChessMove(new BoardPosition(0, 3), new BoardPosition(0, 4));
+    True(game.TryMove(move).IsSuccess);
+    var engine = new FakeReplayEngine();
+    var coordinator = new ReplayAnalysisCoordinator(engine, [first, game.Snapshot], 100);
+    coordinator.SelectAndSweepAsync(1).GetAwaiter().GetResult();
+    Equal(2, coordinator.Cache.Count);
+    True(coordinator.Cache[0].RedCentipawns > 0);
+    True(coordinator.Cache[1].RedCentipawns < 0);
+    coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    True(engine.WasDisposed);
+}
+
+static void AiCoordinator()
+{
+    var session = new GameSession();
+    var aiMove = new ChessMove(new BoardPosition(0, 6), new BoardPosition(0, 5));
+    var engine = new FakeAiEngine(aiMove);
+    var coordinator = new AiGameCoordinator(session, engine, PieceSide.Red);
+
+    coordinator.InitializeAsync().AsTask().GetAwaiter().GetResult();
+    True(engine.IsReady);
+    True(coordinator.SubmitHumanMove(new BoardPosition(0, 3), new BoardPosition(0, 4)).IsSuccess);
+    var result = coordinator.PlayAiTurnAsync(100).AsTask().GetAwaiter().GetResult();
+    True(result is { IsSuccess: true });
+    Equal(2, session.Snapshot.PlyNumber);
+    Equal(PieceSide.Red, session.Snapshot.SideToMove);
+
+    var analysis = coordinator.AnalyzeAsync(100, 3).AsTask().GetAwaiter().GetResult();
+    Equal(aiMove, analysis.BestMove);
+    Equal(3, engine.LastVariationCount);
+
+    True(coordinator.UndoHumanTurn());
+    Equal(0, session.Snapshot.PlyNumber);
+    Equal(PieceSide.Red, session.Snapshot.SideToMove);
+    coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    True(engine.WasDisposed);
 }
 
 static void RoundTrip<T>(T expected, MatchWireMessageType type) where T : struct
@@ -501,4 +622,62 @@ sealed class FakeTransport : IMatchTransport
         StatusChanged?.Invoke(new TransportStatus(TransportConnectionState.Disconnected));
         return ValueTask.CompletedTask;
     }
+}
+
+sealed class FakeAiEngine(ChessMove move) : IXiangqiAiEngine
+{
+    public string DisplayName => "Test AI";
+    public bool IsReady { get; private set; }
+    public bool WasDisposed { get; private set; }
+    public int LastVariationCount { get; private set; }
+
+    public ValueTask InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IsReady = true;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask NewGameAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<AiSearchResult> SearchAsync(
+        GameSnapshot position,
+        AiSearchRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        LastVariationCount = request.VariationCount;
+        var variations = Enumerable.Range(1, request.VariationCount)
+            .Select(rank => new AiVariation(rank, move, 8, 20 - rank, null, [move]))
+            .ToArray();
+        return ValueTask.FromResult(new AiSearchResult(move, variations));
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        WasDisposed = true;
+        IsReady = false;
+        return ValueTask.CompletedTask;
+    }
+}
+
+sealed class FakeReplayEngine : IXiangqiAiEngine
+{
+    public string DisplayName => "Replay test";
+    public bool IsReady { get; private set; }
+    public bool WasDisposed { get; private set; }
+    public ValueTask InitializeAsync(CancellationToken cancellationToken = default) { IsReady = true; return ValueTask.CompletedTask; }
+    public ValueTask NewGameAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    public ValueTask<AiSearchResult> SearchAsync(GameSnapshot position, AiSearchRequest request, CancellationToken cancellationToken = default)
+    {
+        var game = ChessGame.FromPosition(position);
+        var source = position.Pieces.First(p => p.Piece.Side == position.SideToMove && game.GetLegalDestinations(p.Position).Count > 0).Position;
+        var move = new ChessMove(source, game.GetLegalDestinations(source)[0]);
+        return ValueTask.FromResult(new AiSearchResult(move, [new AiVariation(1, move, 6, 25, null, [move])]));
+    }
+    public ValueTask DisposeAsync() { WasDisposed = true; IsReady = false; return ValueTask.CompletedTask; }
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<theme schemaVersion="1" id="classic" displayName="经典木色">
+  <supports classic="true" threeKingdoms="true" />
+  <palette boardFill="#D8B675" boardEdge="#53361F" gridInk="#5C3A21"
+           pieceFill="#F4DEAE" neutralPieceFill="#B9B3A4" neutralInk="#59564F"
+           legalMove="#4E9B62" selection="#F04444" moveFrom="#F1E7CF" moveTo="#FFF2A6"
+           classicRed="#B8322B" classicBlack="#20262B"
+           wei="#367CC6" wu="#B88B12" shu="#358450" />
+</theme>

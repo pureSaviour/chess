@@ -26,9 +26,9 @@ public readonly record struct MatchWireMessage(MatchWireMessageType Type, object
 /// </summary>
 public static class MatchWireProtocol
 {
-    public const byte Version = 3;
+    public const byte Version = 4;
     public const int MaximumPacketBytes = 16600;
-    public const int MaximumChatUtf8Bytes = 512;
+    public const int MaximumChatUtf8Bytes = RoomChatManager.MaximumTextUtf8Bytes;
     public const int MaximumProfileTextUtf8Bytes = 96;
     public const int MaximumAvatarSide = 64;
     private const int MovePacketLength = 26;
@@ -81,16 +81,23 @@ public static class MatchWireProtocol
 
     public static byte[] Encode(ChatCommand command)
     {
-        var text = command.Text.Trim();
+        var entry = command.Entry ?? throw new ArgumentException("聊天消息不能为空。", nameof(command));
+        var text = entry.Text.Trim();
         if (text.Length == 0 || text.Any(char.IsControl))
             throw new ArgumentException("聊天消息不能为空或包含控制字符。", nameof(command));
+        if (entry.Id is not { Length: 32 } || !entry.Id.All(Uri.IsHexDigit) || entry.SenderSeat is < 0 or > 1 ||
+            entry.TargetSeat is { } target && (target is < 0 or > 1 || target == entry.SenderSeat))
+            throw new ArgumentException("聊天消息身份或目标无效。", nameof(command));
         var content = StrictUtf8.GetBytes(text);
         if (content.Length > MaximumChatUtf8Bytes)
             throw new ArgumentException(
                 $"聊天消息不能超过 {MaximumChatUtf8Bytes} 个 UTF-8 字节。", nameof(command));
 
-        using var stream = new MemoryStream(content.Length + 4);
+        using var stream = new MemoryStream(content.Length + 38);
         using var writer = Writer(stream, MatchWireMessageType.Chat);
+        writer.Write(Encoding.ASCII.GetBytes(entry.Id));
+        writer.Write((byte)entry.SenderSeat);
+        writer.Write((sbyte)(entry.TargetSeat ?? -1));
         writer.Write((ushort)content.Length);
         writer.Write(content);
         return stream.ToArray();
@@ -216,14 +223,20 @@ public static class MatchWireProtocol
     private static bool TryDecodeChat(byte[] packet, out ChatCommand command)
     {
         command = default;
-        if (packet.Length < 5 || packet.Length > MaximumChatUtf8Bytes + 4) return false;
-        var length = BitConverter.ToUInt16(packet, 2);
-        if (length == 0 || length > MaximumChatUtf8Bytes || packet.Length != length + 4) return false;
+        if (packet.Length < 39 || packet.Length > MaximumChatUtf8Bytes + 38) return false;
+        var id = Encoding.ASCII.GetString(packet, 2, 32);
+        var sender = packet[34];
+        var targetValue = unchecked((sbyte)packet[35]);
+        int? target = targetValue < 0 ? null : targetValue;
+        var length = BitConverter.ToUInt16(packet, 36);
+        if (id.Length != 32 || !id.All(Uri.IsHexDigit) || sender > 1 ||
+            target is { } recipient && (recipient > 1 || recipient == sender) ||
+            length == 0 || length > MaximumChatUtf8Bytes || packet.Length != length + 38) return false;
         try
         {
-            var text = StrictUtf8.GetString(packet, 4, length);
+            var text = StrictUtf8.GetString(packet, 38, length);
             if (string.IsNullOrWhiteSpace(text) || text.Any(char.IsControl)) return false;
-            command = new ChatCommand(text.Trim());
+            command = new ChatCommand(new RoomChatEntry(id, sender, target, text.Trim()));
             return true;
         }
         catch (DecoderFallbackException)

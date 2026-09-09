@@ -1,658 +1,311 @@
-# 中国象棋项目技术架构（Agent 入口）
+# 项目技术架构（Agent 与维护者入口）
 
-> 本文是项目的技术事实入口，供后续 Agent、维护者和扩展功能开发者快速建立完整心智模型。修改分层边界、网络协议、核心生命周期或目录结构时，应同步更新本文。
+更新：2026-09-08。本文描述当前代码，不把规划中的接口当成已经落地的功能。开发约束见 [AGENTS.md](AGENTS.md)。
 
-## 1. 项目定位与硬性约束
+## 1. 总架构
 
-本项目是一款使用 Godot 4.5 Mono 与 C# 实现的中国象棋游戏，支持本地双人、ENet 局域网和 Steam 好友 Lobby/P2P 对弈。当前标准玩法包含完整基础棋规、计时、超时判负、聊天、悔棋协商、和棋协商、结算动画、棋子动画、音效、特殊局面特效及玩家资料交换。
+### 1.1 项目范围与架构结论
 
-必须长期保持以下约束：
+项目使用 Godot 4.7.2 Mono + C#，包含三个独立玩法：
 
-- 所有逻辑和界面脚本都使用 C#；项目不使用 GDScript。
-- `Xiangqi.Core` 不引用 Godot、Steamworks.NET 或任何具体 UI/网络实现。
-- 棋规只由 `ChessGame` 判定；UI 和网络层不得复制或绕过棋规。
-- UI 只提交用户意图并消费不可变快照/语义事件，不直接写棋盘状态。
-- ENet 与 Steam 必须实现同一个 `IMatchTransport`，并承载相同的 `MatchWireProtocol`。
-- Steam 代码只在 `GODOT_WINDOWS` 下编译；Android 不能引用 Steamworks.NET 或 `steam_api64.dll`。
-- 外部收到的数据必须先做长度、枚举、坐标、序号和局面版本校验。
-- Godot `Node`、纹理、Steam 回调和网络连接均需要明确的所有者与释放边界。
+- 经典象棋：本地双人、ENet 局域网、Steam 好友联机、外接 UCI AI。
+- 三国象棋：本地三人、TCP 局域网、Steam 三席邀请；包含收编、三方协商、进程内断线恢复和房主迁移。
+- 揭棋：本地双人、确定性暗子、Seed 棋谱与复盘隐约显示；LAN/Steam 脱敏协议尚未实现。
 
-## 2. 技术栈与构建目标
+三种玩法各有领域模型与对局编排，共用部分棋种值对象、时间配置、设置、UI 样式、皮肤和反馈特效。并没有统一的“任意人数/任意棋盘玩法引擎”。
 
-| 部分 | 技术/版本 | 说明 |
+检查结论：**核心棋规已与 UI/引擎分离；抽象层部分成熟，尚未达到所有对局流程与 UI 完全解耦。** 经典房间仍承担较多应用编排；三国的控制器查询面仍暴露可变对象，拓扑/投影接口尚未形成完整注入链。详见 [架构检查记录](docs/architecture-review.md)，不能将这些边界描述成已经修复。
+
+### 1.2 编译工程与依赖方向
+
+```text
+Xiangqi（Godot 应用）
+  ├── Presentation：页面、棋盘、输入、外观、动效、音频
+  ├── 同程序集内的适配器：ENet、Steam、UCI、玩家资料
+  ├── → Xiangqi.Core
+  └── → Xiangqi.Transport → Xiangqi.Core
+
+Xiangqi.Core
+  ├── Application：会话、控制器/协调器、端口、命令、协议、棋钟
+  └── Domain：棋局、占位、棋种规则、坐标/拓扑、结果快照
+
+Xiangqi.Core.Tests → Xiangqi.Core
+Xiangqi.ThreeNetwork.Tests → Xiangqi.Core + Xiangqi.Transport
+```
+
+箭头表示项目引用。基础设施依赖 Core 中定义的端口，**不是 Domain 依赖 Infrastructure**。Presentation/Networking 和 Presentation/AI 虽然物理上位于展示工程，职责仍是基础设施适配，不是 UI 控件逻辑。
+
+| 工程/文件 | 当前职责和约束 |
+| --- | --- |
+| [Xiangqi.csproj](Xiangqi.csproj) | Godot.NET.Sdk/4.7.2；仅编译 src/Presentation/**/*.cs；桌面 net8.0，Android 条件 net9.0 |
+| [Xiangqi.Core.csproj](src/Xiangqi.Core/Xiangqi.Core.csproj) | net8.0；没有项目/第三方包引用；不引用 Godot、Steam 或传输实现 |
+| [Xiangqi.Transport.csproj](src/Xiangqi.Transport/Xiangqi.Transport.csproj) | net8.0；仅引用 Core；三国 TCP、签名握手、连接管理 |
+| [Xiangqi.sln](Xiangqi.sln) | 上述三个工程与两个控制台测试工程 |
+| [project.godot](project.godot) | 主场景 src/Presentation/Main.tscn；兼容渲染器 |
+| [export_presets.cfg](export_presets.cfg) | Windows Desktop/Android 导出配置 |
+
+Steam 托管引用与原生 DLL 受 Windows 目标条件控制；Steam 源码用 GODOT_WINDOWS 隔离。条件构建只证明编译边界，不等于 Android 设备运行或 Steam 实联验收。
+
+### 1.3 每层允许做什么
+
+| 层 | 可以做 | 不应做 |
 | --- | --- | --- |
-| 引擎 | Godot 4.5.1 Mono | `project.godot` 的主场景是 `src/Presentation/Main.tscn` |
-| 展示层 | C# + Godot .NET API | UI 主要由 C# 代码创建，场景文件只保留根节点入口 |
-| 桌面目标 | .NET 8 | 编辑器、Windows、Core 与测试默认目标 |
-| Android 目标 | .NET 9 | `GodotTargetPlatform=android` 时主项目条件切换 |
-| 局域网 | Godot `ENetMultiplayerPeer` | UDP，默认端口 `27888`，房间最多两人 |
-| Steam | Steamworks SDK 1.65 + Steamworks.NET | Windows x64；开发阶段使用 Spacewar App ID 480 |
-| 测试 | 独立 .NET 控制台测试 | 不依赖 Godot，不使用第三方测试框架 |
+| Domain | 规则验证、占位变化、轮次、收编、胜负、撤销 | 创建节点/材质、读设置、发网络包、启动 AI、按屏幕像素判棋规 |
+| Application | 用户意图、协商、身份/序号检查、计时、命令重放、语义输出 | 引用具体控件/Steam 句柄，复制棋种规则 |
+| Infrastructure | 网络/进程/平台适配、输入解码、有界队列、身份认证、资源释放 | 跳过领域复验，直接覆盖棋盘，决定棋种走法 |
+| Presentation | 布局、点击命中、选中/动画状态、读取快照、展示错误、提交意图 | 自行执行收编/淘汰，改快照，另写一套“合法着法”判断 |
 
-关键工程文件：
+UI 根据“轮到谁、是否协商、是否结束”关闭按钮属于交互反馈，但不构成安全或规则验证；提交端仍需重复校验。UI 调用查询获取合法目标不等于 UI 实现棋规。
 
-- `Xiangqi.sln`：主项目、核心库、核心测试三个工程。
-- `Xiangqi.csproj`：Godot C# 主项目，只显式包含 `src/Presentation/**/*.cs`。
-- `src/Xiangqi.Core/Xiangqi.Core.csproj`：纯 C# 领域/应用库。
-- `tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`：可直接运行的回归测试程序。
-- `project.godot`：Godot 项目、窗口尺寸与兼容渲染器设置。
-- `export_presets.cfg`：Windows Desktop 与 Android 导出预设。
+现有代码的例外必须知晓：经典 GameScreen 同时编排棋钟/网络/AI；三国虽然遵守 Submit 写入口，但 Session/Game 的公开 API 尚未从类型上阻止 UI 绕过控制器。后续新增功能不得扩大这两处技术债。
 
-## 3. 总体分层与依赖方向
+### 1.4 共享数据流
 
-```text
-Godot 输入 / Steam 回调 / ENet 数据包
-                 │
-                 ▼
-Presentation + Infrastructure Adapters
-Main / Screens / BoardView / Effects / Audio / Profiles / Networking
-                 │  只调用门面、命令、快照、接口
-                 ▼
-Application
-GameSession / NetworkGameCoordinator / MatchClock / MatchWireProtocol
-                 │
-                 ▼
-Domain
-ChessGame / BoardState / Pieces / IPieceRule / 标准棋规
-```
+输入位置 → 视图投影/命中 → 会话或控制器意图 → 领域验证 → 结果/快照/事件 → UI 刷新或播放动画。
 
-依赖只能向下：
+- 逻辑坐标与屏幕坐标分开；缩放、翻转、皮肤不改变棋谱。
+- 棋规以领域对象为唯一事实来源；动画期间的移动副本只属于视图。
+- 揭棋暗子由 BoardView 绘制无文字木质背面；covered→具体棋种的平移与横向翻面共享同一进度、同时完成，不改变领域翻明时点。
+- 规则/AI/网络输入统一复验，但两个玩法的实际编排入口不同，见第 2、3 节。
+- 快照只用于读取。经典快照使用新数组隔离内部占位，但不是深度不可变集合；三国发布快照会复制并包装数组。会话棋钟/连接列表则是实时只读视图，不是历史快照。
 
-- `Domain`：零外部依赖，拥有权威棋盘和规则。
-- `Application`：依赖 `Domain`，将领域操作组织成 UI/网络可调用的用例，并发出语义事件。
-- `Presentation`：依赖 `Application` 和 `Domain` 的只读类型，负责 Godot 节点、输入与渲染。
-- `Presentation/Networking`：是基础设施适配器，依赖传输接口和协议，但不能决定棋步是否合法。
+### 1.5 文档路由与抽象索引
 
-项目采用“端口与适配器 + Godot 事件驱动”的解耦方式，思想上类似 MVVM：`GameSnapshot` 相当于只读状态，`GameSession`/`NetworkGameCoordinator` 相当于命令与协调层，Godot `Control` 只是视图和输入适配器。没有为了形式而引入绑定框架。
+阅读顺序：本文总览 → 目标玩法文档 → 抽象使用手册 → 对应源代码与测试。
 
-## 4. 目录与文件职责
+| 文档 | 内容与维护边界 |
+| --- | --- |
+| [抽象层使用手册](docs/abstractions.md) | 接口职责、调用条件、注入点、生命周期、示例、测试与当前限制 |
+| [经典象棋架构](docs/architecture.md) | 在原有架构摘要上更新；经典领域、四种房间入口、协议、AI 与视图协作 |
+| [三国象棋](docs/three-kingdoms.md) | 已确认规则、拓扑、会话/控制器/传输、迁移重连与使用注意事项 |
+| [揭棋玩法](docs/jieqi.md) | 暗/明身份、槽位首步、确定性洗牌、棋谱与联机保密边界 |
+| [架构检查记录](docs/architecture-review.md) | 2026-09-07 代码证据、分层评估、待改进项与验证范围 |
+| [Steam 集成](docs/steam-integration.md) | 平台配置、开发 App ID、验收；三国细节路由到对应玩法文档 |
+| [坐标方案](docs/three-kingdoms-coordinate-proposal.md) | 三国历史设计依据；已确认实现以 three-kingdoms.md 和代码为准 |
+| [AGENTS.md](AGENTS.md) | 全仓库 Agent 开发与交付约束 |
+| [XML 主题包与 shader 接口](docs/theme-package-proposal.md) | 已实现的 schema v1、双目录、安全边界、atlas/uniform 契约与当前限制 |
 
-```text
-.
-├─ assets/
-│  └─ audio/                     落子、吃子、选择音效及第三方许可
-├─ docs/
-│  ├─ architecture.md            架构摘要和当前规则边界
-│  └─ steam-integration.md       Steam 配置、测试和发布注意事项
-├─ src/
-│  ├─ Xiangqi.Core/
-│  │  ├─ Domain/                 权威领域模型与棋规
-│  │  │  └─ Rules/               棋子规则接口、注册表、标准棋子规则
-│  │  └─ Application/            对局门面、网络协调、时钟、协议、表现语义
-│  └─ Presentation/
-│     ├─ Main.cs                 组合根、路由、平台服务初始化、调试入口
-│     ├─ Main.tscn               Godot 主场景入口
-│     ├─ BoardView.cs            棋盘绘制、坐标变换、选中/移动动画
-│     ├─ Screens/                主菜单、玩法 Gallery、设置、对局屏幕
-│     ├─ UI/                     共享主题和控件工厂
-│     ├─ Audio/                  语义事件到音效的映射
-│     ├─ Effects/                语义事件到视觉特效/结算动画的映射
-│     ├─ Profiles/               玩家资料快照、头像转换与资源所有权
-│     └─ Networking/             ENet、Steam Lobby、Steam P2P 适配器
-├─ tests/Xiangqi.Core.Tests/     核心棋规与协议回归测试
-├─ third_party/Steamworks.NET/   固定版本的托管绑定、许可和版本说明
-├─ steam_api64.dll               Steamworks SDK Windows x64 原生运行库
-├─ Xiangqi.csproj
-├─ Xiangqi.sln
-└─ project.godot
-```
+现有主要抽象：
 
-`.godot/`、`bin/`、`obj/`、`build/`、`export/` 和根目录导出数据目录都是生成物，不得提交。`steam_appid.txt` 是本地 Debug/Spacewar 标记，也不得提交到正式版本历史。
+| 变化点 | 经典 | 三国 | 真实可替换范围 |
+| --- | --- | --- | --- |
+| 棋种规则 | IReadOnlyBoard / IPieceRule / PieceRuleRegistry | IReadOnlyThreeBoard / IThreePieceRule / ThreePieceRuleRegistry | 领域支持注册棋种；正式房间的配置注入仍有限 |
+| 空间结构 | BoardPosition / BoardState（固定 9×10） | BoardCellId / IBoardTopology / KingdomSquare | 三国规则读取拓扑端口，但聚合仍固定 135 点与具体拓扑 |
+| UI 对局入口 | GameSession + NetworkGameCoordinator / AiGameCoordinator | IThreeMatchController | 经典没有统一房间控制器；三国查询面尚未收窄 |
+| 传输 | IMatchTransport（类型化双人消息） | IThreeRoomTransport（固定三席、原始应用包） | 不可互换，不可仅改人数复用 |
+| AI | IXiangqiAiEngine | 未接入 | 当前端口面向经典 GameSnapshot/ChessMove |
+| 特殊局面提示 | IPositionPatternDetector / PresentationCue | 未接入同一 detector 流水线 | detector 是经典坐标语义，不是通用三国接口 |
+| 视觉反馈 | BoardFeedbackLayer / PieceFeedback shader | 同左，并复用移动插值/选中浮动语义 | 接收像素标记与主题色；动画只持有视图快照 |
+| 展示主题 | IBoardTheme / IBoardThemeCatalog / ThemePackageCatalog | 同左 | XML 双目录、字符串 ID、手动重扫；资源只在 Godot 主线程由视图租约创建 |
+| 投影 | BoardView 内部计算 | IBoardProjection / ThreeBoardProjection | 接口已定义，ThreeBoardView 仍直接构造具体投影 |
+| 房间消息 | RoomChatManager | 同左 | 共享有界消息板、目标可见性与验证；各玩法协议仍分别适配 |
 
-## 5. 领域层：棋盘、棋子与权威棋局
+## 2. 经典象棋架构
 
-### 5.1 坐标系
+详细说明与协议布局见 [经典象棋架构](docs/architecture.md)，具体接口用法见 [抽象层使用手册](docs/abstractions.md)。
 
-`BoardPosition(File, Rank)` 使用逻辑坐标：
+### 2.1 领域模型与扩展
 
-- `File` 为 0..8，共 9 路。
-- `Rank` 为 0..9，共 10 行。
-- 红方初始区域靠近低 Rank，红兵前进方向为 `+1`。
-- 黑方初始区域靠近高 Rank，黑卒前进方向为 `-1`。
+- BoardPosition(File, Rank)：9 路 × 10 行，红方底线逻辑 Rank=0，前进 +1；黑方底线 Rank=9，前进 -1。
+- ChessPiece：PieceInstanceId + PieceSide + PieceKind。PieceKind 是字符串值对象，便于添加棋种；PieceSide 及 Opponent() 仅适用于双人。
+- BoardState 拥有占位；棋种只接收 IReadOnlyBoard 查询。Move/Add/Clone 的可变能力留在 Core 内部。
+- IPieceRule.CanMove 处理局部几何/阻挡，ChessGame 统一处理轮次、友子占位、不能送将、将帅照面、终局与历史撤销。
+- ChessGame 构造接收局面和注册表；但 GameSession 的创建/重开均直接调用 CreateStandard，不能声称 UI 已能注入任意规则集。
+- GameSnapshot 是展示/分析输入；修改快照不会改变权威占位，也不允许靠修改快照制造“落子”。
 
-坐标方向属于领域事实；屏幕上下翻转属于 `BoardView` 的展示职责。不得为了黑方视角修改领域坐标或网络坐标。
+长将、长捉、重复局面等赛事裁决尚未实现；新增前需确认规则版本。
 
-### 5.2 棋子抽象
+### 2.2 应用编排与四种入口
 
-`ChessPiece` 由三部分组成：
+| 入口 | 权威写入路径 | 当前编排位置 |
+| --- | --- | --- |
+| 本地对决 | GameScreen → GameSession.TryMove → ChessGame | GameScreen 管选中、棋钟、重开/悔棋按钮 |
+| LAN | GameScreen → NetworkGameCoordinator → GameSession；对端同样复验 | GameScreen + EnetMatchTransport（Godot Node） |
+| Steam 好友 | 与 LAN 相同协调器/协议 | Main / SteamLobbyService 构造 SteamMatchTransport |
+| 人机对决 | 人类经 SubmitHumanMove；AI 经 PlayAiTurnAsync → GameSession | AiGameCoordinator 校验搜索结果，GameScreen 调度时机 |
 
-- `PieceInstanceId`：单局内稳定身份，移动后不变，供动画和未来回放引用。
-- `PieceSide`：红/黑阵营。
-- `PieceKind`：字符串值对象，而不是枚举。
+GameSession 发出 StateChanged 与 CueRaised；DoubleChariotMateDetector 通过 IPositionPatternDetector 接入，只观察局面、发出语义，不裁决着法。
 
-`PieceKind` 刻意不用 enum，使新棋子可以通过新字符串标识和规则注册扩展，而不必改变领域模型或既有枚举序列。内置种类定义在 `BuiltInPieceKinds`：`general`、`advisor`、`elephant`、`horse`、`chariot`、`cannon`、`soldier`。
+MatchClock 是 Core 内的纯 C# 双人棋钟，但启动/暂停、主机超时权限、约 0.25 秒时钟同步和 AI 动画后调度仍在 GameScreen。这是“棋规分离已实现、房间编排分离尚不完整”的具体原因。
 
-### 5.3 棋盘状态
+### 2.3 网络与 AI 边界
 
-`BoardState` 实现 `IReadOnlyBoard`，负责：
+经典 IMatchTransport 搬运类型化消息，EnetMatchTransport 与 SteamMatchTransport 共享 MatchWireProtocol v4（小端、封闭消息类型、最大 16600 字节）。协调器验证序号、己方身份、申请 ID/局面手数，再调用同一个 GameSession。聊天 payload 使用稳定席位和目标席位，交给共享 RoomChatManager 验证、去重和展示过滤。
 
-- 9×10 边界与位置查询；
-- 棋子移动和吃子；
-- 直线两点之间的阻挡计数；
-- 克隆，用于试走和历史快照。
+经典 ENet 默认 UDP 27888，只允许一个远端；Steam 只接受确定的对手。断线结束当前经典网络流程，不具备三国的房主迁移/增量重连。
 
-棋子具体规则只接收 `IReadOnlyBoard`，因此规则对象不能直接修改棋盘。
+IXiangqiAiEngine 只接受局面和搜索参数，返回 BestMove/候选变化；UciProcessAiEngine 使用非阻塞进程管道。AiGameCoordinator 检查局面手数、行棋方与结束状态，再复验着法；UndoHumanTurn 撤销人类最近一轮决策。当前思考期间不允许该悔棋入口，不能描述成已经支持任意时刻取消搜索并悔棋。
 
-### 5.4 棋子规则接口
+“向模型询问”当前是 UCI MultiPV 局面分析，不是自由文本对话。新的远程后端需要另外规划配置、鉴权/取消等；当前 Gallery 配置要求可执行文件路径，GameScreen 还要求引擎适配器是 Node，仅实现端口不足以直接替换正式 UI 后端。
 
-`IPieceRule` 只回答某一棋种的局部几何与阻挡是否合法：
+## 3. 三国象棋架构
 
-```csharp
-PieceKind Kind { get; }
-bool CanMove(IReadOnlyBoard board, ChessPiece piece, BoardPosition from, BoardPosition to);
-```
+完整规则、连接协议细节及测试入口见 [三国象棋](docs/three-kingdoms.md)。本节聚焦各层如何协作。
 
-`PieceRuleRegistry` 将 `PieceKind` 映射到规则实现。标准实现包括将/帅、士/仕、象/相、马、车、炮、兵/卒。轮次、己方棋子占位、不能送将、将帅照面和终局判定不属于单个棋子的职责，统一由 `ChessGame` 处理。
+### 3.1 拓扑、地域与领域聚合
 
-### 5.5 权威聚合 `ChessGame`
+- 三个 9×5 国家区域，通过 KingdomSquare(Region, File, Rank) 映射 BoardCellId：45×国家编号 + 9×Rank + File。
+- ThreeKingdomsTopology 预计算 135 点、243 普通边、108 四边形与中央三角形，以及连续射线、四边形对角、马腿/象眼候选。
+- IBoardTopology 不包含 Godot、像素、颜色或占位；规则把候选路径与 IReadOnlyThreeBoard 的占位/国土查询组合。
+- ThreeKingdomsGame 拥有棋子数组、存活国家、国土所有权、轮次、收编/淘汰和单手 Memento；不借用经典的红黑 Opponent()。
+- KingdomPiece 区分 BirthRegion、Owner、HasLeftBirthRegion。Owner=null 是中立障碍，不能捕获；显示色只读取 Owner，不反向参与规则。
+- IThreePieceRule / ThreePieceRuleRegistry 可扩展局部走法；收编、全体无着和棋等全局副作用仍在聚合。
+- 将被吃与认输/超时/断线负是不同路径：前者收编，后者移除将并留下障碍。两种士策略通过 AdvisorConquestPolicy 配置。
 
-所有本地点击、远端命令、未来 AI、棋谱回放都必须最终调用 `ChessGame`，不能直接调用 `BoardState.Move`。
+注意：地域换算和存储仍绑定 3×9×5；不能仅提供另一 IBoardTopology 就把棋盘换成任意形状。扩展新棋盘需同时设计地域查询、占位容量、开局与投影注入，详见抽象手册。
 
-一次着法的验证顺序为：
+### 3.2 会话与统一控制器
 
-1. 检查起终点是否在棋盘内。
-2. 检查起点是否有棋子。
-3. 检查是否轮到该阵营。
-4. 检查终点是否为己方棋子。
-5. 调用对应 `IPieceRule` 检查棋种几何/阻挡。
-6. 克隆棋盘并试走，检查己方将帅是否受攻击。
-7. 成功后压入 Memento、执行移动并增加 `PlyNumber`。
-8. 切换行棋方，重新计算将军和是否存在合法着法。
-9. 无合法着法时按是否被将军判定将死或困毙。
+ThreeMatchSession 组合 Game、三组棋钟、连接标记和 KingdomOffer。Move、Resign、RequestOffer、Vote、ForfeitDisconnected 等方法组织应用用例。普通协商冻结走子与计时；断线等待不冻结；悔棋不返还耗时。
 
-`GameSnapshot` 是对外只读状态，包含排序后的棋子列表、当前行棋方、将军状态、终局状态、胜方、结束原因与半回合编号。UI 与网络协调器只能基于快照显示或校验，不能持有领域内部 `BoardState` 引用。
+IThreeMatchController 的两种实现：
 
-悔棋通过内部 Memento 栈恢复完整状态；超时和双方同意和棋也由 `ChessGame` 写入权威终局状态。
+- LocalThreeMatchController：本地热座，LocalKingdom=null；Submit 走 ThreeCommands.Apply，Tick 推进会话。
+- ThreeNetworkController：绑定认证席位、等待满三人、管理提交队列/日志/迁移，再重放相同命令路径。
 
-## 6. 应用层：用例、计时与语义输出
+ThreeGameScreen 只发送玩家 ThreeCommand、读取状态和查询目标。网络 Submit 返回 null 表示已受理/排队，不保证已落子；必须等 Changed/快照变化更新棋盘，异步拒绝通过 Message 显示。Tick/Connection 是内部命令，UI 不得发送。
 
-### 6.1 `GameSession`
+IThreeMatchController.Session 暴露具体会话，Session.Game 又暴露可变聚合：当前 UI 没有直接调用这些写方法，但接口只读边界是约定而非编译器保证。新增 UI 必须继续用 Submit，未来再将其收窄为只读查询端口。
 
-`GameSession` 是 UI 面向的单局门面：
+### 3.3 三人同步、迁移与恢复
 
-- 接受选择查询与 `TryMove`；
-- 暴露不可变 `Snapshot`；
-- 提供 `Undo`、`NewGame`、`DeclareTimeout`、`DeclareDraw`；
-- 通过 `StateChanged` 发布新状态；
-- 通过 `CueRaised` 发布表现语义。
+IThreeRoomTransport 提供 LocalId、固定名册、Connected、Send/Received、Poll/Dispose。满三席后名册不补位，离线不删除身份。LAN 与 Steam 复用 ThreeNetworkController v2，不各写棋规、房管消息或迁移逻辑。
 
-UI 不根据吃子、将军或终局自行猜测特效，而是消费 `PresentationCue`。
+- LAN：Xiangqi.Transport 中的 TCP 全连接，默认房主端口 48028，加入者也有独立监听端口；ECDSA P-256 临时身份，带连接 nonce 的签名帧。后台 I/O 事件经 Poll 回到调用线程。
+- Steam：三席 Lobby、独立消息频道 48028、可靠消息及断会话重启；复用唯一 SteamAPI 回调泵，不重复初始化 Steam。
+- 同步：有界 JSON 固定 DTO，最大 128 KiB，每页 128 条，日志上限 200000 条；SHA-256 链及领域重放验证。
+- 提交：权威先在会话副本执行同一规则校验，至少另一端复验、存储并确认后，权威才提交自己的正式会话。日志副本与权威提交存在短暂在途差异，不是全端原子提交。
+- 迁移：失去房主且仍有另一端可达时，由在线存活的最低席位接管；等待状态交换并补齐一致历史，旧房主重连不抢回权威。
+- 孤立：仅一台在线不产生新裁决，累计耗时并暂存判负请求；另一台恢复同步后统一处理。队列满不提前清除待扣耗时，超过单包限额的时间分段入队。
+- 冲突：不同历史不强行覆盖，进入同步错误状态；不提供恶意房主仲裁或 Raft/Paxos 级共识。
 
-### 6.2 表现语义与特效扩展
+重连只限游戏进程/房间仍保留的网络恢复，不支持关闭后重启续局；跨设备 LAN 和 Steam 三账号实联仍待验收。
 
-`PresentationCue` 包含：
+### 3.4 三国视图
 
-- `Kind`：Move、Capture、Check、Checkmate、Stalemate、IllegalMove、Undo、NewGame、SpecialPattern、Timeout、Draw。
-- 可选 `Move`、`Subject`、`Message`、`CueId`。
+ThreeBoardProjection 使用六片双线性投影，绘制/点击共享点缓存；基础几何仍按魏/吴/蜀三域生成，再围绕中心旋转，使联网本地席位或热座当前行棋国位于正下方。旋转只重算像素点和命中缓存，不改 CellId、拓扑或网络坐标。ThreeBoardView 扩大可用六边形占比，增加多层厚边框、中央暗纹、角饰与国号水印，参考大幅木雕棋盘的气势而不采用参考图错误拓扑。它绘制网格、九宫、路数与棋子，不判断合法性。双线性投影下九宫斜线显式分段并共同落在逻辑中心点；15 条跨国桥接边继续隐藏并显示“秦岭”“江淮”“三峡”。
 
-`IPositionPatternDetector` 在已完成的合法着法后观察前后快照，只返回语义提示，不能改变合法性或状态。`DoubleChariotMateDetector` 是当前“双车错”识别器。
+RoomChatManager 是两种玩法共同的引擎无关房管消息板：验证席位/目标/UTF-8 大小、保留最多 200 条、按 ID 去重并同步发布事件。三国聊天独立于棋谱日志，房间未满即可发送；每个在线副本保留消息，周期握手同步历史，所以原房主或目标玩家断线不阻止其余人发言，重连/后加入者能读取可见历史。定向消息在可信房间副本间复制、由 UI 按发送者/目标过滤，属于目标可见性而非端到端加密。经典协调器复用相同 Manager，但经典仍无断线恢复协议。
 
-增加新特效时优先新增 detector/cue，再由展示层决定如何播放；不要在规则类里创建 Godot 节点、播放声音或写 UI 文本。
+ThreeBoardView 比较相邻的不可变快照，在 Ply 连续且 LastMove 可验证时播放与经典一致的平滑位移、弧形抬升和吃子淡出；选中棋子使用同样的呼吸浮动，BoardFeedbackLayer 继续负责 shader 光环。首次加载、撤销、重同步或跳跃多个 Ply 时直接显示新快照，不伪造动画。动画状态不回写 Session；动画期间 UI 忽略新的棋盘点击。
 
-### 6.3 棋钟
+IBoardProjection 是引擎侧接口，因为它使用 Vector2；不能移动到无引擎依赖的 Core。当前 ThreeBoardView 直接 new ThreeBoardProjection，并读取其 Outline/Center/Vertex 与具体拓扑；该视图还不是投影可插拔的通用棋盘控件。
 
-`TimeControl(GameSeconds, MoveSeconds)` 中零表示不限时。`MatchClock` 是纯 C# 状态机：
+## 4. 跨玩法的展示与基础设施
 
-- `Advance(delta)` 扣减当前方局时和步时；
-- 任一启用的时间耗尽时返回超时方；
-- `BeginTurn` 切换行棋方并重置步时；
-- `Apply` 让客户端应用房主快照。
-
-联机时房主是时间和超时判负的权威端；客户端只平滑显示并接收 `ClockSyncCommand` 校正。当前同步间隔由 `GameScreen` 控制，约 0.25 秒。
-
-### 6.4 `NetworkGameCoordinator`
-
-协调器将一个 `GameSession` 与任意 `IMatchTransport` 组合：
-
-- 本地着法先经核心验证，成功后发送带序号的 `MoveCommand`。
-- 远端着法必须满足期望的下一个序号，再走同一个 `GameSession.TryMove` 验证路径。
-- 远端超时命令必须绑定当前 `PlyNumber`。
-- 聊天仅传递规范化文本，不影响棋局。
-- 悔棋/和棋申请包含请求 ID、申请类型与发起时的 `PlyNumber`。
-- 有申请待处理时暂停走子，展示层同步暂停棋钟。
-- 悔棋只允许“本地刚走完且对方尚未落子”时发起；接收端也重复验证。
-- 过期、并发、无法匹配或越权的申请失败关闭，不尝试自动合并。
-
-`NetworkGameCoordinator` 负责协议语义和局面一致性；具体套接字、Steam API、UI 对话框均不属于它。
-
-## 7. 展示层与 UI 结构
-
-### 7.1 组合根和页面路由
-
-`Main.tscn` 只实例化 `Main.cs`。`Main` 是应用组合根，负责：
-
-- 加载并应用 `AppSettings`；
-- 初始化 Windows Steam 服务；
-- 构造页面并切换当前 `Control`；
-- 创建 ENet/Steam transport 并注入 `GameScreen`；
-- 把自定义玩家资料组合到平台默认资料；
-- 提供 Debug 冒烟测试入口。
-
-页面之间不直接引用彼此，通过 `Action` 回调报告“进入 Gallery”“保存设置”“返回”等导航意图。`SwitchTo` 统一从场景树移除旧页面并 `QueueFree`。
-
-导航结构：
+### 4.1 页面路由与组合根
 
 ```text
 MainMenuScreen
-├─ 玩法选择 → GalleryScreen
-│  ├─ 本地双人 → GameScreen
-│  ├─ 创建/加入 ENet → GameScreen
-│  └─ 创建 Steam Lobby → 等待好友 → GameScreen
-├─ 设置 → SettingsScreen → 保存/取消 → MainMenuScreen
-└─ 退出
+  ├── 玩法画廊：ModeGalleryScreen（经典/三国/揭棋横向图片卡片）
+  │   ├── 经典卡片四组折叠菜单 → 联机 / 记录 / 导入 / 人机
+  │   ├── 三国卡片两组折叠菜单 → ThreeGalleryScreen 对应本地/LAN/Steam 设置 → ThreeGameScreen
+  │   └── 揭棋卡片两组折叠菜单 → 本地对局 / 最近与保存记录；LAN/Steam 尚未开放
+  └── 全局设置：SettingsScreen
+房间内设置：InGameSettingsDialog
 ```
 
-### 7.2 页面职责
+Main.cs / Main.ThreeKingdoms.cs 负责创建平台服务、适配器和页面，Action 回调承担导航。ModeGalleryScreen 展示三张横向排列、可横向滚动的玩法卡片，十九个叶节点经 Action 回调进入设置、记录或对局页；路由值不携带配置，也不创建房间。卡片背景只负责装饰并忽略输入。SwitchTo 移除并 QueueFree 旧页面；共享 Texture2D 由 Godot 资源缓存管理，卡片节点不手动 Dispose。房间负责释放交给它的控制器/适配器。经典会话和协调器仍在 GameScreen 内创建，并非全部对象都已移至组合根。
 
-- `MainMenuScreen`：标题、玩法、设置、退出；不持有游戏状态。
-- `GalleryScreen`：标准中国象棋玩法卡片、局时/步时、先后手或随机猜先、LAN 地址/端口、Steam 创建入口。
-- `SettingsScreen`：编辑 `AppSettings` 的副本，保存时一次性提交；支持画面、音量、特效、自定义 ID 和头像路径。
-- `GameScreen`：对局展示协调器，连接棋盘、时钟、网络、聊天、协商、音频、特效和结算 UI；它不实现棋规。
+### 4.2 设置、皮肤与反馈
 
-### 7.3 对局界面布局
+AppSettings 通过 ConfigFile 保存 user://settings.cfg，包含显示/特效、音量、资料、字符串 ThemeId、ShowBoardCoordinates，以及 AI 引擎路径、执子、棋钟、对局/复盘思考时长。旧 `board/skin` 数值仍读取/写入一个兼容周期，首次加载映射为 `classic`/`spring`。全局/房间/人机设置先编辑副本，确认后更新、保存并应用，不进入领域棋规或网络棋谱；引擎路径仅在本机使用，不写入棋谱或网络。
 
-`GameScreen` 主要由以下区域组成：
+IBoardTheme / IBoardThemeCatalog 把稳定字符串 ID 解析为不可变调色板、分模式棋盘资源、semantic-v1 棋子 atlas 和语义特效描述；经典与三国棋盘均实际注入并消费。ThemePackageCatalog 扫描 `assets/themes` 与 `user://themes`，ThemeManifestReader 使用系统 XmlReader 禁用 DTD/实体并限制大小、深度、路径和资源类型，ThemeResourceLease 只在 Godot 主线程加载图片/shader并由视图幂等释放。主题不进入规则、快照或网络。内置春日 XML 使用更浅底色、低装饰强度以及动态柳叶、桃花和春燕。
 
-```text
-顶部导航/连接状态/申请按钮
-┌────────────────────────棋盘列──────────────────────┬──联机消息栏──┐
-│ 左侧起始的对方头像、昵称、ID                 对方时钟 │ 聊天记录     │
-│                  BoardView                         │ 输入与发送   │
-│ 左侧起始的本地头像、昵称、ID                 本地时钟 │             │
-└────────────────────────────────────────────────────┴──────────────┘
-```
+默认 XML 目录提供经典与春日主题，未知/损坏持久化 ID 回退经典。全局设置从目录动态生成选项并可手动重扫；房间设置复用已发布目录，对局中不热重载。主题作者接口、atlas 排布、shader uniform、安全边界与限制见 [XML 主题包与 shader 接口](docs/theme-package-proposal.md)。
 
-本地玩家无论执红或执黑都显示在棋盘下方。`ConfigureNetworkMatch` 设置 `_localSide` 并写入 `BoardView.BottomSide`，仅改变渲染映射，不改变逻辑坐标。
+BoardFeedbackLayer 只接受选中/起点/终点像素位置、尺寸与主题语义，内部小型 ColorRect 使用主题 shader 或 PieceFeedback 回退负责旋转/闪烁。ThemePieceLayer 接收投影后的 atlas 绘制命令，两种棋盘共用 7×5 语义排布；无 atlas 时程序绘制。棋盘自身负责选中抬升、移动插值及最近着法生命周期；动态特效关闭后保留静态标记。两种棋盘不伪造通用领域坐标。
 
-### 7.4 `BoardView`
+CueEffectLayer、GameplayAudioPlayer、IPositionPatternDetector 当前主要服务经典玩法，不能因复用了白环就认为三国已接入经典全部结算/音效事件。
 
-`BoardView` 是纯展示/输入适配节点：
+### 4.3 玩家资料与 Steam 生命周期
 
-- `_Draw` 程序化绘制棋盘、河界、九宫线、棋子、选中高亮和合法位置。
-- `_GuiInput` 把鼠标屏幕坐标转换为领域 `BoardPosition`。
-- `BottomSide` 控制红/黑视角转换。
-- `SetPosition` 显示权威快照。
-- `AnimateMove(before, after, move, captured)` 对移动棋子做平滑插值与抬升轨迹。
-- 动画期间权威状态已经是 `after`，只是在视觉上暂时隐藏目标棋子并绘制移动副本。
-- `MoveAnimationFinished` 通知 `GameScreen` 播放普通落子或吃子音效。
+经典 MatchPlayerProfiles 拥有本局资料和临时 RGBA8，GameScreen 创建并释放 ImageTexture。头像文件路径留在本机；协议只发有界 ID、昵称、像素，不传本机路径或平台句柄。Steam64/LAN 指纹继续只做认证与内部名册键；玩家卡片、聊天和三国提示显示 Steam Persona Name/房间昵称，不再把认证 ID 当默认可见名字。三国仍不具备经典同等头像交换流水线。
 
-`GameScreen` 会在移动发生时缓存前后快照和着法，确保本地与远端着法走同一动画路径。动画未完成时阻止重复输入。棋子圆弧段数和计时标签更新已做热路径控制，避免不必要的逐帧布局与绘图开销。
+SteamLobbyService 是唯一 SteamAPI.InitEx/RunCallbacks/Shutdown 所有者。经典使用双人 Lobby 路径；三国由 SteamThreeLobbyService 处理三席配置和模式路由，再交给 SteamThreeRoomTransport。两类 transport 只释放自己拥有的频道/回调/房间，不自行关闭全局 SteamAPI。
 
-### 7.5 UI 样式
+### 4.4 生命周期、线程与性能
 
-`UiStyle` 集中定义颜色、Panel、Button、Title、PageMargin 和 muted label。新增页面或控件应优先复用这里的工厂，避免散落颜色/字号。对局棋盘自身颜色属于 `BoardView` 的局部视觉系统。
+- Domain/Application 会话不是线程安全对象。Godot 入口、控制器 Tick 与回调在主线程串行执行；后台 TCP I/O 必须经队列交给 Poll，不能直接触发 UI 更新。
+- 控制器可在初次联网配置时替换 Session；UI 应在刷新时重新读取，不永久缓存旧 Session 引用。
+- Node、回调、套接字、管道、材质、头像像素和纹理应记录谁创建、谁持有、谁释放；Dispose/DisposeAsync 必须可重复调用。
+- 解绑事件再释放底层资源；不要在 Steam 原生回调执行栈内销毁正在调用的回调，既有路径使用延迟处理。
+- UCI 离开房间需取消活动操作、尝试 quit、必要时结束子进程、释放管道；Node.QueueFree 不能代替适配器释放。
+- 静止棋盘不为光环逐帧 QueueRedraw，shader 使用 TIME；拓扑预计算、投影按尺寸缓存。三国房间仍逐帧格式化标签，不等于 UI 热路径已全部优化。
+- 不把皮肤、头像或调试字符串写入权威规则；应用层目前仍输出中文提示，结构化错误/本地化端口属于后续改进。
 
-### 7.6 设置持久化
+### 4.5 棋谱、残局与试下分支
 
-`AppSettings` 使用 `ConfigFile` 保存到 `user://settings.cfg`：
+经典玩法以文本 PGN 为容器，`Format=ICCS` 保存四字符坐标着法，以 Xiangqi FEN 保存非标准初始局面。选择它是因为 PGN 能承载对局元数据、结果与扩展标签，ICCS 与项目现有 UCI 坐标一一对应且没有中文纵线同子消歧歧义，FEN 又是外部引擎最常用的局面交换形式。WXF 是正式着法记谱规则，但不是当前引擎端的无歧义坐标协议；XQF 是版本相关二进制格式，因此首版不作为写出格式。`XiangqiPgnCodec` 导入只取主线，忽略注释、NAG 与变例，并逐手经 `ChessGame.TryMove` 复验；当前不直接解析 WXF/中文着法。
 
-- display：全屏、垂直同步、帧率上限、特效开关；
-- audio：Master、Music、SFX 音量；
-- profile：自定义玩家 ID、头像文件路径。
+三国 135 点拓扑没有可宣称兼容的行业棋谱标准。`ThreeKingdomsPgnCodec` 只复用 PGN 标签/主线外壳，强制声明 `Variant=Xiangqi-ThreeKingdoms`、`Format=CellId`，并用 `TKFEN` 扩展保存完整初始状态；经典软件可安全忽略未知变体，但不保证理解其着法。两类文本均限制为 4 MiB，外部局面先验证枚举、点位、重复占位/ID，再由领域聚合重放。
 
-设置页编辑的是 `Copy()`，只有点击保存才 `SaveAndApply()`；取消不会残留半应用状态。头像路径只保存在本机，绝不通过网络发送。
+`GameSession.CreateRecord`、`ThreeMatchSession.CreateRecord` 与 `JieqiGameSession.CreateRecord` 返回不可变主线；表现层分别在 `user://records/classic`、`user://records/three`、`user://records/jieqi` 下持有文件。`recent` 每玩法按修改时间仅保留十局，`saved` 不自动淘汰；写入失败只提示/记录，不反向改变权威胜负。揭棋 PGN 扩展额外保存版本化 Seed/Shuffle，复盘才允许取得暗子身份提示。
 
-## 8. 音频与视觉特效
+三种玩法的复盘页均保留上一步/下一步按钮，并由带刻度、整数步长的 HSlider 跳转任意主线手数；按钮、滑杆和标签共享同一个索引，渲染时使用 `SetValueNoSignal` 避免事件递归。刻度最多显示 31 个以免长棋谱挤成实线，但滑杆仍可到达每一手。
 
-### 8.1 音频
+`ClassicTrialSession` 与 `ThreeTrialSession` 是无网络、无棋钟、无合并操作的临时领域副本。界面开启试下后把点击送给副本并允许依次模拟各方；权威会话仍接收网络事件，Revision/Ply 前进会触发提示，退出即丢弃副本并显示最新真实局面。所有对象仅在 Godot 主线程使用，无需 Dispose；不得把试下着法发给 AI、transport 或写入正式棋谱。
 
-`GameplayAudioPlayer` 预加载并管理选择、落子、吃子三类音频播放器：
+经典 `.pgn.meta.json` sidecar 保存列表展示所需的对局时间、方式、双方昵称、我方标记及最多 64×64 RGBA8 头像；System.Text.Json 负责通用编解码，读取限制 256 KiB 并复验字段/像素长度。PGN 仍可脱离 sidecar 交换，旧记录缺少 sidecar 时从 PGN 标签和默认色块回退。记录列表按已批准布局显示日期时间、双方头像/名称、我方胜败和对局方式；视图拥有临时 ImageTexture 并在退出时释放。
 
-- 选中棋子时调用 `PlaySelection()`；
-- 移动动画完成后按是否吃子调用 `PlayLanding(captured)`；
-- 其他语义可通过 `PlayCue` 扩展。
+若 AppSettings 中存在有效 UCI 路径，经典复盘创建 `ReplayAnalysisCoordinator`。选择某步会取消旧扫描，优先计算当前局面，再串行补齐附近局面；引擎最佳着法再次经 `ChessGame.TryMove` 验证，评分按 UCI 行棋方视角归一为红方分值。`ReplayEvaluationGraph` 只绘制分数折线和当前步基准线，`BoardView.SetAnalysisMove` 只绘制箭头。Screen 拥有协调器和 UCI 引擎，退出时取消并幂等释放进程。
 
-所有效果音输出到 `SFX` 总线，由设置页控制。素材位于 `assets/audio/`，来源和许可证记录在 `assets/audio/THIRD_PARTY.md`。替换素材时保持语义文件名或更新唯一映射点。
+## 5. 扩展与维护流程
 
-### 8.2 特效
+具体步骤、代码示例与测试矩阵统一维护在 [抽象层使用手册](docs/abstractions.md)，不要为每个玩法复制一套相互矛盾的接口说明。
 
-`CueEffectLayer` 接收 `PresentationCue`，负责全屏标题、颜色、放射线、淡入淡出和结算动画。`EffectBurstView` 是程序化放射效果节点。胜利、失败与和棋均走 `PlaySettlement`，本地视角由 `GameScreen` 根据 `Winner` 与 `_localSide` 计算。
+1. 先说明变化点及其所属层，寻找已有端口；只有真实替换需求才新增接口。
+2. 写明输入输出、权限/不变量、失败方式、线程、所有权、兼容性和注入链。
+3. 将规则和应用策略放入可无 UI 测试的类；UI 保留交互/表现状态。
+4. 测试正常、拒绝、边界、状态转换及至少一种替代实现；涉及网络增加重放、鉴权和恢复。
+5. 在定义处写 XML 注释，在对应 Markdown 解释使用步骤、限制、实例与测试入口，再更新本文路由。
+6. 未批准的棋规、坐标或主观特效先向用户确认，不借“抽象重构”改变现有玩法。
 
-效果系统分两段：
+## 6. 验证与当前边界
 
-1. Core detector 决定“发生了什么”（例如 `double_chariot_mate`）。
-2. Presentation 决定“怎么表现”（文字、粒子、声音、镜头等）。
-
-这样未来可替换美术表现而不影响棋规和网络确定性。
-
-## 9. 玩家资料与资源所有权
-
-### 9.1 数据模型
-
-- `PlayerProfileSnapshot`：平台、显示 ID、昵称、可选 RGBA8 头像。
-- `PlayerAvatarPixels`：拥有临时 byte 数组；`Dispose` 会清零并释放引用。
-- `MatchPlayerProfiles`：拥有本局双方快照，可以替换本地/对方资料，并统一释放。
-- `CustomPlayerProfileFactory`：读取本机图片，转换 RGBA8 并缩放为最多 64×64；生成有界网络命令。
-
-数据对象故意不保存 Godot `Texture2D`、Steam image handle 或本机路径。平台获取、协议传输、渲染资源三种生命周期彼此分离。
-
-### 9.2 默认与自定义优先级
-
-Steam 对局：
-
-1. `SteamLobbyService` 根据 Lobby 成员 SteamID 查询 Steam 昵称、SteamID64 和大头像。
-2. 大头像尚未下载时等待 `AvatarImageLoaded_t`，最多约 3 秒后回退到中头像/文字头像。
-3. 本地若配置自定义 ID 或头像，则本地显示自定义值并通过 P2P 发送给对方。
-4. 对方收到自定义资料后，只替换本局顶部资料；Steam 默认资料仍是安全回退。
-
-LAN 对局使用通用默认身份；如有自定义资料，同样通过 `IMatchTransport` 发送。因此资料同步不与 Steam API 耦合。
-
-### 9.3 释放边界
-
-- Steam 服务等待期的 `_profileCache` 由 `SteamLobbyService` 拥有。
-- `MatchReady` 后所有权转交 `MatchPlayerProfiles`，服务清空缓存但不销毁已转交数据。
-- `GameScreen` 把像素转换为 `ImageTexture`，纹理由 `_profileTextures` 拥有。
-- 断线、故障、退出对局或 `_ExitTree` 时，先解绑纹理，再 Dispose 纹理和像素。
-- 房间结束后 UI 显示“临时资料已释放”，不能继续引用对手头像。
-
-## 10. 网络抽象
-
-### 10.1 `IMatchTransport`
-
-传输接口只发送/接收类型化命令并报告连接状态：
-
-- Move
-- MatchConfiguration
-- Timeout
-- ClockSync
-- Chat
-- MatchOffer / MatchOfferResponse
-- PlayerProfile
-
-接口实现必须：
-
-- 保持可靠、有序的对局消息语义；
-- 将收到的字节交给 `MatchWireProtocol.TryDecode`；
-- 拒绝不合法包，不把未经校验的对象抛给协调器；
-- 实现幂等 `DisposeAsync`；
-- 在断线/故障时更新 `IsConnected` 并发出 `StatusChanged`。
-
-未来 SteamSockets、WebSocket 或专用服务器适配器都应实现此接口，而不是让 `GameScreen` 添加平台分支。
-
-### 10.2 ENet 实现
-
-`EnetMatchTransport`：
-
-- 房主 `CreateServer(port, 1)`，仅允许一个远端玩家；
-- 客户端 `CreateClient(address, port)`；
-- 使用 Reliable 传输模式；
-- 记录唯一 `_remotePeerId`，拒绝额外连接；
-- 每帧 `Poll` 并处理可用包；
-- 默认 UDP 端口为 `27888`；合法用户端口范围为 1024..65535。
-
-### 10.3 Steam Lobby 与 P2P
-
-`SteamLobbyService` 是进程内唯一 SteamAPI 所有者：
-
-- `SteamAPI.InitEx`/`Shutdown`；
-- 每帧 `SteamAPI.RunCallbacks`；
-- 创建 FriendsOnly、最多两人的 Lobby；
-- 写入本项目标记、协议版本、局时、步时和房主阵营；
-- 处理 Overlay 邀请和 `+connect_lobby` 启动参数；
-- 验证 Spacewar 公共环境中的 Lobby 确实属于本项目；
-- 获取双方 Steam 资料；
-- 两名成员和配置都就绪后创建 `SteamMatchTransport`；
-- 等待房间取消、传输关闭或对方退出时调用 `LeaveLobby`。
-
-Lobby metadata 键：
-
-| 键 | 含义 |
-| --- | --- |
-| `xq_product` | 固定产品标记 `csharp-xiangqi` |
-| `xq_protocol` | `MatchWireProtocol.Version` |
-| `xq_game_seconds` | 局时秒数，0 为无限 |
-| `xq_move_seconds` | 步时秒数，0 为无限 |
-| `xq_host_side` | 房主阵营的 byte 值 |
-
-`SteamMatchTransport` 使用 Steam Networking Messages：
-
-- 只接受构造时确定的对手 SteamID；
-- 固定 MatchChannel；
-- 使用 `k_nSteamNetworkingSend_Reliable`；
-- 收包后验证发送者、包长、协议版本和消息内容；
-- Dispose 时关闭与该用户的 channel 并释放回调；
-- session failed 后延迟到下一帧释放，避免在 Steam 回调栈内销毁回调对象。
-
-Steam 只在 Windows 编译。Android 构建通过条件引用彻底排除托管绑定和原生 DLL。
-
-## 11. 二进制网络协议
-
-### 11.1 通用帧
-
-所有消息使用小端二进制格式：
-
-```text
-byte 0: ProtocolVersion（当前为 3）
-byte 1: MatchWireMessageType
-byte 2..N: 类型专属 payload
-```
-
-全局最大包长为 16600 字节。协议解码是封闭 switch，不使用对象反序列化、反射类型名或任意 JSON 对象。
-
-### 11.2 消息类型
-
-| Type | 值 | Payload | 校验重点 |
-| --- | ---: | --- | --- |
-| Move | 1 | sequence:int64 + from/to 各两个 int32 | 固定 26 字节；序号 > 0；坐标在棋盘内 |
-| Configuration | 2 | gameSeconds:int32 + moveSeconds:int32 + hostSide:byte | 固定 11 字节；时间非负；阵营枚举有效 |
-| Timeout | 3 | ply:int64 + loser:byte | 固定 11 字节；ply 非负；阵营有效 |
-| ClockSync | 4 | ply:int64 + 三个 double + side:byte | 固定 35 字节；有限、非负；阵营有效 |
-| Chat | 5 | utf8Length:uint16 + UTF-8 | 非空、无控制字符、最多 512 UTF-8 字节 |
-| MatchOffer | 6 | requestId:int64 + ply:int64 + kind:byte | 固定 19 字节；ID > 0；ply 非负；种类有效 |
-| MatchOfferResponse | 7 | 上述字段 + accepted:bool | 固定 20 字节，且必须匹配本地待处理申请 |
-| PlayerProfile | 8 | ID、昵称、宽高、RGBA 长度和数据 | 文字各最多 96 UTF-8 字节；头像最多 64×64 RGBA8 |
-
-修改任何消息布局时必须：
-
-1. 提升 `MatchWireProtocol.Version`。
-2. 同步所有 transport 的 dispatch switch。
-3. 更新 `IMatchTransport` 和 FakeTransport。
-4. 增加 RoundTrip 与畸形包测试。
-5. 更新 Steam Lobby 的版本兼容检查和本文档。
-
-### 11.3 一致性策略
-
-网络不发送任意棋盘快照来覆盖本地状态。双方从相同标准开局出发，所有着法都由本地 `ChessGame` 复验。当前一致性依靠：
-
-- 严格递增的 `MoveCommand.Sequence`；
-- 超时和申请绑定 `PlyNumber`；
-- 申请期间停止新着法；
-- 房主权威时钟。
-
-未来断线重连应先增加稳定状态哈希、握手和受验证的重同步协议，而不是直接信任远端序列化对象。
-
-## 12. 关键运行时流程
-
-### 12.1 本地落子
-
-```text
-BoardView.SquarePressed
-→ GameScreen 选择/目标处理
-→ GameSession.TryMove
-→ ChessGame.ValidateMove + 状态变更
-→ CueRaised / StateChanged
-→ GameScreen 缓存前后 Snapshot
-→ BoardView.AnimateMove
-→ MoveAnimationFinished
-→ GameplayAudioPlayer.PlayLanding
-```
-
-### 12.2 联机落子
-
-```text
-本地输入
-→ NetworkGameCoordinator.SubmitLocalMoveAsync
-→ 本地 ChessGame 验证并提交
-→ transport.SendMoveAsync(sequence, move)
-→ 对端 transport 解码
-→ NetworkGameCoordinator 校验 sequence
-→ 对端同一 GameSession.TryMove 再验证
-→ 双方分别从 StateChanged 驱动相同动画
-```
-
-### 12.3 Steam 房间
-
-```text
-Gallery 创建房间
-→ SteamLobbyService.CreateLobby
-→ 写入 metadata
-→ 打开 Steam 邀请 Overlay
-→ 好友进入 / 命令行 connect_lobby
-→ 验证成员数与 metadata
-→ 请求双方 Steam 资料
-→ 创建 SteamMatchTransport
-→ MatchReady
-→ Main 注入 GameScreen
-→ 发送配置/自定义资料
-→ 对局
-→ 退出、掉线或 session failure
-→ Dispose transport + LeaveLobby + 释放资料
-```
-
-### 12.4 悔棋/和棋
-
-```text
-申请方校验资格和当前 ply
-→ 发送 MatchOffer
-→ 双方暂停落子和棋钟
-→ 接收方再次校验请求与局面
-→ 接受/拒绝
-→ MatchOfferResponse 严格匹配 requestId/kind/ply
-→ 接受悔棋：双方 GameSession.Undo
-→ 接受和棋：双方 GameSession.DeclareDraw
-→ 恢复控制或播放和棋结算
-```
-
-## 13. 生命周期、线程与错误处理
-
-### 13.1 Godot 生命周期
-
-- 构造函数只创建/组合节点和字段；依赖场景树的逻辑放在 `_Ready`。
-- `_Process` 只做必须的回调泵、时钟和动画推进，避免文件 I/O、同步网络等待和大对象分配。
-- `_ExitTree` 必须解绑事件并释放网络、纹理和服务。
-- `QueueFree` 用于 Godot 节点；实现 `IDisposable`/`IAsyncDisposable` 的托管/原生包装还要显式释放。
-
-### 13.2 事件解绑
-
-订阅以下长生命周期对象时必须在同一所有者内解绑：
-
-- `GameSession.StateChanged/CueRaised`；
-- `BoardView` 输入/动画事件；
-- `IMatchTransport` 状态和命令事件；
-- `NetworkGameCoordinator` 语义事件；
-- Steamworks.NET `Callback<T>` / `CallResult<T>`。
-
-### 13.3 异步与回调
-
-Godot 和 Steam 回调以主线程/帧循环为边界。不要在 Steam 原生回调执行栈内立即销毁其回调对象；需要时等待一个 `ProcessFrame`。`DisposeAsync` 应幂等，重复退出页面、远端掉线和主进程退出不能导致二次释放异常。
-
-### 13.4 Debug 输出
-
-对局状态不占用正式 UI 的独立面板；Debug 构建可打印到控制台。用户可见的可恢复错误通过 `AcceptDialog` 或连接状态标签显示。收到无法信任的网络数据时应拒绝并报告同步失败，不能尝试猜测修复棋局。
-
-## 14. 扩展指南
-
-### 14.1 添加新棋子
-
-1. 创建稳定的新 `PieceKind("...")`。
-2. 实现 `IPieceRule`，只写局部几何和阻挡。
-3. 在目标玩法使用的 `PieceRuleRegistry` 注册。
-4. 在对应开局工厂放置棋子；不要硬改标准开局，建议未来引入玩法定义对象。
-5. 为 `BoardView.GetPieceLabel` 或未来皮肤映射添加显示。
-6. 添加合法走法、阻挡、送将和联机确定性测试。
-
-如果新棋子需要全局规则（例如影响多枚棋子），不要把副作用塞入 `CanMove`；应扩展领域聚合的统一验证/结算阶段。
-
-### 14.2 添加新特殊特效
-
-1. 实现 `IPositionPatternDetector`。
-2. 返回具有稳定 `CueId` 的 `PresentationCue(SpecialPattern)`。
-3. 在创建 `GameSession` 时注册 detector。
-4. 在 `CueEffectLayer` 和可选音频映射中增加表现。
-5. 写 detector 的纯 C# 测试。
-
-### 14.3 添加新传输后端
-
-1. 实现 `IMatchTransport`。
-2. 原样使用 `MatchWireProtocol` 编解码。
-3. 明确可靠、有序语义和最多一个对手。
-4. 校验远端身份并拒绝第三方数据。
-5. 实现连接状态事件和幂等释放。
-6. 在 `Main`/Gallery 的组合根添加创建入口，不修改规则/UI 命令模型。
-
-### 14.4 添加新协议消息
-
-遵循第 11.2 节的五项要求。只有跨端必须共享的语义才进入 Core 协议；Godot 节点路径、颜色、音频资源路径、Steam handle 等展示/平台细节不得进入协议。
-
-### 14.5 添加新玩法
-
-建议新增玩法定义抽象，至少提供：
-
-- 开局状态工厂；
-- `PieceRuleRegistry` 工厂；
-- 玩法 ID 与协议兼容版本；
-- 可用 detector 列表；
-- Gallery 展示信息。
-
-不要让 `GalleryScreen` 直接拼装棋子或让 `ChessGame.CreateStandard` 演变为大量平台/UI 分支。
-
-## 15. 测试与验证
-
-构建与核心测试：
+### 6.1 常用命令
 
 ```powershell
 dotnet build .\Xiangqi.sln
-dotnet run --project .\tests\Xiangqi.Core.Tests\Xiangqi.Core.Tests.csproj -c Debug
+dotnet run --project .\tests\Xiangqi.Core.Tests\Xiangqi.Core.Tests.csproj
+dotnet run --project .\tests\Xiangqi.ThreeNetwork.Tests\Xiangqi.ThreeNetwork.Tests.csproj
+dotnet build .\Xiangqi.csproj -p:GodotTargetPlatform=windows
+dotnet build .\Xiangqi.csproj -p:GodotTargetPlatform=android
 ```
 
-Godot 路径由环境变量 `GODOT_PATH` 提供。项目内置 Debug 冒烟参数：
+测试工程是自运行控制台程序，不能以 dotnet test 没报错替代实际用例执行。不同 GodotTargetPlatform 构建共享输出，需串行；运行桌面 Godot 前最后构建 Windows 目标。
 
-| 参数 | 用途 |
+Godot 路径由 GODOT_PATH 提供；Debug 参数在 -- 后传入：
+
+| 参数 | 验证目标 |
 | --- | --- |
-| `--smoke-ui` | Gallery、设置、本地对局实例化 |
-| `--smoke-profile-ui` | 双方资料卡和临时头像纹理 |
-| `--smoke-lan-host/client` | 双进程 LAN 连接、同步与聊天 |
-| `--smoke-timeout-host/client` | 双端计时和超时裁决 |
-| `--smoke-steam-init` | SteamAPI、App ID、当前用户 |
-| `--smoke-steam-lobby` | 创建、退出、再次创建 Spacewar Lobby |
+| --smoke-ui / --capture-ui | 三张横向玩法卡片、十九个叶子入口（全部按父/子层级折叠）、背景资源、设置页、经典本地房间与春季皮肤；可选画廊截图 |
+| --smoke-feedback / --capture-feedback | 经典主题注入/回退、棋子与反馈配色、选中/落地/回复/撤销/翻转/空闲反馈；可选图形截图 |
+| --smoke-three / --capture-three | 三国三方朝下视角、三条命名国界留白、九宫中心、移动插值/落点、主题应用、405 次旋转命中往返、243 拓扑边、面积铺满与设置 |
+| --smoke-profile-ui | 经典资料卡与临时头像 |
+| --smoke-lan-host/client | 经典双进程 LAN |
+| --smoke-timeout-host/client | 经典双端棋钟与超时 |
+| --smoke-steam-init / --smoke-steam-lobby | Steam 初始化与 Lobby 生命周期，不覆盖完整好友实联 |
 
-修改范围对应的最低验证：
+### 6.2 证据与未完成项
 
-- Domain/Application：运行全部 Core 测试。
-- UI/动画：Windows 构建 + 对应 Godot 实机冒烟。
-- 协议/transport：Core 协议测试 + 双进程 LAN 冒烟。
-- Steam：Windows 条件构建 + 登录 Steam 后相关 smoke；双人功能最终需要两个账号/客户端。
-- 跨平台代码：再执行 Android arm64 条件构建，确认 Steam 引用未泄漏。
+2026-09-07 本次架构检查重新运行 38 项核心测试与三端网络测试；具体结果见 [检查记录](docs/architecture-review.md)。此前 Windows/Android 条件构建及 Godot smoke 已通过，本次文档维护不将历史记录冒充新实机验收。
 
-## 16. 当前边界与后续方向
+2026-09-08 本轮体验更新串行通过 39 项核心测试、三人模拟/真实 TCP 测试、Windows 目标构建，以及 `--smoke-three`、`--smoke-ui`、`--smoke-feedback`。三方朝下视角均生成 GPU 截图；仍不等于跨设备 LAN、Steam 三账号或 Android 实机验收。
 
-已知未实现/未定规则：
+2026-09-08 本轮记录/复盘更新通过 45 项核心测试、三人网络测试和 Godot C# 编译；本机 Godot 4.5.1 Mono 的本轮 `--smoke-ui` headless 进程原生 signal 11，因此十四入口、记录头像、复盘曲线/箭头及菜单 Tween 尚未获得新的运行时视觉验收，不能沿用上一轮截图代替。
 
-- 长将、长捉、重复局面等赛事规则尚未实现，需要先确定采用的规则版本。
-- AI、棋谱记谱/回放、观战和断线重连尚未实现。
-- Steam 当前使用 App ID 480，只能用于开发测试；正式发布必须完成 Steam Direct、取得自有 App ID 并做双账号验收。
-- 当前网络使用确定性命令同步，没有状态哈希或快照恢复。
-- 自定义头像固定为 64×64 RGBA8，以控制单包上限；未来若提高分辨率应设计分片、压缩和速率限制。
+2026-09-09 揭棋本地领域、Seed 棋谱、记录/复盘及三卡画廊通过 48 项核心测试和 Windows Godot C# 编译。揭棋 LAN/Steam 权威脱敏协议、长打与 120 步无吃子裁决尚未实现。揭棋专属卡图由内置图像生成工具产出并保存为项目资源，仍需在实际画廊遮罩下做人工构图验收。
 
-推荐演进顺序：玩法定义抽象 → 棋谱/状态哈希 → 断线重连 → AI/匹配服务 → Steam 正式 App ID 与部署配置。
+2026-09-09 暗子背面/翻面修复通过 48 项核心回归、Android 与最终 Windows 构建（均 0 警告/错误）。揭子平移和翻面现共用同一时间线，不再在落点后追加翻面阶段。`--smoke-feedback` 已增加无字背面、covered→明子翻面和动画释放断言；本机 Godot 4.7.2 headless 可初始化 .NET，但多种启动参数均在主场景 `_Ready` 前以 0 退出、没有 PASS/FAIL，因此该 smoke 和实际翻面观感仍记为未验收。
 
-## 17. Agent 修改检查清单
+仍未实现或未验收：
 
-开始修改前：
+- 统一经典房间控制器、只读三国查询门面、完整拓扑/投影/规则集注入及自动架构约束测试。
+- 可视化摆子残局编辑器、观战、经典断线重连、进程退出后的三国恢复。
+- UCI 之外的自然语言对话后端与完整远程 AI 配置。
+- 赛事重复局面/长将长捉规则。
+- Steam 双/三账号端到端验收、跨设备 LAN 防火墙/NAT 验收、Android 设备验收。开发 App ID 480 不用于正式发行。
 
-- 确认目标属于 Domain、Application、Presentation 还是 Infrastructure。
-- 搜索是否已有可复用抽象，避免第二套棋规、协议或样式系统。
-- 检查 `GODOT_WINDOWS` 边界和 Android 兼容性。
-- 明确新增 Node、事件、纹理、byte buffer、transport 的所有者。
-
-提交前：
-
-- 不包含 GDScript。
-- Core 没有新增 Godot/Steam 依赖。
-- UI 没有直接修改权威棋盘。
-- 网络输入全部有界且失败关闭。
-- 新订阅都有解绑，新资源都有释放。
-- 协议变化已提升版本并补测试。
-- 至少完成与修改范围对应的构建/测试。
-- 未提交 `.godot/`、`bin/`、`obj/`、导出产物、日志、崩溃转储或 `steam_appid.txt`。
-- 若架构事实发生变化，已同步更新本文。
+.git 工作区可能已有用户修改；不得清除无关改动或导出文件。.godot、bin、obj、build、export、日志、崩溃转储和本地 steam_appid.txt 为生成物，不应提交。

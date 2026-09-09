@@ -22,6 +22,8 @@ public readonly record struct PieceKind(string Value)
 
 public static class BuiltInPieceKinds
 {
+    /// <summary>Presentation-safe identity for an unrevealed Jieqi piece.</summary>
+    public static readonly PieceKind Covered = new("covered");
     public static readonly PieceKind General = new("general");
     public static readonly PieceKind Advisor = new("advisor");
     public static readonly PieceKind Elephant = new("elephant");
@@ -38,4 +40,3 @@ public static class BuiltInPieceKinds
 public readonly record struct ChessPiece(int PieceInstanceId, PieceSide Side, PieceKind Kind);
 
 public readonly record struct PlacedPiece(BoardPosition Position, ChessPiece Piece);
-

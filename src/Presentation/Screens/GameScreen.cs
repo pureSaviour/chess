@@ -5,6 +5,7 @@ using Xiangqi.Presentation.Effects;
 using Xiangqi.Presentation.Audio;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Profiles;
+using Xiangqi.Presentation.Records;
 using Xiangqi.Presentation.Settings;
 using Xiangqi.Presentation.UI;
 
@@ -17,7 +18,9 @@ namespace Xiangqi.Presentation.Screens;
 /// </summary>
 public partial class GameScreen : Control
 {
-    private readonly GameSession _session = new([new DoubleChariotMateDetector()]);
+    private readonly GameSession _session;
+    private readonly AppSettings _settings;
+    private readonly IBoardThemeCatalog _themes;
     private readonly IMatchTransport? _transport;
     private readonly bool _isNetworkHost;
     private readonly NetworkMatchConfiguration? _hostConfiguration;
@@ -27,10 +30,15 @@ public partial class GameScreen : Control
     private readonly bool _debugTimeoutSmoke;
     private readonly MatchPlayerProfiles? _playerProfiles;
     private readonly bool _exchangeLocalProfile;
+    private readonly AiMatchConfiguration? _aiConfiguration;
+    private readonly IXiangqiAiEngine? _aiEngine;
     private readonly List<ImageTexture> _profileTextures = [];
     private bool _profileResourcesReleased;
     private bool _localProfileSent;
     private NetworkGameCoordinator? _network;
+    private AiGameCoordinator? _ai;
+    private bool _aiMoveScheduled;
+    private bool _aiInitialized;
     private NetworkMatchConfiguration? _configuration;
     private MatchClock _clock = new(TimeControl.Unlimited);
     private PieceSide? _localSide;
@@ -58,8 +66,10 @@ public partial class GameScreen : Control
     private Button _chatSendButton = null!;
     private RichTextLabel _chatLog = null!;
     private LineEdit _chatInput = null!;
+    private OptionButton? _chatTarget;
     private ConfirmationDialog _offerDialog = null!;
     private GameplayAudioPlayer _audio = null!;
+    private InGameSettingsDialog _settingsDialog = null!;
     private readonly List<string> _chatLines = [];
     private MatchOfferRequest? _visibleIncomingOffer;
     private GameSnapshot? _displayedSnapshot;
@@ -67,6 +77,11 @@ public partial class GameScreen : Control
     private bool _pendingVisualCapture;
     private BoardPosition? _selected;
     private IReadOnlyList<BoardPosition> _legalDestinations = [];
+    private ClassicTrialSession? _trial;
+    private Button _trialButton = null!;
+    private bool _trialOpponentMoveNotified;
+    private Button _saveRecordButton = null!;
+    private bool _recentRecordWritten;
 
     public GameScreen(
         AppSettings settings,
@@ -78,8 +93,16 @@ public partial class GameScreen : Control
         bool debugNetworkSmoke = false,
         bool debugTimeoutSmoke = false,
         MatchPlayerProfiles? playerProfiles = null,
-        bool exchangeLocalProfile = false)
+        bool exchangeLocalProfile = false,
+        TimeControl? localTimeControl = null,
+        AiMatchConfiguration? aiConfiguration = null,
+        IXiangqiAiEngine? aiEngine = null,
+        IBoardThemeCatalog? themes = null,
+        GameSession? session = null)
     {
+        _session = session ?? new GameSession([new DoubleChariotMateDetector()]);
+        _settings = settings;
+        _themes = themes ?? BoardThemeCatalog.Default;
         _back = back;
         _matchLabel = matchLabel;
         _transport = transport;
@@ -89,6 +112,11 @@ public partial class GameScreen : Control
         _debugTimeoutSmoke = debugTimeoutSmoke;
         _playerProfiles = playerProfiles;
         _exchangeLocalProfile = exchangeLocalProfile;
+        _aiConfiguration = aiConfiguration;
+        _aiEngine = aiEngine;
+        if ((_aiConfiguration is null) != (_aiEngine is null))
+            throw new ArgumentException("AI 对局配置和引擎必须同时提供。");
+        if (_aiConfiguration is { } pendingAi) _localSide = pendingAi.HumanSide;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         BuildInterface(settings);
 
@@ -104,12 +132,26 @@ public partial class GameScreen : Control
                 throw new ArgumentException("Godot 对局传输必须由 Node 驱动生命周期。", nameof(transport));
             AddChild(transportNode);
         }
+        else if (_aiConfiguration is { } aiMatch && _aiEngine is not null)
+        {
+            aiMatch = aiMatch.Validate();
+            _localSide = aiMatch.HumanSide;
+            _board.BottomSide = aiMatch.HumanSide;
+            _configuration = new NetworkMatchConfiguration(aiMatch.TimeControl, aiMatch.HumanSide);
+            _clock = new MatchClock(aiMatch.TimeControl) { IsRunning = true };
+            _ai = new AiGameCoordinator(_session, _aiEngine, aiMatch.HumanSide);
+            _ai.ThinkingChanged += OnAiThinkingChanged;
+            if (_aiEngine is not Node engineNode)
+                throw new ArgumentException("Godot AI 引擎适配器必须由 Node 驱动生命周期。", nameof(aiEngine));
+            AddChild(engineNode);
+        }
         else
         {
             _localSide = PieceSide.Red;
             _board.BottomSide = PieceSide.Red;
-            _configuration = new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red);
-            _clock = new MatchClock(TimeControl.Unlimited) { IsRunning = true };
+            var control = localTimeControl ?? TimeControl.Unlimited;
+            _configuration = new NetworkMatchConfiguration(control, PieceSide.Red);
+            _clock = new MatchClock(control) { IsRunning = true };
         }
     }
 
@@ -120,6 +162,7 @@ public partial class GameScreen : Control
         _board.SquarePressed += OnSquarePressed;
         _board.MoveAnimationFinished += OnMoveAnimationFinished;
         OnStateChanged(_session.Snapshot);
+        if (_ai is not null) _ = InitializeAiAsync();
     }
 
     public override void _Process(double delta)
@@ -162,7 +205,7 @@ public partial class GameScreen : Control
         if (_network is not null)
         {
             _network.SynchronizationFailed -= OnSynchronizationFailed;
-            _network.ChatReceived -= OnRemoteChatReceived;
+            _network.Chat.MessageAdded -= OnRoomChatMessage;
             _network.MatchOfferReceived -= OnMatchOfferReceived;
             _network.MatchOfferResolved -= OnMatchOfferResolved;
             _network.MatchOfferPendingChanged -= OnMatchOfferPendingChanged;
@@ -172,6 +215,12 @@ public partial class GameScreen : Control
         {
             _ = _transport.DisposeAsync();
         }
+        if (_ai is not null)
+        {
+            _ai.ThinkingChanged -= OnAiThinkingChanged;
+            _ = _ai.DisposeAsync();
+        }
+        _settingsDialog.Saved -= ApplyRoomSettings;
         ReleaseProfileResources();
     }
 
@@ -186,11 +235,11 @@ public partial class GameScreen : Control
         var header = new HBoxContainer();
         header.AddThemeConstantOverride("separation", 10);
         page.AddChild(header);
-        var backButton = UiStyle.CreateButton("‹ 主菜单");
+        var backButton = UiStyle.CreateButton("‹ 经典象棋");
         backButton.CustomMinimumSize = new Vector2(130, 41);
         backButton.Pressed += _back;
         header.AddChild(backButton);
-        var title = UiStyle.CreateTitle("中国象棋", 26);
+        var title = UiStyle.CreateTitle("经典象棋", 26);
         title.VerticalAlignment = VerticalAlignment.Center;
         header.AddChild(title);
         _connectionLabel = new Label
@@ -202,6 +251,19 @@ public partial class GameScreen : Control
         };
         UiStyle.SetMuted(_connectionLabel, 14);
         header.AddChild(_connectionLabel);
+        var settingsButton = UiStyle.CreateButton("设置");
+        settingsButton.CustomMinimumSize = new Vector2(82, 41);
+        settingsButton.Pressed += () => _settingsDialog.PopupFor(_settings);
+        header.AddChild(settingsButton);
+        _trialButton = UiStyle.CreateButton("试下");
+        _trialButton.CustomMinimumSize = new Vector2(82, 41);
+        _trialButton.Pressed += ToggleTrial;
+        header.AddChild(_trialButton);
+        _saveRecordButton = UiStyle.CreateButton("保存棋局");
+        _saveRecordButton.CustomMinimumSize = new Vector2(100, 41);
+        _saveRecordButton.Disabled = true;
+        _saveRecordButton.Pressed += SaveRecord;
+        header.AddChild(_saveRecordButton);
         _undoButton = UiStyle.CreateButton("悔棋");
         _undoButton.CustomMinimumSize = new Vector2(95, 41);
         _undoButton.Visible = _transport is null;
@@ -246,26 +308,42 @@ public partial class GameScreen : Control
         boardPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         boardPanel.SizeFlagsVertical = SizeFlags.ExpandFill;
         matchColumn.AddChild(boardPanel);
-        _board = new BoardView
+        _board = new BoardView(_themes)
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
             CustomMinimumSize = new Vector2(600, 600)
         };
+        _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
+        _board.SetFeedbackAnimated(settings.EffectsEnabled);
         boardPanel.AddChild(_board);
         matchColumn.AddChild(CreatePlayerRow(isBottom: true));
 
         ApplyPlayerProfiles();
 
-        if (_transport is not null) BuildNetworkSidePanel(matchBody);
+        if (_transport is not null || _aiConfiguration is not null) BuildMessageSidePanel(matchBody);
 
         _effects = new CueEffectLayer { EnabledBySettings = settings.EffectsEnabled };
+        _effects.ApplyTheme(_themes.Resolve(settings.ThemeId));
         AddChild(_effects);
         _audio = new GameplayAudioPlayer();
         AddChild(_audio);
+        _settingsDialog = new InGameSettingsDialog(_themes);
+        _settingsDialog.Saved += ApplyRoomSettings;
+        AddChild(_settingsDialog);
     }
 
-    private void BuildNetworkSidePanel(Container parent)
+    private void ApplyRoomSettings(AppSettings updated)
+    {
+        _settings.UpdateFrom(updated);
+        _settings.SaveAndApply();
+        _board.ApplyAppearance(_settings.ThemeId, _settings.ShowBoardCoordinates);
+        _board.SetFeedbackAnimated(_settings.EffectsEnabled);
+        _effects.EnabledBySettings = _settings.EffectsEnabled;
+        _effects.ApplyTheme(_themes.Resolve(_settings.ThemeId));
+    }
+
+    private void BuildMessageSidePanel(Container parent)
     {
         var panel = UiStyle.CreatePanel(UiStyle.PanelLight);
         panel.CustomMinimumSize = new Vector2(280, 0);
@@ -279,7 +357,7 @@ public partial class GameScreen : Control
         column.AddThemeConstantOverride("separation", 8);
         margin.AddChild(column);
 
-        var title = UiStyle.CreateTitle("对局消息", 20);
+        var title = UiStyle.CreateTitle(_aiConfiguration is null ? "对局消息" : "AI 分析", 20);
         title.HorizontalAlignment = HorizontalAlignment.Center;
         column.AddChild(title);
         _chatLog = new RichTextLabel
@@ -293,12 +371,20 @@ public partial class GameScreen : Control
         column.AddChild(_chatLog);
         _chatInput = new LineEdit
         {
-            PlaceholderText = "输入消息（最多 120 字）",
+            PlaceholderText = _aiConfiguration is null
+                ? "输入消息（最多 120 字）" : "询问当前局面的候选走法",
             MaxLength = 120,
             CustomMinimumSize = new Vector2(0, 40)
         };
         _chatInput.TextSubmitted += _ => SendChat();
         column.AddChild(_chatInput);
+        if (_transport is not null)
+        {
+            _chatTarget = new OptionButton();
+            _chatTarget.AddItem("发送给：房间所有人", 100);
+            _chatTarget.AddItem("仅发送给：对方", 1);
+            column.AddChild(_chatTarget);
+        }
         _chatSendButton = UiStyle.CreateButton("发送", true);
         _chatSendButton.CustomMinimumSize = new Vector2(0, 40);
         _chatSendButton.Pressed += SendChat;
@@ -314,14 +400,16 @@ public partial class GameScreen : Control
         _offerDialog.Confirmed += () => RespondToVisibleOffer(true);
         _offerDialog.Canceled += () => RespondToVisibleOffer(false);
         AddChild(_offerDialog);
-        AppendChat("系统", "连接建立后可以在这里发送消息。", true);
+        AppendChat("系统", _aiConfiguration is null
+            ? "连接建立后可以在这里发送消息。"
+            : "AI 就绪后，可在这里询问当前局面的候选走法。", true);
         UpdateNetworkControls();
     }
 
     private async void OnSquarePressed(BoardPosition position)
     {
-        var snapshot = _session.Snapshot;
-        if (snapshot.IsFinished || _board.IsAnimating || !MayControlCurrentSide(snapshot)) return;
+        var snapshot = _trial?.Snapshot ?? _session.Snapshot;
+        if (snapshot.IsFinished || _board.IsAnimating || (_trial is null && !MayControlCurrentSide(snapshot))) return;
         var found = snapshot.Pieces.FirstOrDefault(item => item.Position == position);
         var hasPiece = found.Piece.Kind.Value is not null;
         if (_selected is null)
@@ -338,13 +426,20 @@ public partial class GameScreen : Control
         var from = _selected.Value;
         try
         {
-            var result = _network is null
-                ? _session.TryMove(from, position)
-                : await _network.SubmitLocalMoveAsync(from, position);
+            MoveResult result;
+            if (_trial is not null) result = _trial.TryMove(from, position);
+            else if (_ai is not null) result = _ai.SubmitHumanMove(from, position);
+            else if (_network is null) result = _session.TryMove(from, position);
+            else result = await _network.SubmitLocalMoveAsync(from, position);
             if (result.IsSuccess)
             {
                 _selected = null;
                 _legalDestinations = [];
+                if (_trial is not null)
+                {
+                    _board.SetPosition(_trial.Snapshot);
+                    _displayedSnapshot = _trial.Snapshot;
+                }
                 // StateChanged already started the transition from authoritative snapshots.
                 // Reapplying the position here would intentionally cancel that animation.
                 return;
@@ -354,22 +449,34 @@ public partial class GameScreen : Control
         {
             OnSynchronizationFailed(error.Message);
         }
-        _board.SetPosition(_session.Snapshot, _selected, _legalDestinations);
+        _board.SetPosition(_trial?.Snapshot ?? _session.Snapshot, _selected, _legalDestinations);
     }
 
     private bool MayControlCurrentSide(GameSnapshot snapshot) =>
-        _transport is null || _network?.CanMakeLocalMove == true;
+        _ai?.CanMakeHumanMove ??
+        (_transport is null || _network?.CanMakeLocalMove == true);
 
     private void Select(BoardPosition position)
     {
         _selected = position;
-        _legalDestinations = _session.GetLegalDestinations(position);
-        _board.SetPosition(_session.Snapshot, _selected, _legalDestinations);
+        _legalDestinations = _trial?.GetLegalDestinations(position) ?? _session.GetLegalDestinations(position);
+        _board.SetPosition(_trial?.Snapshot ?? _session.Snapshot, _selected, _legalDestinations);
         _audio.PlaySelection();
     }
 
     private void OnStateChanged(GameSnapshot snapshot)
     {
+        if (_trial is not null)
+        {
+            if (!_trialOpponentMoveNotified && snapshot.PlyNumber > _trial.BasePly)
+            {
+                _trialOpponentMoveNotified = true;
+                AppendChat("系统", "真实对局已有新着法；退出试下后将回到最新局面。", true);
+                _connectionLabel.Text = $"{_matchLabel} · 试下中（真实对局已更新）";
+            }
+            UpdateNetworkControls();
+            return;
+        }
         if (_displayedSnapshot is { } previous && _pendingVisualMove is { } move &&
             snapshot.PlyNumber == previous.PlyNumber + 1)
         {
@@ -382,7 +489,9 @@ public partial class GameScreen : Control
         _displayedSnapshot = snapshot;
         _pendingVisualMove = null;
         _pendingVisualCapture = false;
-        _undoButton.Disabled = !_session.CanUndo;
+        _undoButton.Disabled = _ai is not null
+            ? !_ai.CanUndoHumanTurn
+            : !_session.CanUndo;
         UpdateNetworkControls();
         if (snapshot.PlyNumber != _lastPly)
         {
@@ -397,13 +506,21 @@ public partial class GameScreen : Control
             _clock.IsRunning = false;
             var isDraw = snapshot.EndReason == GameEndReason.Draw;
             var victory = !isDraw && _localSide is not null && snapshot.Winner == _localSide;
+            var hasLocalPerspective = _transport is not null || _ai is not null;
             var resultText = isDraw
                 ? "和棋"
-                : _transport is null
+                : !hasLocalPerspective
                     ? $"{(snapshot.Winner == PieceSide.Red ? "红方" : "黑方")}胜利"
                     : victory ? "胜利" : "失败";
-            bool? settlementOutcome = isDraw ? null : _transport is null || victory;
+            bool? settlementOutcome = isDraw ? null : !hasLocalPerspective || victory;
             _effects.PlaySettlement(resultText, settlementOutcome, snapshot.EndReason);
+            _saveRecordButton.Disabled = false;
+            if (!_recentRecordWritten)
+            {
+                _recentRecordWritten = true;
+                try { ClassicRecordStore.SaveRecent(BuildRecord(snapshot), BuildRecordPresentation(snapshot)); }
+                catch (Exception error) { GD.PushWarning($"Unable to retain recent record: {error.Message}"); }
+            }
             if (_debugNetworkSmoke && snapshot.EndReason == GameEndReason.Draw)
             {
                 GD.Print("[Xiangqi.Network.Smoke] Chat, accepted undo and accepted draw synchronized.");
@@ -423,6 +540,86 @@ public partial class GameScreen : Control
                      $"Finished={snapshot.IsFinished}, EndReason={snapshot.EndReason}");
             RunNetworkSmoke(snapshot);
         }
+        ScheduleAiMoveIfReady();
+    }
+
+    private ClassicGameRecord BuildRecord(GameSnapshot snapshot)
+    {
+        var result = snapshot.EndReason == GameEndReason.Draw ? "1/2-1/2" : snapshot.Winner switch
+        { PieceSide.Red => "1-0", PieceSide.Black => "0-1", _ => "*" };
+        var presentation = BuildRecordPresentation(snapshot);
+        return _session.CreateRecord(new Dictionary<string, string>
+        {
+            ["Event"] = _matchLabel,
+            ["Date"] = DateTime.Now.ToString("yyyy.MM.dd"),
+            ["Result"] = result,
+            ["Termination"] = snapshot.EndReason.ToString(),
+            ["Red"] = presentation.Red.Name,
+            ["Black"] = presentation.Black.Name
+        });
+    }
+
+    private ClassicRecordStore.Presentation BuildRecordPresentation(GameSnapshot snapshot)
+    {
+        var localSide = _localSide ?? PieceSide.Red;
+        ClassicRecordStore.Player FromProfile(PlayerProfileSnapshot profile, bool local) => new(
+            profile.DisplayName, local, profile.Avatar?.Width ?? 0, profile.Avatar?.Height ?? 0,
+            profile.Avatar?.CopyRgba());
+        ClassicRecordStore.Player local;
+        ClassicRecordStore.Player opponent;
+        if (_playerProfiles is not null)
+        {
+            local = FromProfile(_playerProfiles.Local, true);
+            opponent = FromProfile(_playerProfiles.Opponent, false);
+        }
+        else
+        {
+            local = new(_bottomPlayerName.Text, true);
+            opponent = new(_topPlayerName.Text, false);
+        }
+        var red = localSide == PieceSide.Red ? local : opponent;
+        var black = localSide == PieceSide.Black ? local : opponent;
+        var result = snapshot.EndReason == GameEndReason.Draw ? "和棋" : snapshot.Winner == PieceSide.Red ? "红方胜" : "黑方胜";
+        var mode = _ai is not null ? "人机对战" : _matchLabel.StartsWith("Steam", StringComparison.OrdinalIgnoreCase)
+            ? "Steam 好友" : _transport is not null ? "局域网联机" : "本地联机";
+        return new(DateTimeOffset.Now, mode, red, black, result);
+    }
+
+    private void SaveRecord()
+    {
+        try
+        {
+            var path = ClassicRecordStore.SavePermanent(BuildRecord(_session.Snapshot), BuildRecordPresentation(_session.Snapshot));
+            _saveRecordButton.Disabled = true;
+            _saveRecordButton.Text = "已保存";
+            AppendChat("系统", $"棋谱已保存：{Path.GetFileName(path)}", true);
+        }
+        catch (Exception error)
+        {
+            OnSynchronizationFailed($"保存棋谱失败：{error.Message}");
+        }
+    }
+
+    private void ToggleTrial()
+    {
+        _selected = null;
+        _legalDestinations = [];
+        if (_trial is null)
+        {
+            _trial = _session.BeginTrial();
+            _trialOpponentMoveNotified = false;
+            _trialButton.Text = "退出试下";
+            _connectionLabel.Text = $"{_matchLabel} · 试下分支";
+            _board.SetPosition(_trial.Snapshot);
+            _displayedSnapshot = _trial.Snapshot;
+            return;
+        }
+        _trial = null;
+        _trialButton.Text = "试下";
+        _connectionLabel.Text = _matchLabel;
+        _displayedSnapshot = _session.Snapshot;
+        _board.SetPosition(_session.Snapshot);
+        ScheduleAiMoveIfReady();
     }
 
     private void OnCueRaised(PresentationCue cue)
@@ -436,17 +633,46 @@ public partial class GameScreen : Control
         _audio.PlayCue(cue);
     }
 
-    private void OnMoveAnimationFinished(bool captured) => _audio.PlayLanding(captured);
+    private void OnMoveAnimationFinished(bool captured)
+    {
+        _audio.PlayLanding(captured);
+        ScheduleAiMoveIfReady();
+    }
 
     private async void SendChat()
     {
-        if (_network is null) return;
+        if (_network is null && _ai is null) return;
         var text = _chatInput.Text.Trim();
         if (text.Length == 0) return;
+        if (_ai is not null)
+        {
+            AppendChat("我", text);
+            _chatInput.Clear();
+            UpdateNetworkControls();
+            try
+            {
+                var analysis = await _ai.AnalyzeAsync(
+                    Math.Min(_aiConfiguration!.Value.MoveTimeMilliseconds, 3_000), 3);
+                AppendChat(_aiEngine!.DisplayName, FormatAiAnalysis(analysis));
+            }
+            catch (Exception error)
+            {
+                AppendChat("系统", $"AI 分析失败：{error.Message}", true);
+            }
+            finally
+            {
+                UpdateNetworkControls();
+                _chatInput.GrabFocus();
+            }
+            return;
+        }
         try
         {
-            await _network.SendChatAsync(text);
-            AppendChat("我", text);
+            var selectedTarget = _chatTarget is { Selected: >= 0 }
+                ? _chatTarget.GetItemId(_chatTarget.Selected) : 100;
+            var targetSeat = selectedTarget == 100 ? (int?)null : (int)_network!.LocalSide.Opponent();
+            var error = await _network!.SendChatAsync(text, targetSeat);
+            if (error is not null) throw new InvalidOperationException(error);
             _chatInput.Clear();
             _chatInput.GrabFocus();
         }
@@ -470,10 +696,13 @@ public partial class GameScreen : Control
         }
     }
 
-    private void OnRemoteChatReceived(string text)
+    private void OnRoomChatMessage(RoomChatEntry entry)
     {
-        AppendChat("对方", text);
-        if (_debugNetworkSmoke && text == "联机协商冒烟消息")
+        if (_network is null || !RoomChatManager.IsVisibleTo(entry, (int)_network.LocalSide)) return;
+        var sender = entry.SenderSeat == (int)_network.LocalSide ? "我" : "对方";
+        var destination = entry.TargetSeat is null ? " → 房间" : " → 私聊";
+        AppendChat(sender + destination, entry.Text);
+        if (_debugNetworkSmoke && entry.Text == "联机协商冒烟消息" && sender == "对方")
             GD.Print("[Xiangqi.Network.Smoke] Chat message received.");
     }
 
@@ -539,7 +768,7 @@ public partial class GameScreen : Control
 
     private void AppendChat(string sender, string message, bool system = false)
     {
-        if (_transport is null) return;
+        if (_transport is null && _ai is null) return;
         var prefix = system ? $"[{sender}]" : $"{sender}：";
         _chatLines.Add($"{prefix} {message}");
         if (_chatLines.Count > 100) _chatLines.RemoveAt(0);
@@ -548,6 +777,14 @@ public partial class GameScreen : Control
 
     private void UpdateNetworkControls()
     {
+        if (_ai is not null)
+        {
+            var available = _aiInitialized && !_ai.IsThinking && !_session.Snapshot.IsFinished;
+            _chatSendButton.Disabled = !available;
+            _chatInput.Editable = available;
+            _undoButton.Disabled = !_ai.CanUndoHumanTurn;
+            return;
+        }
         if (_transport is null) return;
         var connected = _transport.IsConnected && _network is not null;
         var pending = _network?.HasPendingOffer == true;
@@ -612,7 +849,7 @@ public partial class GameScreen : Control
         UpdatePlayerSideLabels();
         _network = new NetworkGameCoordinator(_session, _transport!, localSide);
         _network.SynchronizationFailed += OnSynchronizationFailed;
-        _network.ChatReceived += OnRemoteChatReceived;
+        _network.Chat.MessageAdded += OnRoomChatMessage;
         _network.MatchOfferReceived += OnMatchOfferReceived;
         _network.MatchOfferResolved += OnMatchOfferResolved;
         _network.MatchOfferPendingChanged += OnMatchOfferPendingChanged;
@@ -774,6 +1011,14 @@ public partial class GameScreen : Control
     {
         if (_playerProfiles is null)
         {
+            if (_ai is not null || _aiConfiguration is not null)
+            {
+                _topPlayerName.Text = _aiEngine?.DisplayName ?? "AI 引擎";
+                _bottomPlayerName.Text = "本地玩家";
+                _topPlayerId.Text = "UCI 象棋引擎";
+                _bottomPlayerId.Text = $"玩家执{SideName(_localSide ?? PieceSide.Red)}";
+                return;
+            }
             _topPlayerName.Text = _transport is null ? "黑方" : "联机对手";
             _bottomPlayerName.Text = _transport is null ? "红方" : "本地玩家";
             _topPlayerId.Text = _transport is null ? "本地双人" : "临时联机身份";
@@ -796,7 +1041,7 @@ public partial class GameScreen : Control
         avatarView.Texture = null;
         initialView.Visible = true;
         nameView.Text = profile.DisplayName;
-        idView.Text = $"{profile.Platform} ID · {profile.PlayerId}";
+        idView.Text = profile.Platform == "Steam" ? "Steam 昵称" : profile.Platform;
         initialView.Text = FirstTextElement(profile.DisplayName);
         if (profile.Avatar is null) return;
         var image = Image.CreateFromData(
@@ -885,16 +1130,124 @@ public partial class GameScreen : Control
     {
         _selected = null;
         _legalDestinations = [];
-        _session.Undo();
+        _settlementShown = false;
+        var changed = _ai?.UndoHumanTurn() ?? _session.Undo();
+        if (changed)
+        {
+            _clock.IsRunning = !_session.Snapshot.IsFinished;
+            UpdateClockLabels();
+        }
     }
 
-    private void Restart()
+    private async void Restart()
     {
         _selected = null;
         _legalDestinations = [];
         _settlementShown = false;
         _lastPly = 0;
-        _session.NewGame();
+        _clock.IsRunning = false;
+        try
+        {
+            if (_ai is null) _session.NewGame();
+            else await _ai.NewGameAsync();
+        }
+        catch (Exception error)
+        {
+            _connectionLabel.Text = $"重新开始失败：{error.Message}";
+            _connectionLabel.AddThemeColorOverride("font_color", new Color("#E87777"));
+            AppendChat("系统", $"重新开始失败：{error.Message}", true);
+            UpdateNetworkControls();
+            return;
+        }
+        _clock = new MatchClock(_configuration?.TimeControl ?? TimeControl.Unlimited) { IsRunning = true };
+        UpdateClockLabels();
+        ScheduleAiMoveIfReady();
+    }
+
+    private async Task InitializeAiAsync()
+    {
+        if (_ai is null || _aiEngine is null) return;
+        _connectionLabel.Text = "正在连接 AI 引擎…";
+        UpdateNetworkControls();
+        try
+        {
+            await _ai.InitializeAsync();
+            _aiInitialized = true;
+            _topPlayerName.Text = _aiEngine.DisplayName;
+            _connectionLabel.Text = $"人机对决 · 你执{SideName(_ai.HumanSide)} · {_aiEngine.DisplayName}";
+            _connectionLabel.AddThemeColorOverride("font_color", new Color("#79C99A"));
+            AppendChat("系统", $"{_aiEngine.DisplayName} 已连接。输入问题可获得当前局面的 3 个候选走法。", true);
+            UpdateNetworkControls();
+            ScheduleAiMoveIfReady();
+        }
+        catch (Exception error)
+        {
+            _clock.IsRunning = false;
+            _connectionLabel.Text = $"AI 连接失败：{error.Message}";
+            _connectionLabel.AddThemeColorOverride("font_color", new Color("#E87777"));
+            AppendChat("系统", $"AI 连接失败：{error.Message}", true);
+            UpdateNetworkControls();
+        }
+    }
+
+    private void ScheduleAiMoveIfReady()
+    {
+        if (!_aiInitialized || _ai is null || _aiMoveScheduled || _ai.IsThinking ||
+            _board.IsAnimating || _session.Snapshot.IsFinished ||
+            _session.Snapshot.SideToMove != _ai.AiSide) return;
+        _aiMoveScheduled = true;
+        _ = PlayAiMoveAsync();
+    }
+
+    private async Task PlayAiMoveAsync()
+    {
+        try
+        {
+            await _ai!.PlayAiTurnAsync(_aiConfiguration!.Value.MoveTimeMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            // Leaving, restarting or undoing invalidates the in-flight search.
+        }
+        catch (Exception error)
+        {
+            _clock.IsRunning = false;
+            _connectionLabel.Text = $"AI 行棋失败：{error.Message}";
+            _connectionLabel.AddThemeColorOverride("font_color", new Color("#E87777"));
+            AppendChat("系统", $"AI 行棋失败：{error.Message}", true);
+        }
+        finally
+        {
+            _aiMoveScheduled = false;
+            UpdateNetworkControls();
+        }
+    }
+
+    private void OnAiThinkingChanged(bool thinking)
+    {
+        if (_ai is null || !_aiInitialized) return;
+        _connectionLabel.Text = thinking
+            ? $"人机对决 · {_aiEngine!.DisplayName} 思考中…"
+            : $"人机对决 · 你执{SideName(_ai.HumanSide)} · {_aiEngine!.DisplayName}";
+        UpdateNetworkControls();
+        if (!thinking) ScheduleAiMoveIfReady();
+    }
+
+    private static string FormatAiAnalysis(AiSearchResult result)
+    {
+        var lines = result.Variations.Take(3).Select(variation =>
+        {
+            var score = variation.MateIn is { } mate
+                ? $"杀棋 {mate}"
+                : variation.CentipawnScore is { } cp
+                    ? $"评估 {cp / 100.0:+0.00;-0.00;0.00}"
+                    : "暂无评估";
+            var pv = string.Join(' ', variation.PrincipalVariation.Take(5)
+                .Select(XiangqiUciNotation.FormatMove));
+            return $"{variation.Rank}. {XiangqiUciNotation.FormatMove(variation.Move)} · {score} · 深度 {variation.Depth}" +
+                   (pv.Length == 0 ? string.Empty : $"\n   参考变化：{pv}");
+        });
+        return string.Join('\n', lines);
     }
 
     private void OnSynchronizationFailed(string message)
@@ -947,7 +1300,6 @@ public partial class GameScreen : Control
         try
         {
             await _network.SendChatAsync("联机协商冒烟消息");
-            AppendChat("我", "联机协商冒烟消息");
             await _network.RequestMatchOfferAsync(MatchOfferKind.Undo);
         }
         catch (Exception error)

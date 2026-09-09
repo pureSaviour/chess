@@ -1,4 +1,4 @@
-<Project Sdk="Godot.NET.Sdk/4.5.1">
+<Project Sdk="Godot.NET.Sdk/4.7.2">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <!-- Godot 4.5 Android exports require .NET 9 for the Android runtime and
@@ -14,17 +14,14 @@
   <ItemGroup>
     <Compile Include="src/Presentation/**/*.cs" />
     <ProjectReference Include="src/Xiangqi.Core/Xiangqi.Core.csproj" />
+    <ProjectReference Include="src/Xiangqi.Transport/Xiangqi.Transport.csproj" />
     <!-- Steamworks.NET is pinned to the SDK 1.65-compatible upstream commit documented
          in third_party/Steamworks.NET/NOTICE.md. Steam is a Windows desktop feature;
          Android exports deliberately omit both the managed binding and native DLL. -->
-    <Reference Include="Steamworks.NET"
-               Condition=" '$(GodotTargetPlatform)' == 'windows' ">
+    <Reference Include="Steamworks.NET" Condition=" '$(GodotTargetPlatform)' == 'windows' ">
       <HintPath>third_party/Steamworks.NET/Steamworks.NET.dll</HintPath>
       <Private>true</Private>
     </Reference>
-    <None Include="steam_api64.dll"
-          Condition=" '$(GodotTargetPlatform)' == 'windows' "
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="steam_api64.dll" Condition=" '$(GodotTargetPlatform)' == 'windows' " CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

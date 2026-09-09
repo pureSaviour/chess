@@ -14,11 +14,33 @@ public sealed class AppSettings
     public bool VSync { get; set; } = true;
     public int MaxFps { get; set; } = 60;
     public bool EffectsEnabled { get; set; } = true;
+    public bool ShowBoardCoordinates { get; set; } = true;
+    private string _themeId = "classic";
+    /// <summary>Stable package ID. Unknown values are retained until the catalog resolves them.</summary>
+    public string ThemeId
+    {
+        get => _themeId;
+        set => _themeId = string.IsNullOrWhiteSpace(value) ? "classic" : value.Trim();
+    }
+    /// <summary>One-release compatibility facade for the former integer board/skin setting.</summary>
+    public BoardSkinKind BoardSkin
+    {
+        get => ThemeId.Equals("spring", StringComparison.OrdinalIgnoreCase)
+            ? BoardSkinKind.Spring : BoardSkinKind.Classic;
+        set => ThemeId = value == BoardSkinKind.Spring ? "spring" : "classic";
+    }
     public float MasterVolume { get; set; } = 0.8f;
     public float MusicVolume { get; set; } = 0.7f;
     public float EffectsVolume { get; set; } = 0.85f;
     public string CustomPlayerId { get; set; } = string.Empty;
     public string CustomAvatarPath { get; set; } = string.Empty;
+    /// <summary>Persisted UCI executable selected on the dedicated AI settings page.</summary>
+    public string AiEnginePath { get; set; } = string.Empty;
+    public int AiSideChoice { get; set; } = 0;
+    public int AiGameSeconds { get; set; } = 20 * 60;
+    public int AiMoveSeconds { get; set; } = 60;
+    public int AiThinkMilliseconds { get; set; } = 1500;
+    public int AiAnalysisMilliseconds { get; set; } = 500;
     public bool HasCustomProfile => !string.IsNullOrWhiteSpace(CustomPlayerId) ||
                                     !string.IsNullOrWhiteSpace(CustomAvatarPath);
 
@@ -32,15 +54,51 @@ public sealed class AppSettings
         result.VSync = config.GetValue("display", "vsync", result.VSync).AsBool();
         result.MaxFps = config.GetValue("display", "max_fps", result.MaxFps).AsInt32();
         result.EffectsEnabled = config.GetValue("display", "effects", result.EffectsEnabled).AsBool();
+        result.ShowBoardCoordinates = config.GetValue(
+            "board", "show_coordinates", result.ShowBoardCoordinates).AsBool();
+        var legacySkin = (BoardSkinKind)config.GetValue(
+            "board", "skin", (int)BoardSkinKind.Classic).AsInt32();
+        result.ThemeId = config.HasSectionKey("board", "theme_id")
+            ? config.GetValue("board", "theme_id", "classic").AsString()
+            : legacySkin == BoardSkinKind.Spring ? "spring" : "classic";
         result.MasterVolume = (float)config.GetValue("audio", "master", result.MasterVolume).AsDouble();
         result.MusicVolume = (float)config.GetValue("audio", "music", result.MusicVolume).AsDouble();
         result.EffectsVolume = (float)config.GetValue("audio", "effects", result.EffectsVolume).AsDouble();
         result.CustomPlayerId = config.GetValue("profile", "player_id", string.Empty).AsString();
         result.CustomAvatarPath = config.GetValue("profile", "avatar_path", string.Empty).AsString();
+        result.AiEnginePath = config.GetValue("ai", "engine_path", string.Empty).AsString();
+        result.AiSideChoice = config.GetValue("ai", "side", 0).AsInt32();
+        result.AiGameSeconds = config.GetValue("ai", "game_seconds", 1200).AsInt32();
+        result.AiMoveSeconds = config.GetValue("ai", "move_seconds", 60).AsInt32();
+        result.AiThinkMilliseconds = config.GetValue("ai", "think_milliseconds", 1500).AsInt32();
+        result.AiAnalysisMilliseconds = config.GetValue("ai", "analysis_milliseconds", 500).AsInt32();
+        result.Clamp();
         return result;
     }
 
     public AppSettings Copy() => (AppSettings)MemberwiseClone();
+
+    public void UpdateFrom(AppSettings source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        Fullscreen = source.Fullscreen;
+        VSync = source.VSync;
+        MaxFps = source.MaxFps;
+        EffectsEnabled = source.EffectsEnabled;
+        ShowBoardCoordinates = source.ShowBoardCoordinates;
+        ThemeId = source.ThemeId;
+        MasterVolume = source.MasterVolume;
+        MusicVolume = source.MusicVolume;
+        EffectsVolume = source.EffectsVolume;
+        CustomPlayerId = source.CustomPlayerId;
+        CustomAvatarPath = source.CustomAvatarPath;
+        AiEnginePath = source.AiEnginePath;
+        AiSideChoice = source.AiSideChoice;
+        AiGameSeconds = source.AiGameSeconds;
+        AiMoveSeconds = source.AiMoveSeconds;
+        AiThinkMilliseconds = source.AiThinkMilliseconds;
+        AiAnalysisMilliseconds = source.AiAnalysisMilliseconds;
+    }
 
     public void SaveAndApply()
     {
@@ -50,11 +108,20 @@ public sealed class AppSettings
         config.SetValue("display", "vsync", VSync);
         config.SetValue("display", "max_fps", MaxFps);
         config.SetValue("display", "effects", EffectsEnabled);
+        config.SetValue("board", "show_coordinates", ShowBoardCoordinates);
+        config.SetValue("board", "theme_id", ThemeId);
+        config.SetValue("board", "skin", (int)BoardSkin);
         config.SetValue("audio", "master", MasterVolume);
         config.SetValue("audio", "music", MusicVolume);
         config.SetValue("audio", "effects", EffectsVolume);
         config.SetValue("profile", "player_id", CustomPlayerId);
         config.SetValue("profile", "avatar_path", CustomAvatarPath);
+        config.SetValue("ai", "engine_path", AiEnginePath);
+        config.SetValue("ai", "side", AiSideChoice);
+        config.SetValue("ai", "game_seconds", AiGameSeconds);
+        config.SetValue("ai", "move_seconds", AiMoveSeconds);
+        config.SetValue("ai", "think_milliseconds", AiThinkMilliseconds);
+        config.SetValue("ai", "analysis_milliseconds", AiAnalysisMilliseconds);
         var error = config.Save(SettingsPath);
         if (error != Error.Ok) GD.PushWarning($"无法保存设置：{error}");
         Apply();
@@ -78,6 +145,8 @@ public sealed class AppSettings
     private void Clamp()
     {
         if (MaxFps is not (0 or 60 or 120 or 144)) MaxFps = 60;
+        if (ThemeId.Length > 64 || !ThemeId.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
+            ThemeId = "classic";
         MasterVolume = Mathf.Clamp(MasterVolume, 0, 1);
         MusicVolume = Mathf.Clamp(MusicVolume, 0, 1);
         EffectsVolume = Mathf.Clamp(EffectsVolume, 0, 1);
@@ -85,6 +154,12 @@ public sealed class AppSettings
         if (CustomPlayerId.Length > 32) CustomPlayerId = CustomPlayerId[..32];
         if (CustomPlayerId.Any(char.IsControl)) CustomPlayerId = string.Empty;
         CustomAvatarPath = CustomAvatarPath.Trim();
+        AiEnginePath = AiEnginePath.Trim();
+        AiSideChoice = Math.Clamp(AiSideChoice, 0, 2);
+        AiGameSeconds = Math.Clamp(AiGameSeconds, 0, 180 * 60);
+        AiMoveSeconds = Math.Clamp(AiMoveSeconds, 0, 300);
+        AiThinkMilliseconds = Math.Clamp(AiThinkMilliseconds, 100, 120_000);
+        AiAnalysisMilliseconds = Math.Clamp(AiAnalysisMilliseconds, 100, 10_000);
     }
 
     private static void SetBusVolume(string busName, float value, bool create)

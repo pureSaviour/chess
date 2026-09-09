@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+  <rect width="1400" height="820" fill="#17120f"/>
+  <rect x="42" y="36" width="1316" height="748" rx="22" fill="#241b16" stroke="#87643d" stroke-width="2"/>
+  <text x="82" y="100" fill="#f3dfbd" font-family="Microsoft YaHei, sans-serif" font-size="34" font-weight="700">经典象棋 · 保存对局</text>
+  <text x="82" y="138" fill="#bfa98c" font-family="Microsoft YaHei, sans-serif" font-size="18">选择一局进入复盘</text>
+  <rect x="1172" y="69" width="140" height="52" rx="10" fill="#3b2e25" stroke="#8e704c"/>
+  <text x="1242" y="102" fill="#f3dfbd" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="18">返回画廊</text>
+
+  <g font-family="Microsoft YaHei, sans-serif">
+    <text x="82" y="190" fill="#9f8c74" font-size="15">日期与时间</text>
+    <text x="430" y="190" fill="#9f8c74" font-size="15">对弈双方与结果</text>
+    <text x="1060" y="190" fill="#9f8c74" font-size="15">对局方式</text>
+
+    <g transform="translate(72 214)">
+      <rect width="1256" height="132" rx="16" fill="#30251e" stroke="#b38855" stroke-width="2"/>
+      <text x="28" y="57" fill="#f0dcc0" font-size="22">2026-09-08</text>
+      <text x="28" y="88" fill="#bba68d" font-size="18">21:35</text>
+      <rect x="350" y="30" width="72" height="72" rx="12" fill="#c84b40"/>
+      <text x="442" y="58" fill="#f7e8d0" font-size="22" font-weight="700">青山客（我）</text>
+      <text x="442" y="87" fill="#c9b398" font-size="16">红方</text>
+      <rect x="642" y="37" width="70" height="58" rx="13" fill="#b7853e"/>
+      <text x="677" y="74" fill="#231810" text-anchor="middle" font-size="24" font-weight="700">胜</text>
+      <text x="740" y="72" fill="#8f7b66" font-size="22">—</text>
+      <rect x="790" y="30" width="72" height="72" rx="12" fill="#4f5965"/>
+      <text x="882" y="58" fill="#f7e8d0" font-size="22" font-weight="700">江畔棋友</text>
+      <text x="882" y="87" fill="#c9b398" font-size="16">黑方 · 败</text>
+      <rect x="1050" y="39" width="142" height="46" rx="23" fill="#46372b" stroke="#9b7549"/>
+      <text x="1121" y="68" fill="#e9d2ad" text-anchor="middle" font-size="17">局域网联机</text>
+      <text x="1213" y="73" fill="#d6b27d" font-size="27">›</text>
+    </g>
+
+    <g transform="translate(72 366)">
+      <rect width="1256" height="132" rx="16" fill="#2b211b" stroke="#5f4b39"/>
+      <text x="28" y="57" fill="#f0dcc0" font-size="22">2026-09-07</text>
+      <text x="28" y="88" fill="#bba68d" font-size="18">18:12</text>
+      <rect x="350" y="30" width="72" height="72" rx="12" fill="#c84b40"/>
+      <text x="442" y="58" fill="#f7e8d0" font-size="22" font-weight="700">青山客（我）</text>
+      <text x="442" y="87" fill="#c9b398" font-size="16">红方 · 败</text>
+      <rect x="642" y="37" width="70" height="58" rx="13" fill="#6e5140"/>
+      <text x="677" y="74" fill="#f2d7c1" text-anchor="middle" font-size="24" font-weight="700">败</text>
+      <text x="740" y="72" fill="#8f7b66" font-size="22">—</text>
+      <rect x="790" y="30" width="72" height="72" rx="12" fill="#437065"/>
+      <text x="882" y="58" fill="#f7e8d0" font-size="22" font-weight="700">竹影</text>
+      <text x="882" y="87" fill="#c9b398" font-size="16">黑方 · 胜</text>
+      <rect x="1050" y="39" width="142" height="46" rx="23" fill="#46372b" stroke="#9b7549"/>
+      <text x="1121" y="68" fill="#e9d2ad" text-anchor="middle" font-size="17">Steam 好友</text>
+      <text x="1213" y="73" fill="#d6b27d" font-size="27">›</text>
+    </g>
+
+    <g transform="translate(72 518)">
+      <rect width="1256" height="132" rx="16" fill="#2b211b" stroke="#5f4b39"/>
+      <text x="28" y="57" fill="#f0dcc0" font-size="22">2026-09-06</text>
+      <text x="28" y="88" fill="#bba68d" font-size="18">09:40</text>
+      <rect x="350" y="30" width="72" height="72" rx="12" fill="#c84b40"/>
+      <text x="442" y="58" fill="#f7e8d0" font-size="22" font-weight="700">青山客（我）</text>
+      <text x="442" y="87" fill="#c9b398" font-size="16">红方</text>
+      <rect x="642" y="37" width="70" height="58" rx="13" fill="#7a674f"/>
+      <text x="677" y="74" fill="#f0dfc3" text-anchor="middle" font-size="24" font-weight="700">和</text>
+      <text x="740" y="72" fill="#8f7b66" font-size="22">—</text>
+      <rect x="790" y="30" width="72" height="72" rx="12" fill="#4f5965"/>
+      <text x="882" y="58" fill="#f7e8d0" font-size="22" font-weight="700">本地玩家</text>
+      <text x="882" y="87" fill="#c9b398" font-size="16">黑方</text>
+      <rect x="1050" y="39" width="142" height="46" rx="23" fill="#46372b" stroke="#9b7549"/>
+      <text x="1121" y="68" fill="#e9d2ad" text-anchor="middle" font-size="17">本地联机</text>
+      <text x="1213" y="73" fill="#d6b27d" font-size="27">›</text>
+    </g>
+
+    <rect x="72" y="682" width="1256" height="68" rx="12" fill="#201813" stroke="#514132"/>
+    <text x="700" y="724" fill="#aa9478" text-anchor="middle" font-size="17">单击整行选中 · 双击或按 Enter 进入复盘</text>
+  </g>
+</svg>

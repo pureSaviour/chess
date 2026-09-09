@@ -1,6 +1,7 @@
 using Godot;
 using Xiangqi.Core.Application;
 using Xiangqi.Core.Domain;
+using Xiangqi.Presentation.Settings;
 
 namespace Xiangqi.Presentation.Effects;
 
@@ -19,6 +20,9 @@ public partial class CueEffectLayer : Control
     };
     private readonly EffectBurstView _burst = new();
     private Tween? _tween;
+    private readonly Dictionary<ThemeEffectSlot, ShaderMaterial> _themeMaterials = [];
+    private readonly Dictionary<ThemeEffectSlot, int> _themeDurations = [];
+    private readonly List<ThemeResourceLease> _themeLeases = [];
 
     public CueEffectLayer()
     {
@@ -44,13 +48,42 @@ public partial class CueEffectLayer : Control
 
     public bool EnabledBySettings { get; set; } = true;
 
+    /// <summary>Preloads only known cue slots; failures stay local and retain built-in effects.</summary>
+    public void ApplyTheme(IBoardTheme theme)
+    {
+        _flash.Material = null;
+        foreach (var material in _themeMaterials.Values) material.Dispose();
+        foreach (var lease in _themeLeases) lease.Dispose();
+        _themeMaterials.Clear(); _themeDurations.Clear(); _themeLeases.Clear();
+        foreach (var slot in new[] { ThemeEffectSlot.Capture, ThemeEffectSlot.Check,
+                     ThemeEffectSlot.Victory, ThemeEffectSlot.Defeat })
+        {
+            if (!theme.Effects.TryGetValue(slot, out var effect)) continue;
+            if (effect.DurationMs > 0) _themeDurations[slot] = effect.DurationMs;
+            if (effect.Shader is null) continue;
+            try
+            {
+                var lease = new ThemeResourceLease();
+                _themeMaterials[slot] = lease.CreateMaterial(effect.Shader);
+                _themeLeases.Add(lease);
+            }
+            catch (Exception error) { GD.PushWarning($"主题 {theme.Id} 的 {slot} 终局 shader 加载失败：{error.Message}"); }
+        }
+    }
+
     public void Play(PresentationCue cue)
     {
         if (!EnabledBySettings && cue.Kind != PresentationCueKind.IllegalMove) return;
         var style = ResolveStyle(cue);
         if (style.Text is null) return;
 
-        Animate(style);
+        var slot = cue.Kind switch
+        {
+            PresentationCueKind.Capture => ThemeEffectSlot.Capture,
+            PresentationCueKind.Check or PresentationCueKind.Checkmate => ThemeEffectSlot.Check,
+            _ => (ThemeEffectSlot?)null
+        };
+        Animate(style, slot);
     }
 
     public void PlaySettlement(string text, bool? victory, GameEndReason reason)
@@ -76,13 +109,22 @@ public partial class CueEffectLayer : Control
             true => 0.38f,
             false => 0.28f,
             null => 0.32f
-        }, victory switch { true => 44, false => 20, null => 32 }, 2.2f));
+        }, victory switch { true => 44, false => 20, null => 32 }, 2.2f),
+            victory switch { true => ThemeEffectSlot.Victory, false => ThemeEffectSlot.Defeat, _ => null });
     }
 
-    private void Animate(EffectStyle style)
+    private void Animate(EffectStyle style, ThemeEffectSlot? slot)
     {
-
         _tween?.Kill();
+        _flash.Material = slot is { } semantic && _themeMaterials.TryGetValue(semantic, out var material)
+            ? material : null;
+        if (_flash.Material is ShaderMaterial themed)
+        {
+            themed.SetShaderParameter("tint", style.Flash);
+            themed.SetShaderParameter("animated", EnabledBySettings);
+        }
+        if (slot is { } durationSlot && _themeDurations.TryGetValue(durationSlot, out var milliseconds))
+            style = style with { Duration = milliseconds / 1000f };
         _title.Text = style.Text;
         _title.AddThemeColorOverride("font_color", style.Color);
         _title.Scale = Vector2.One * 0.72f;
@@ -124,4 +166,12 @@ public partial class CueEffectLayer : Control
 
     private readonly record struct EffectStyle(
         string? Text, Color Color, Color Flash, float FlashAlpha, int Rays, float Duration);
+
+    public override void _ExitTree()
+    {
+        _tween?.Kill(); _flash.Material = null;
+        foreach (var material in _themeMaterials.Values) material.Dispose();
+        foreach (var lease in _themeLeases) lease.Dispose();
+        _themeMaterials.Clear(); _themeLeases.Clear();
+    }
 }
