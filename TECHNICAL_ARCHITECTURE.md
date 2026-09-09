@@ -37,9 +37,9 @@ Xiangqi.ThreeNetwork.Tests → Xiangqi.Core + Xiangqi.Transport
 
 | 工程/文件 | 当前职责和约束 |
 | --- | --- |
-| [Xiangqi.csproj](Xiangqi.csproj) | Godot.NET.Sdk/4.7.2；仅编译 src/Presentation/**/*.cs；桌面 net8.0，Android 条件 net9.0 |
-| [Xiangqi.Core.csproj](src/Xiangqi.Core/Xiangqi.Core.csproj) | net8.0；没有项目/第三方包引用；不引用 Godot、Steam 或传输实现 |
-| [Xiangqi.Transport.csproj](src/Xiangqi.Transport/Xiangqi.Transport.csproj) | net8.0；仅引用 Core；三国 TCP、签名握手、连接管理 |
+| [Xiangqi.csproj](Xiangqi.csproj) | Godot.NET.Sdk/4.7.2；仅编译 src/Presentation/**/*.cs；桌面 net10.0，Android 条件 net9.0 |
+| [Xiangqi.Core.csproj](src/Xiangqi.Core/Xiangqi.Core.csproj) | net9.0/net10.0；没有项目/第三方包引用；不引用 Godot、Steam 或传输实现 |
+| [Xiangqi.Transport.csproj](src/Xiangqi.Transport/Xiangqi.Transport.csproj) | net9.0/net10.0；仅引用 Core；三国 TCP、签名握手、连接管理 |
 | [Xiangqi.sln](Xiangqi.sln) | 上述三个工程与两个控制台测试工程 |
 | [project.godot](project.godot) | 主场景 src/Presentation/Main.tscn；兼容渲染器 |
 | [export_presets.cfg](export_presets.cfg) | Windows Desktop/Android 导出配置 |
@@ -81,7 +81,7 @@ UI 根据“轮到谁、是否协商、是否结束”关闭按钮属于交互�
 | [揭棋玩法](docs/jieqi.md) | 暗/明身份、槽位首步、确定性洗牌、棋谱与联机保密边界 |
 | [架构检查记录](docs/architecture-review.md) | 2026-09-07 代码证据、分层评估、待改进项与验证范围 |
 | [Steam 集成](docs/steam-integration.md) | 平台配置、开发 App ID、验收；三国细节路由到对应玩法文档 |
-| [Godot 4.7 迁移记录](docs/godot-4.7-migration.md) | 4.5→4.7 配置、API 取舍、验证证据与 .NET 迁移审批门 |
+| [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md) | 引擎与运行时配置、API 取舍、兼容依据、验证证据与剩余风险 |
 | [坐标方案](docs/three-kingdoms-coordinate-proposal.md) | 三国历史设计依据；已确认实现以 three-kingdoms.md 和代码为准 |
 | [AGENTS.md](AGENTS.md) | 全仓库 Agent 开发与交付约束 |
 | [XML 主题包与 shader 接口](docs/theme-package-proposal.md) | 已实现的 schema v1、双目录、安全边界、atlas/uniform 契约与当前限制 |
@@ -301,7 +301,7 @@ Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于
 
 2026-09-09 暗子背面/翻面修复通过 48 项核心回归、Android 与最终 Windows 构建（均 0 警告/错误）。揭子平移和翻面现共用同一时间线，不再在落点后追加翻面阶段。`--smoke-feedback` 已增加无字背面、covered→明子翻面和动画释放断言；本机 Godot 4.7.2 headless 可初始化 .NET，但多种启动参数均在主场景 `_Ready` 前以 0 退出、没有 PASS/FAIL，因此该 smoke 和实际翻面观感仍记为未验收。
 
-2026-09-09 Godot 4.7.2 迁移复核使用机器级 `GODOT_NEW_PATH` 的官方 .NET 发行版完成：解决方案、Android/Windows 条件构建均为 0 警告/错误，48 项核心测试和三人网络测试通过，`--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均输出 PASS。项目仍保持桌面/Core `net8.0`、Android `net9.0`；更高 .NET 目标框架只完成评估，未经维护者批准不得修改。详见 [迁移记录](docs/godot-4.7-migration.md)。
+2026-09-09 Godot 4.7.2 迁移复核使用机器级 `GODOT_NEW_PATH` 的官方 .NET 发行版完成：解决方案、Android/Windows 条件构建均为 0 警告/错误，48 项核心测试和三人网络测试通过，`--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均输出 PASS。随后经维护者批准，桌面主工程和测试迁移到 `net10.0`，Core/Transport 提供 `net9.0;net10.0`；Android 因 Godot 4.7.2 预编译导出模板限制暂留 `net9.0`。升级后的验证结果与平台边界见 [迁移记录](docs/godot-4.7-migration.md)。
 
 仍未实现或未验收：
 
