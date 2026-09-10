@@ -6,6 +6,7 @@ using Xiangqi.Core.Application.Gomoku;
 using Xiangqi.Core.Domain;
 using Xiangqi.Core.Domain.Junqi;
 using Xiangqi.Core.Domain.Gomoku;
+using Xiangqi.Core.Domain.Grid;
 using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Profiles;
@@ -43,7 +44,7 @@ public partial class Main : Control
         // Steam Overlay and its client APIs require an interactive display. Keeping headless
         // smoke/tests out of the native initialization path also makes server-side CI deterministic.
         if (!string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase) &&
-            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback")))
+            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback" or "--smoke-gomoku-ai")))
             InitializeSteam();
         if (TryStartDebugSmokeMode()) return;
         ShowMainMenu();
@@ -87,8 +88,8 @@ public partial class Main : Control
         () => ShowGomokuRecords(true),
         () => ShowGomokuImport(false),
         () => ShowGomokuImport(true),
-        ShowGomokuAiNotice,
-        ShowGomokuAiNotice));
+        StartConfiguredGomokuAiMatch,
+        ShowGomokuAiSettings));
 
     private void StartJieqiLocal()
     {
@@ -190,7 +191,20 @@ public partial class Main : Control
         record=>SwitchTo(new GomokuReplayScreen(record,()=>ShowGomokuRecords(saved)))));
     private void ShowGomokuImport(bool position)=>SwitchTo(new GomokuImportScreen(position,ShowGallery,
         record=>SwitchTo(new GomokuReplayScreen(record,ShowGallery))));
-    private void ShowGomokuAiNotice()=>SwitchTo(new GomokuAiNoticeScreen(ShowGallery));
+    private void ShowGomokuAiSettings()=>SwitchTo(new GomokuAiSettingsScreen(_settings,saved=>{_settings=saved;_settings.SaveAndApply();ShowGallery();},ShowGallery));
+    private void StartConfiguredGomokuAiMatch()
+    {
+#if GODOT_ANDROID
+        ShowError("Android 当前不能启动外部 Rapfi 进程；移动端原生引擎尚未接入。");
+#else
+        if(string.IsNullOrWhiteSpace(_settings.GomokuAiEnginePath)||!File.Exists(_settings.GomokuAiEnginePath)){ShowError("请先在五子棋人机设置中选择 Rapfi 可执行文件。");return;}
+        var human=_settings.GomokuAiSideChoice switch{1=>StoneColor.White,2=>Random.Shared.Next(2)==0?StoneColor.Black:StoneColor.White,_=>StoneColor.Black};
+        var rules=_settings.GomokuAiForbiddenMoves?GomokuRuleSet.RenjuForbiddenMoves:GomokuRuleSet.Freestyle;
+        var engine=new PiskvorkProcessGomokuAiEngine(_settings.GomokuAiEnginePath);
+        var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,_settings.GomokuAiThinkMilliseconds);
+        SwitchTo(new GomokuGameScreen(controller,$"人机对决 · Rapfi · 玩家执{(human==StoneColor.Black?"黑":"白")}",ShowGallery));
+#endif
+    }
 
     private void ShowAiSettings() => SwitchTo(new AiSettingsScreen(_settings, saved =>
     {
@@ -482,6 +496,11 @@ public partial class Main : Control
             return true;
         }
 #if GODOT_WINDOWS
+        if (arguments.Contains("--smoke-gomoku-ai"))
+        {
+            _ = RunGomokuAiSmokeAsync();
+            return true;
+        }
         if (arguments.Contains("--smoke-steam-init"))
         {
             if (_steam is null)
@@ -618,6 +637,28 @@ public partial class Main : Control
     }
 
 #if GODOT_WINDOWS
+    private async Task RunGomokuAiSmokeAsync()
+    {
+        var path = System.Environment.GetEnvironmentVariable("XIANGQI_GOMOKU_AI_PATH");
+        if (string.IsNullOrWhiteSpace(path)) { GD.PushError("[Xiangqi.Gomoku.AI.Smoke] XIANGQI_GOMOKU_AI_PATH is missing."); GetTree().Quit(2); return; }
+        await using var controller = new AiGomokuMatchController(new PiskvorkProcessGomokuAiEngine(path),
+            15, GomokuRuleSet.RenjuForbiddenMoves, StoneColor.Black, 1000);
+        try
+        {
+            await controller.InitializeAsync();
+            var human = await controller.SubmitAsync(new GridPoint(7, 7));
+            if (!human.Accepted) throw new InvalidOperationException("Human smoke move was rejected.");
+            var deadline = Time.GetTicksMsec() + 15_000;
+            while (controller.Snapshot.PlyNumber < 2 && Time.GetTicksMsec() < deadline)
+            { await ToSignal(GetTree().CreateTimer(0.02), SceneTreeTimer.SignalName.Timeout); controller.Poll(); }
+            if (controller.Snapshot.PlyNumber != 2 || controller.Snapshot.LastMove is not { } move || move.Point == new GridPoint(7, 7))
+                throw new InvalidOperationException("Rapfi did not return one legal reply.");
+            GD.Print($"[Xiangqi.Gomoku.AI.Smoke] PASS reply={move.Point.Column},{move.Point.Row}");
+            GetTree().Quit();
+        }
+        catch (Exception error) { GD.PushError($"[Xiangqi.Gomoku.AI.Smoke] FAIL {error}"); GetTree().Quit(3); }
+    }
+
     private async Task RunSteamLobbySmokeAsync()
     {
         try

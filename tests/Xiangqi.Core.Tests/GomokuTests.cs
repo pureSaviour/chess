@@ -12,7 +12,10 @@ internal static class GomokuTests
         ("连珠模式禁止黑方长连、双四与双三", ForbiddenMoves),
         ("SGF GM[4] 可往返主线与禁手规则", SgfRoundTrip),
         ("SGF 拒绝越界和非法主线", SgfRejectsInvalid),
-        ("五子棋联机房主配置与落子可同步", NetworkRoundTrip)
+        ("五子棋联机房主配置与落子可同步", NetworkRoundTrip),
+        ("五子棋 AI 协调器在主线程轮询后应用合法着法", AiRoundTrip),
+        ("五子棋 AI 协调器拒绝非法输出", AiRejectsInvalid),
+        ("五子棋 AI 协调器释放引擎且释放幂等", AiDisposal)
     ];
 
     private static void GridGeometry()
@@ -69,6 +72,40 @@ internal static class GomokuTests
         True(client.SubmitAsync(new(7, 8)).AsTask().GetAwaiter().GetResult().Accepted); Equal(2L, host.Snapshot.PlyNumber); Equal(2L, client.Snapshot.PlyNumber);
         host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
+    private static void AiRoundTrip()
+    {
+        var engine = new FakeAiEngine(new(7, 8));
+        var controller = new AiGomokuMatchController(engine, 15, GomokuRuleSet.Freestyle,
+            StoneColor.Black, 250);
+        controller.InitializeAsync().AsTask().GetAwaiter().GetResult();
+        True(controller.CanPlace);
+        True(controller.SubmitAsync(new(7, 7)).AsTask().GetAwaiter().GetResult().Accepted);
+        True(SpinWait.SpinUntil(() => { controller.Poll(); return controller.Snapshot.PlyNumber == 2; }, 1000));
+        Equal(2L, controller.Snapshot.PlyNumber); Equal(new GridPoint(7, 8), controller.Snapshot.LastMove!.Value.Point);
+        True(controller.CanPlace);
+        controller.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+    private static void AiRejectsInvalid()
+    {
+        var engine = new FakeAiEngine(new(99, 99));
+        var controller = new AiGomokuMatchController(engine, 15, GomokuRuleSet.RenjuForbiddenMoves,
+            StoneColor.White, 250);
+        var message = string.Empty; controller.Message += value => message = value;
+        controller.InitializeAsync().AsTask().GetAwaiter().GetResult();
+        True(SpinWait.SpinUntil(() => { controller.Poll(); return message.Length > 0; }, 1000));
+        Equal(0L, controller.Snapshot.PlyNumber); True(message.Contains("非法着法"));
+        controller.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+    private static void AiDisposal()
+    {
+        var engine = new FakeAiEngine(new(7, 7));
+        var controller = new AiGomokuMatchController(engine, 15, GomokuRuleSet.Freestyle,
+            StoneColor.Black, 250);
+        controller.InitializeAsync().AsTask().GetAwaiter().GetResult();
+        controller.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        controller.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        Equal(1, engine.DisposeCount);
+    }
 
     private sealed class FakePacketTransport(bool host) : ITwoPlayerPacketTransport
     {
@@ -83,6 +120,19 @@ internal static class GomokuTests
         public ValueTask SendPacketAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
         { cancellationToken.ThrowIfCancellationRequested(); _peer!.PacketReceived?.Invoke(packet.ToArray()); return ValueTask.CompletedTask; }
         public ValueTask DisposeAsync() { IsPacketConnected = false; return ValueTask.CompletedTask; }
+    }
+    private sealed class FakeAiEngine(GridPoint move) : IGomokuAiEngine
+    {
+        private int _searchCount;
+        public string DisplayName => "Fake";
+        public bool IsReady { get; private set; }
+        public int SearchCount => _searchCount;
+        public int DisposeCount { get; private set; }
+        public ValueTask InitializeAsync(int boardSize, GomokuRuleSet rules, CancellationToken cancellationToken = default)
+        { cancellationToken.ThrowIfCancellationRequested(); IsReady = true; return ValueTask.CompletedTask; }
+        public ValueTask<GridPoint> FindMoveAsync(GomokuAiSearchRequest request, CancellationToken cancellationToken = default)
+        { cancellationToken.ThrowIfCancellationRequested(); Interlocked.Increment(ref _searchCount); return ValueTask.FromResult(move); }
+        public ValueTask DisposeAsync() { DisposeCount++; IsReady = false; return ValueTask.CompletedTask; }
     }
     private static void Success(GomokuMoveResult result) { if (!result.IsSuccess) throw new InvalidOperationException(result.Rejection.ToString()); }
     private static void True(bool value, string? message = null) { if (!value) throw new InvalidOperationException(message ?? "Expected true."); }

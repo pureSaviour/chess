@@ -22,6 +22,8 @@ public interface IGomokuMatchController : IAsyncDisposable
     bool IsReady { get; }
     bool IsConnected { get; }
     bool CanPlace { get; }
+    ValueTask InitializeAsync(CancellationToken cancellationToken = default);
+    void Poll();
     ValueTask<GomokuSubmitResult> SubmitAsync(GridPoint point, CancellationToken cancellationToken = default);
     GomokuGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null);
 }
@@ -37,6 +39,8 @@ public sealed class LocalGomokuMatchController : IGomokuMatchController
     public bool IsReady => true;
     public bool IsConnected => true;
     public bool CanPlace => !_game.IsFinished;
+    public ValueTask InitializeAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.CompletedTask; }
+    public void Poll() { }
     public ValueTask<GomokuSubmitResult> SubmitAsync(GridPoint point, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); var result = _game.TryPlace(point); if (result.IsSuccess) Changed?.Invoke(); return ValueTask.FromResult(new GomokuSubmitResult(result.IsSuccess, false, result.Rejection, result.IsSuccess ? null : result.Rejection.ToString())); }
     public GomokuGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null) => new(_game.Snapshot.BoardSize, _game.Rules, [], StoneColor.Black, _game.History.ToArray(), tags ?? new Dictionary<string, string>());
@@ -69,6 +73,8 @@ public sealed class NetworkGomokuMatchController : IGomokuMatchController
     public bool IsReady => _game is not null && LocalColor is not null;
     public bool IsConnected => _transport.IsPacketConnected;
     public bool CanPlace => IsReady && IsConnected && !Snapshot.IsFinished && Snapshot.SideToMove == LocalColor;
+    public ValueTask InitializeAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.CompletedTask; }
+    public void Poll() { }
     public async ValueTask<GomokuSubmitResult> SubmitAsync(GridPoint point, CancellationToken cancellationToken = default)
     {
         if (!CanPlace) return new(false, false, GomokuMoveRejection.NotPlayersTurn, "当前不能落子。");

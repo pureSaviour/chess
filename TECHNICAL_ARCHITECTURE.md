@@ -12,7 +12,7 @@
 - 三国象棋：本地三人、TCP 局域网、Steam 三席邀请；包含收编、三方协商、进程内断线恢复和房主迁移。
 - 揭棋：本地、LAN 与 Steam 双人；房主权威脱敏协议、Seed 承诺/赛后验证、确定性暗子与扩展 PGN。
 - 军旗：独立 12×5 图拓扑、双人规则、热座/LAN/Steam、玩家视图脱敏及 AC2 `INFO[1.0]` 棋谱。
-- 五子棋：可配方格交叉点棋盘、可选连珠禁手、本地/LAN/Steam，以及 SGF FF[4]/GM[4] 记录/导入；AI 尚未实现。
+- 五子棋：可配方格交叉点棋盘、可选连珠禁手、本地/LAN/Steam、SGF FF[4]/GM[4] 记录/导入，以及桌面外接 Rapfi/Piskvork AI。
 
 五种玩法各有领域模型与对局编排，共用部分值对象、时间配置、设置、UI 样式、皮肤和反馈特效。并没有统一的“任意人数/任意棋盘玩法引擎”。
 
@@ -82,7 +82,7 @@ UI 根据“轮到谁、是否协商、是否结束”关闭按钮属于交互�
 | [三国象棋](docs/three-kingdoms.md) | 已确认规则、拓扑、会话/控制器/传输、迁移重连与使用注意事项 |
 | [揭棋玩法](docs/jieqi.md) | 暗/明身份、槽位首步、确定性洗牌、棋谱与联机保密边界 |
 | [军旗玩法](docs/junqi.md) | 12×5 图拓扑、布阵/战斗、控制器、可信房主模型、AC2 棋谱与 UI 隐私 |
-| [五子棋玩法](docs/gomoku.md) | 通用方格几何、禁手、控制器、可信房主协议、SGF 和 AI 未实现边界 |
+| [五子棋玩法](docs/gomoku.md) | 通用方格几何、禁手、控制器、可信房主协议、SGF 和 Rapfi AI 边界 |
 | [架构检查记录](docs/architecture-review.md) | 2026-09-07 代码证据、分层评估、待改进项与验证范围 |
 | [Steam 集成](docs/steam-integration.md) | 平台配置、开发 App ID、验收；三国细节路由到对应玩法文档 |
 | [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md) | 引擎与运行时配置、API 取舍、兼容依据、验证证据与剩余风险 |
@@ -207,7 +207,7 @@ MainMenuScreen
   │   ├── 三国卡片两组折叠菜单 → ThreeGalleryScreen 对应本地/LAN/Steam 设置 → ThreeGameScreen
   │   ├── 揭棋卡片两组折叠菜单 → 本地/LAN/Steam 对局 / 最近与保存记录
   │   └── 军旗卡片两组折叠菜单 → 本地/LAN/Steam 对局 / AC2 最近与保存记录
-  │   └── 五子棋卡片四组折叠菜单 → 本地/LAN/Steam、SGF 记录/导入、AI 未实现说明
+  │   └── 五子棋卡片四组折叠菜单 → 本地/LAN/Steam、SGF 记录/导入、Rapfi 人机对决/设置
   └── 全局设置：SettingsScreen
 房间内设置：InGameSettingsDialog
 ```
@@ -218,7 +218,7 @@ Godot 基准视口为 1100×820，`canvas_items + expand` 在全屏时扩展逻�
 
 ### 4.2 设置、皮肤与反馈
 
-AppSettings 通过 ConfigFile 保存 user://settings.cfg，包含显示/特效、音量、资料、字符串 ThemeId、ShowBoardCoordinates，以及 AI 引擎路径、执子、棋钟、对局/复盘思考时长。旧 `board/skin` 数值仍读取/写入一个兼容周期，首次加载映射为 `classic`/`spring`。全局/房间/人机设置先编辑副本，确认后更新、保存并应用，不进入领域棋规或网络棋谱；引擎路径仅在本机使用，不写入棋谱或网络。
+AppSettings 通过 ConfigFile 保存 user://settings.cfg，包含显示/特效、音量、资料、字符串 ThemeId、ShowBoardCoordinates，以及经典 UCI 与五子棋 Rapfi 的引擎路径、执子和思考参数。旧 `board/skin` 数值仍读取/写入一个兼容周期，首次加载映射为 `classic`/`spring`。全局/房间/人机设置先编辑副本，确认后更新、保存并应用，不进入领域棋规或网络棋谱；引擎路径仅在本机使用，不写入棋谱或网络。
 
 IBoardTheme / IBoardThemeCatalog 把稳定字符串 ID 解析为不可变调色板、分模式棋盘资源、semantic-v1 棋子 atlas 和语义特效描述；经典与三国棋盘均实际注入并消费。ThemePackageCatalog 扫描 `assets/themes` 与 `user://themes`，ThemeManifestReader 使用系统 XmlReader 禁用 DTD/实体并限制大小、深度、路径和资源类型，ThemeResourceLease 只在 Godot 主线程加载图片/shader并由视图幂等释放。主题不进入规则、快照或网络。内置春日 XML 使用更浅底色、低装饰强度以及动态柳叶、桃花和春燕。
 
@@ -290,6 +290,7 @@ Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于
 | 参数 | 验证目标 |
 | --- | --- |
 | --smoke-ui / --capture-ui | 五张横向玩法卡片、三十三个叶子入口、五子棋/Junqi 页面构造、经典 LAN 消息栏边界、设置页与春季皮肤；可选画廊截图 |
+| --smoke-gomoku-ai | Windows 下读取 `XIANGQI_GOMOKU_AI_PATH`，以 15 路禁手局验证 Rapfi/Piskvork 探测、人类首着和一手合法回复 |
 | --smoke-feedback / --capture-feedback | 经典主题注入/回退、棋子与反馈配色、选中/落地/回复/撤销/翻转/空闲反馈；可选图形截图 |
 | --smoke-three / --capture-three | 三国三方朝下视角、三条命名国界留白、九宫中心、移动插值/落点、主题应用、405 次旋转命中往返、243 拓扑边、面积铺满与设置 |
 | --smoke-profile-ui | 经典资料卡与临时头像 |
@@ -307,7 +308,7 @@ Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于
 
 2026-09-09 揭棋 LAN/Steam 房主权威脱敏、Seed 承诺/赛后验证和直播棋谱阻止已实现；军旗领域、网络控制器、独立棋盘、热座遮罩、四卡二十四叶画廊及 AC2 记录/复盘已实现，并通过 58 项核心测试和 Godot C# 编译。真实双机 LAN、Steam 好友实联、Android 触控及军旗/画廊人工视觉验收仍未完成；揭棋长打与 120 步无吃子裁决仍未实现。
 
-2026-09-10 五子棋领域、可配方格几何、本地/LAN/Steam 控制器、SGF 记录/导入和五卡三十三叶画廊已实现；AI 仍只有未实现告知。全屏 expand、经典 LAN 消息栏和试下完整动效亦已修复。核心测试与 Godot headless smoke 已通过；真实设备/账号及复杂禁手棋库对拍尚未验收。
+2026-09-10 五子棋领域、可配方格几何、本地/LAN/Steam 控制器、SGF 记录/导入和五卡三十三叶画廊已实现；新增可替换 `IGomokuAiEngine`、主线程轮询协调器和桌面 Rapfi/Piskvork 适配器，官方 2025-06-15 Windows SSE 包的 freestyle/renju 协议实测通过且未进入仓库。Android AI、真实设备/账号及复杂禁手棋库对拍尚未验收。全屏 expand、经典 LAN 消息栏和试下完整动效亦已修复。
 
 2026-09-09 暗子背面/翻面修复通过 48 项核心回归、Android 与最终 Windows 构建（均 0 警告/错误）。揭子平移和翻面现共用同一时间线，不再在落点后追加翻面阶段。`--smoke-feedback` 已增加无字背面、covered→明子翻面和动画释放断言；本机 Godot 4.7.2 headless 可初始化 .NET，但多种启动参数均在主场景 `_Ready` 前以 0 退出、没有 PASS/FAIL，因此该 smoke 和实际翻面观感仍记为未验收。
 

@@ -1,6 +1,6 @@
 # 抽象层使用手册
 
-更新：2026-09-08。总架构与玩法路由见 [根文档](../TECHNICAL_ARCHITECTURE.md)，本次检查证据见 [架构检查](architecture-review.md)。本文说明当前接口如何使用，不声称未完成的注入链已经可替换。
+更新：2026-09-10。总架构与玩法路由见 [根文档](../TECHNICAL_ARCHITECTURE.md)，本次检查证据见 [架构检查](architecture-review.md)。本文说明当前接口如何使用，不声称未完成的注入链已经可替换。
 
 ## 1. 先选择正确边界
 
@@ -129,7 +129,7 @@ GameSession 是具体门面而非接口，其私有 ChessGame 防止 UI 直接�
 
 网络实现使用房主权威裁决。揭棋客户端永远不接收直播 Seed/暗子提示，连接时仅接收 SHA-256 Seed 承诺，终局后验证 Seed 与完整重放；军旗房主为每个玩家生成不同的 `JunqiPlayerSnapshot`，双方完整布阵只在终局后释放以建立 AC2 棋谱。P2P 房主在两种玩法中都是可信裁判；端口认证不等于无信任公平性。详细前置条件、事件顺序、错误、资源所有权与限制分别见 [揭棋玩法](jieqi.md) 和 [军旗玩法](junqi.md)。
 
-`IGomokuMatchController` 只发布 `GomokuSnapshot`、本地颜色、就绪/连接/落子能力，并接受 `GridPoint` 意图。本地与网络实现是实际注入点；网络房主复验预期手数与棋规，客户端逐手重放权威主线。完整契约见 [五子棋玩法](gomoku.md)。
+`IGomokuMatchController` 只发布 `GomokuSnapshot`、本地颜色、就绪/连接/落子能力，并接受 `GridPoint` 意图。本地、网络和 AI 实现是实际注入点；`InitializeAsync` 负责可取消准备，`Poll` 负责把异步完成收敛到调用线程。本地/网络实现的这两个方法为空操作。网络房主复验预期手数与棋规，客户端逐手重放权威主线；AI 协调器复验局面版本、行棋方和领域合法性。完整契约见 [五子棋玩法](gomoku.md)。
 
 ## 7. 跨玩法房管消息板：RoomChatManager
 
@@ -171,6 +171,14 @@ InitializeAsync/NewGameAsync/SearchAsync/DisposeAsync 是后端生命周期；Se
 AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子复验和人类决策轮撤销。测试用 FakeAiEngine 隔离真实进程；新适配器仍必须验证非法输出、过期结果、取消、释放和重新开局。
 
 端口面向经典棋力分析，不适用于三国，也没有自然语言聊天方法。当前 UI 配置必须有 EnginePath，且 GameScreen 要求实现为 Node。远程实现应先补独立的后端配置与驱动/生命周期注入，不应伪造一个无用本地路径来绕过约束。
+
+### 五子棋：IGomokuAiEngine
+
+定义：[GomokuAi.cs](../src/Xiangqi.Core/Application/Gomoku/GomokuAi.cs)；桌面适配器：[PiskvorkProcessGomokuAiEngine.cs](../src/Presentation/AI/PiskvorkProcessGomokuAiEngine.cs)。
+
+`IGomokuAiEngine` 的输入是不可变局面和有限思考预算，输出只是候选交叉点。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是实际消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。屏幕退出释放 controller，controller 取消搜索并幂等释放 engine。
+
+新增实现应复用这一端口并说明线程、取消和资源所有权。Piskvork 适配器每次搜索拥有子进程，禁用 shell，限制协议行，取消时终止进程树。常见误用包括：UI 直接采用引擎坐标、把 Rapfi 模型复制进导出包、从后台任务触碰 Godot 节点、或者把 rule 2 当成所有五子棋规则。测试入口为核心自运行测试中的 fake engine；真实适配器另做官方引擎烟测。当前 Android 没有外部进程实现。
 
 ## 10. 表现语义、反馈与主题
 
