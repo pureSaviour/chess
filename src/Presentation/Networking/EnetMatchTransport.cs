@@ -8,7 +8,7 @@ namespace Xiangqi.Presentation.Networking;
 /// packet validation and command encoding live in <see cref="MatchWireProtocol"/> and are shared
 /// with Steam, keeping gameplay behavior independent of the selected network backend.
 /// </summary>
-public partial class EnetMatchTransport : Node, IMatchTransport
+public partial class EnetMatchTransport : Node, IMatchTransport, ITwoPlayerPacketTransport
 {
     public const int DefaultPort = 27888;
     private readonly ENetMultiplayerPeer _peer = new();
@@ -35,8 +35,12 @@ public partial class EnetMatchTransport : Node, IMatchTransport
     public event Action<MatchOfferResponse>? MatchOfferResponseReceived;
     public event Action<PlayerProfileCommand>? PlayerProfileReceived;
     public event Action<TransportStatus>? StatusChanged;
+    public event Action<ReadOnlyMemory<byte>>? PacketReceived;
+    public event Action<TransportStatus>? PacketStatusChanged;
     public new bool IsConnected { get; private set; }
     public bool IsHost => _isHost;
+    public bool IsPacketConnected => IsConnected;
+    public bool IsPacketHost => IsHost;
 
     public static EnetMatchTransport Host(int port = DefaultPort)
     {
@@ -68,7 +72,7 @@ public partial class EnetMatchTransport : Node, IMatchTransport
         return transport;
     }
 
-    public override void _Ready() => StatusChanged?.Invoke(new TransportStatus(
+    public override void _Ready() => PublishStatus(new TransportStatus(
         TransportConnectionState.Connecting,
         _isHost ? "房间已创建，等待另一位玩家加入。" : "正在连接房主。"));
 
@@ -87,8 +91,14 @@ public partial class EnetMatchTransport : Node, IMatchTransport
             var sender = _peer.GetPacketPeer();
             var packet = _peer.GetPacket();
             if (_remotePeerId is not null && sender != _remotePeerId.Value) continue;
+            if (PacketReceived is not null)
+            {
+                if (packet.Length <= MatchWireProtocol.MaximumPacketBytes) PacketReceived.Invoke(packet);
+                else PublishStatus(new TransportStatus(TransportConnectionState.Faulted, "收到超过上限的联机数据。"));
+                continue;
+            }
             if (TryDispatch(packet)) continue;
-            StatusChanged?.Invoke(new TransportStatus(
+            PublishStatus(new TransportStatus(
                 TransportConnectionState.Faulted, "收到格式或版本不正确的联机数据。"));
         }
     }
@@ -116,6 +126,12 @@ public partial class EnetMatchTransport : Node, IMatchTransport
     public ValueTask SendPlayerProfileAsync(
         PlayerProfileCommand command, CancellationToken cancellationToken = default) =>
         SendAsync(MatchWireProtocol.Encode(command), cancellationToken);
+    public ValueTask SendPacketAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
+    {
+        if (packet.Length is < 1 or > MatchWireProtocol.MaximumPacketBytes)
+            throw new ArgumentOutOfRangeException(nameof(packet), "联机数据包长度无效。");
+        return SendAsync(packet.ToArray(), cancellationToken);
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -144,7 +160,7 @@ public partial class EnetMatchTransport : Node, IMatchTransport
         _remotePeerId = id;
         IsConnected = true;
         if (_isHost) _peer.RefuseNewConnections = true;
-        StatusChanged?.Invoke(new TransportStatus(
+        PublishStatus(new TransportStatus(
             TransportConnectionState.Connected, "双方已连接，可以开始对局。"));
     }
 
@@ -154,7 +170,7 @@ public partial class EnetMatchTransport : Node, IMatchTransport
         _remotePeerId = null;
         IsConnected = false;
         SetProcess(false);
-        StatusChanged?.Invoke(new TransportStatus(
+        PublishStatus(new TransportStatus(
             TransportConnectionState.Disconnected, "另一位玩家已断开连接。"));
     }
 
@@ -168,13 +184,13 @@ public partial class EnetMatchTransport : Node, IMatchTransport
         {
             _remotePeerId ??= MultiplayerPeer.TargetPeerServer;
             IsConnected = true;
-            StatusChanged?.Invoke(new TransportStatus(TransportConnectionState.Connected, "已连接房主。"));
+            PublishStatus(new TransportStatus(TransportConnectionState.Connected, "已连接房主。"));
         }
         else if (current == MultiplayerPeer.ConnectionStatus.Disconnected &&
                  previous == MultiplayerPeer.ConnectionStatus.Connecting)
         {
             IsConnected = false;
-            StatusChanged?.Invoke(new TransportStatus(
+            PublishStatus(new TransportStatus(
                 TransportConnectionState.Faulted, "连接失败，请检查地址、端口和防火墙。"));
         }
     }
@@ -216,6 +232,12 @@ public partial class EnetMatchTransport : Node, IMatchTransport
         _peer.PeerDisconnected -= OnPeerDisconnected;
         _peer.Close();
         _peer.Dispose();
+    }
+
+    private void PublishStatus(TransportStatus status)
+    {
+        StatusChanged?.Invoke(status);
+        PacketStatusChanged?.Invoke(status);
     }
 
     private static void ValidatePort(int port)

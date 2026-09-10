@@ -22,6 +22,21 @@ public enum TransportConnectionState { Connecting, Connected, Disconnected, Faul
 public readonly record struct TransportStatus(TransportConnectionState State, string? Detail = null);
 
 /// <summary>
+/// Reliable, authenticated two-player packet connection. It transports bounded opaque payloads
+/// and reports connection state, but does not interpret a game's protocol, authorize commands,
+/// own match state, or call UI code from a background thread. Implementations publish events on
+/// their driving thread and must make disposal idempotent.
+/// </summary>
+public interface ITwoPlayerPacketTransport : IAsyncDisposable
+{
+    event Action<ReadOnlyMemory<byte>>? PacketReceived;
+    event Action<TransportStatus>? PacketStatusChanged;
+    bool IsPacketConnected { get; }
+    bool IsPacketHost { get; }
+    ValueTask SendPacketAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Transport seam for future LAN (Godot ENet) and Steam implementations. A transport moves
 /// commands only; the receiving GameSession/ChessGame remains authoritative and re-validates
 /// every move. Snapshot hashes and reconnect negotiation can be layered onto this contract.

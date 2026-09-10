@@ -9,7 +9,7 @@
 - 明子按实际身份移动；明士只保留斜走一步，明象保留田字与塞象眼，但均不再受九宫/河界限制。
 - 将军、自将校验、飞将、吃将、将死和困毙沿用经典语义。当前尚未实现赛事级长将/长捉与 120 步无吃子裁决。
 
-领域入口是 `JieqiGame.Create(ulong seed)`。`JieqiPiece` 同时保存 ActualKind、CoverKind 与 IsRevealed；这些均属权威状态。`JieqiSnapshot.ToPublicPosition()` 将所有暗子投影为 `BuiltInPieceKinds.Covered`，正常 UI 及未来网络协议只能消费该投影。`HiddenIdentityHints()` 只允许赛后复盘使用，不能进入直播、日志提示或远端消息。
+领域入口是 `JieqiGame.Create(ulong seed)`。`JieqiPiece` 同时保存 ActualKind、CoverKind 与 IsRevealed；这些均属权威状态。`JieqiSnapshot.ToPublicPosition()` 将所有暗子投影为 `BuiltInPieceKinds.Covered`，正常 UI 及当前网络协议只能消费该投影。`HiddenIdentityHints()` 只允许赛后复盘使用，不能进入直播、日志提示或远端消息。
 
 ## 随机与棋谱
 
@@ -25,8 +25,12 @@
 
 Session 拥有游戏和正式着法；Screen 拥有 Godot 节点；Store 拥有文件；均在当前主线程同步使用。离开页面后节点释放，纯 C# Session 无非托管资源。
 
-## 尚未实现 / 不得误称已完成
+## 联机安全边界（已实现）
 
-揭棋 LAN 与 Steam 入口已在画廊预留，但尚未开放。经典协议是双方持有完整局面的锁步模型；若广播 Seed，会让对手算出所有暗子。后续必须在 `IMatchTransport` 之上新增房主权威命令与脱敏快照/揭子事件，验证来源、序号、局面版本和重连历史，且 Seed 只在赛后记录中披露。不能为了复用现有协议牺牲暗子保密性。
+LAN 与 Steam 通过 `NetworkJieqiMatchController` 使用房主权威模型：只有房主持有 `JieqiGameSession` 和 Seed，客户端只发送带预期 Ply 的走子意图，并接收 `ToPublicPosition()` 产生的脱敏快照与权威合法落点。底层复用 `ITwoPlayerPacketTransport`，不复用经典双方完整局面的锁步消息。协议限制为 16,000 字节、带独立版本/玩法标记，并验证消息角色、坐标、枚举、序号和局面连续性。
 
-测试入口：`dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`，覆盖确定性排列、公开投影脱敏、首步槽位走法、翻明、Seed/Shuffle 棋谱往返和未知算法拒绝。`--smoke-feedback` 另外断言背面标签为空、covered→明子会安排翻面阶段且最终释放动画状态；不同分辨率下的背纹、翻面观感与淡字可读性仍需截图/人工验收。
+连接建立时房主发送 `SHA-256("jieqi-authority-v1:{seed:X16}")` 承诺；对局结束后才释放 Seed，客户端重新计算承诺并逐手重放。`JieqiGameSession.CreateRecord` 也拒绝未结束的会话，防止 UI 或日志提前泄露。该机制能发现房主赛后更换 Seed，但 P2P 房主仍是实时裁决者，不能阻止恶意房主选择有利初始排列；需要消除此信任时应引入中立服务器或双方提交后联合派生随机数。
+
+当前协议没有经典房间的悔棋、和棋协商、聊天、棋钟与断线续局；断线后的当前对局不可恢复。界面不显示未实现的计时选项。事件由 Godot transport 轮询所在主线程同步进入控制器；`JieqiGameScreen` 负责解绑事件并释放控制器，控制器幂等释放其 transport。
+
+测试入口：`dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`，覆盖确定性排列、公开投影脱敏、首步槽位走法、翻明、Seed/Shuffle 棋谱往返、直播棋谱阻止、房主/客户端同步和 Seed 不进入直播数据。`--smoke-feedback` 另外断言背面标签为空、covered→明子会安排翻面阶段且最终释放动画状态；真实双机 LAN、Steam 好友实联、断线体验与不同分辨率视觉仍需人工验收。

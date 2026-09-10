@@ -31,6 +31,7 @@ var tests = new (string Name, Action Run)[]
     ("PGN/ICCS 棋谱可合法往返并保留 FEN 残局", PgnRecordRoundTrip),
     ("棋谱导入拒绝非法着法", PgnRejectsIllegalMove),
     ("试下分支不修改权威棋局", TrialIsIsolated),
+    ("试下着法复用权威会话的表现语义", TrialPresentationCues),
     ("复盘分析串行缓存并将评分归一到红方", ReplayAnalysis),
     ("AI 着法经 GameSession 校验且可整回合悔棋", AiCoordinator)
 };
@@ -39,6 +40,8 @@ tests = tests.Concat(ThreeKingdomsTests.All).ToArray();
 tests = tests.Concat(ThreeKingdomsRuleTests.All).ToArray();
 tests = tests.Concat(ThreeExtensionTests.All).ToArray();
 tests = tests.Concat(JieqiTests.All).ToArray();
+tests = tests.Concat(JunqiTests.All).ToArray();
+tests = tests.Concat(GomokuTests.All).ToArray();
 var failures = 0;
 foreach (var test in tests)
 {
@@ -463,6 +466,18 @@ static void TrialIsIsolated()
     Equal(0, session.Snapshot.PlyNumber);
 }
 
+static void TrialPresentationCues()
+{
+    var session = new GameSession();
+    var trial = session.BeginTrial();
+    var before = trial.Snapshot;
+    var result = trial.TryMove(new BoardPosition(0, 3), new BoardPosition(0, 4));
+    var cues = session.DescribeMove(before, trial.Snapshot, result);
+    Equal(PresentationCueKind.Move, cues[0].Kind);
+    Throws<ArgumentException>(() => session.DescribeMove(before, before,
+        MoveResult.Rejected(default, MoveRejection.PieceRuleViolation)));
+}
+
 static void ReplayAnalysis()
 {
     var game = ChessGame.CreateStandard();
@@ -544,6 +559,13 @@ static void Contains<T>(IEnumerable<T> values, T expected)
 {
     if (!values.Contains(expected))
         throw new InvalidOperationException($"Collection did not contain '{expected}'.");
+}
+
+static void Throws<T>(Action action) where T : Exception
+{
+    try { action(); }
+    catch (T) { return; }
+    throw new InvalidOperationException($"Expected {typeof(T).Name}.");
 }
 
 sealed class FakeTransport : IMatchTransport

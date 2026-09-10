@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#17231d"/><stop offset="1" stop-color="#5b251e"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#e8c477" stop-opacity=".72"/><stop offset="1" stop-color="#e8c477" stop-opacity="0"/></radialGradient>
+    <pattern id="grain" width="19" height="19" patternUnits="userSpaceOnUse"><path d="M0 18L18 0" stroke="#fff" stroke-opacity=".025"/></pattern>
+  </defs>
+  <rect width="900" height="1200" fill="url(#bg)"/><rect width="900" height="1200" fill="url(#grain)"/>
+  <circle cx="455" cy="490" r="390" fill="url(#glow)"/>
+  <g transform="translate(140 180) rotate(-7 310 360)" stroke="#d9b86b" stroke-width="7" opacity=".78">
+    <rect x="20" y="20" width="600" height="760" rx="18" fill="#4a3827" fill-opacity=".55"/>
+    <path d="M70 90H570M70 230H570M70 370H570M70 510H570M70 650H570M70 90V650M195 90V650M320 90V650M445 90V650M570 90V650" fill="none"/>
+    <path d="M70 230L195 370L70 510M570 230L445 370L570 510M195 230L320 370L195 510M445 230L320 370L445 510" fill="none" opacity=".55"/>
+  </g>
+  <g fill="none" stroke="#fff4d8" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(225 315) rotate(-7)"><rect x="-72" y="-42" width="144" height="84" rx="12" fill="#a74337" stroke="#f1d28f" stroke-width="5"/><path d="M-25 12L0-22L25 12M-17 2H17"/></g>
+    <g transform="translate(468 536) rotate(-7)"><rect x="-72" y="-42" width="144" height="84" rx="12" fill="#344b5a" stroke="#f1d28f" stroke-width="5"/><path d="M-27 0H27M0-27V27"/></g>
+    <g transform="translate(650 770) rotate(-7)"><rect x="-72" y="-42" width="144" height="84" rx="12" fill="#a74337" stroke="#f1d28f" stroke-width="5"/><path d="M-22 27V-28L29-12L-22 4"/></g>
+  </g>
+  <path d="M130 1010C310 900 585 910 770 1010" fill="none" stroke="#dfbd72" stroke-width="9" opacity=".55"/>
+</svg>

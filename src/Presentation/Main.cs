@@ -1,6 +1,12 @@
 using Godot;
 using Xiangqi.Core.Application;
+using Xiangqi.Core.Application.Jieqi;
+using Xiangqi.Core.Application.Junqi;
+using Xiangqi.Core.Application.Gomoku;
 using Xiangqi.Core.Domain;
+using Xiangqi.Core.Domain.Junqi;
+using Xiangqi.Core.Domain.Gomoku;
+using Xiangqi.Core.Domain.Grid;
 using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Profiles;
@@ -18,6 +24,7 @@ public partial class Main : Control
 {
     private AppSettings _settings = null!;
     private IBoardThemeCatalog _themes = null!;
+    private EnginePackageInstaller _engineInstaller = null!;
     private Control? _currentScreen;
     private AcceptDialog _errorDialog = null!;
     private bool _debugNetworkSmoke;
@@ -34,11 +41,12 @@ public partial class Main : Control
         AddChild(_errorDialog);
         _settings = AppSettings.Load();
         _themes = ThemePackageCatalog.CreateDefault();
+        _engineInstaller = new EnginePackageInstaller(ProjectSettings.GlobalizePath("user://engines"));
         _settings.Apply();
         // Steam Overlay and its client APIs require an interactive display. Keeping headless
         // smoke/tests out of the native initialization path also makes server-side CI deterministic.
         if (!string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase) &&
-            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback")))
+            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback" or "--smoke-gomoku-ai" or "--smoke-engine-install-rapfi" or "--smoke-engine-install-pikafish")))
             InitializeSteam();
         if (TryStartDebugSmokeMode()) return;
         ShowMainMenu();
@@ -66,10 +74,24 @@ public partial class Main : Control
         () => ShowThreeRecords(false),
         () => ShowThreeRecords(true),
         StartJieqiLocal,
-        () => ShowJieqiNetworkPending("局域网联机"),
-        () => ShowJieqiNetworkPending("Steam 邀请好友"),
+        () => ShowJieqiGallery(ClassicGalleryEntry.Lan),
+        () => ShowJieqiGallery(ClassicGalleryEntry.Steam),
         () => ShowJieqiRecords(false),
-        () => ShowJieqiRecords(true)));
+        () => ShowJieqiRecords(true),
+        StartJunqiLocal,
+        () => ShowJunqiGallery(ClassicGalleryEntry.Lan),
+        () => ShowJunqiGallery(ClassicGalleryEntry.Steam),
+        () => ShowJunqiRecords(false),
+        () => ShowJunqiRecords(true),
+        () => ShowGomokuGallery(ClassicGalleryEntry.Local),
+        () => ShowGomokuGallery(ClassicGalleryEntry.Lan),
+        () => ShowGomokuGallery(ClassicGalleryEntry.Steam),
+        () => ShowGomokuRecords(false),
+        () => ShowGomokuRecords(true),
+        () => ShowGomokuImport(false),
+        () => ShowGomokuImport(true),
+        StartConfiguredGomokuAiMatch,
+        ShowGomokuAiSettings));
 
     private void StartJieqiLocal()
     {
@@ -81,10 +103,109 @@ public partial class Main : Control
     private void ShowJieqiRecords(bool saved) => SwitchTo(new JieqiRecordScreen(saved, ShowGallery,
         record => SwitchTo(new JieqiReplayScreen(_settings, _themes, record, () => ShowJieqiRecords(saved)))));
 
-    private void ShowJieqiNetworkPending(string route)
+    private void ShowJieqiGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
+        ShowGallery, _ => StartJieqiLocal(), StartJieqiLanHost, StartJieqiLanClient,
+        StartJieqiSteamInvite, entry, TwoPlayerGameMode.Jieqi));
+
+    private void StartJieqiLanHost(int port, NetworkMatchConfiguration configuration)
     {
-        _errorDialog.DialogText = $"揭棋{route}需要房主权威的脱敏状态协议，不能复用会泄露随机种子的经典锁步协议；该入口已预留，但本轮尚未开放。";
-        _errorDialog.PopupCentered(new Vector2I(620, 190));
+        try
+        {
+            var transport = EnetMatchTransport.Host(port);
+            var controller = new NetworkJieqiMatchController(transport, configuration.HostSide);
+            SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
+                $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJieqiLanClient(string address, int port)
+    {
+        try
+        {
+            var transport = EnetMatchTransport.Join(address, port);
+            var controller = new NetworkJieqiMatchController(transport, null);
+            SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
+                $"客户端 · {address}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJieqiSteamInvite(NetworkMatchConfiguration configuration) =>
+        StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Jieqi });
+
+    private void StartJunqiLocal() => SwitchTo(new JunqiGameScreen(ShowGallery));
+
+    private void ShowJunqiRecords(bool saved) => SwitchTo(new JunqiRecordScreen(saved, ShowGallery,
+        record => SwitchTo(new JunqiReplayScreen(record, () => ShowJunqiRecords(saved)))));
+
+    private void ShowJunqiGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
+        ShowGallery, _ => StartJunqiLocal(), StartJunqiLanHost, StartJunqiLanClient,
+        StartJunqiSteamInvite, entry, TwoPlayerGameMode.Junqi));
+
+    private void StartJunqiLanHost(int port, NetworkMatchConfiguration configuration)
+    {
+        try
+        {
+            var transport = EnetMatchTransport.Host(port);
+            var controller = new NetworkJunqiMatchController(transport, ToJunqiSide(configuration.HostSide));
+            SwitchTo(new JunqiGameScreen(controller, $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJunqiLanClient(string address, int port)
+    {
+        try
+        {
+            var transport = EnetMatchTransport.Join(address, port);
+            var controller = new NetworkJunqiMatchController(transport, null);
+            SwitchTo(new JunqiGameScreen(controller, $"客户端 · {address}:{port}", ShowGallery, transport));
+        }
+        catch (Exception error) { ShowError(error.Message); }
+    }
+
+    private void StartJunqiSteamInvite(NetworkMatchConfiguration configuration) =>
+        StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Junqi });
+
+    private static JunqiSide ToJunqiSide(PieceSide side) => side == PieceSide.Red ? JunqiSide.First : JunqiSide.Second;
+
+    private void ShowGomokuGallery(ClassicGalleryEntry entry) => SwitchTo(new GomokuGalleryScreen(
+        ShowGallery, StartGomokuLocal, StartGomokuLanHost, StartGomokuLanClient, StartGomokuSteamInvite, entry));
+    private void StartGomokuLocal(GomokuRoomOptions options) => SwitchTo(new GomokuGameScreen(
+        new LocalGomokuMatchController(options.BoardSize, options.Rules), "本地对决", ShowGallery));
+    private void StartGomokuLanHost(int port, GomokuRoomOptions options)
+    {
+        try { var transport=EnetMatchTransport.Host(port); SwitchTo(new GomokuGameScreen(
+            new NetworkGomokuMatchController(transport,options), $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport)); }
+        catch(Exception error){ShowError(error.Message);}
+    }
+    private void StartGomokuLanClient(string address,int port)
+    {
+        try { var transport=EnetMatchTransport.Join(address,port); SwitchTo(new GomokuGameScreen(
+            new NetworkGomokuMatchController(transport,null), $"客户端 · {address}:{port}", ShowGallery, transport)); }
+        catch(Exception error){ShowError(error.Message);}
+    }
+    private void StartGomokuSteamInvite(GomokuRoomOptions options) => StartSteamInvite(new NetworkMatchConfiguration(
+        TimeControl.Unlimited, options.HostColor==StoneColor.Black?PieceSide.Red:PieceSide.Black,
+        TwoPlayerGameMode.Gomoku, options.BoardSize, (int)options.Rules));
+    private void ShowGomokuRecords(bool saved)=>SwitchTo(new GomokuRecordScreen(saved,ShowGallery,
+        record=>SwitchTo(new GomokuReplayScreen(record,()=>ShowGomokuRecords(saved)))));
+    private void ShowGomokuImport(bool position)=>SwitchTo(new GomokuImportScreen(position,ShowGallery,
+        record=>SwitchTo(new GomokuReplayScreen(record,ShowGallery))));
+    private void ShowGomokuAiSettings()=>SwitchTo(new GomokuAiSettingsScreen(_settings,_engineInstaller,saved=>{_settings=saved;_settings.SaveAndApply();ShowGallery();},ShowGallery));
+    private void StartConfiguredGomokuAiMatch()
+    {
+#if GODOT_ANDROID
+        ShowError("Android 当前不能启动外部 Rapfi 进程；移动端原生引擎尚未接入。");
+#else
+        if(string.IsNullOrWhiteSpace(_settings.GomokuAiEnginePath)||!File.Exists(_settings.GomokuAiEnginePath)){ShowError("请先在五子棋人机设置中选择 Rapfi 可执行文件。");return;}
+        var human=_settings.GomokuAiSideChoice switch{1=>StoneColor.White,2=>Random.Shared.Next(2)==0?StoneColor.Black:StoneColor.White,_=>StoneColor.Black};
+        var rules=_settings.GomokuAiForbiddenMoves?GomokuRuleSet.RenjuForbiddenMoves:GomokuRuleSet.Freestyle;
+        var engine=new PiskvorkProcessGomokuAiEngine(_settings.GomokuAiEnginePath);
+        var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,_settings.GomokuAiThinkMilliseconds);
+        SwitchTo(new GomokuGameScreen(controller,$"人机对决 · Rapfi · 玩家执{(human==StoneColor.Black?"黑":"白")}",ShowGallery));
+#endif
     }
 
     private void ShowAiSettings() => SwitchTo(new AiSettingsScreen(_settings, saved =>
@@ -92,7 +213,7 @@ public partial class Main : Control
         _settings = saved;
         _settings.SaveAndApply();
         ShowGallery();
-    }, ShowGallery));
+    }, ShowGallery, _engineInstaller));
 
     private void StartConfiguredAiMatch()
     {
@@ -286,6 +407,28 @@ public partial class Main : Control
 
     private void OnSteamMatchReady(SteamMatchReady match)
     {
+        if (match.Configuration.Mode == TwoPlayerGameMode.Jieqi)
+        {
+            var controller = new NetworkJieqiMatchController(match.Transport, match.Configuration.HostSide);
+            SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
+                $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            return;
+        }
+        if (match.Configuration.Mode == TwoPlayerGameMode.Junqi)
+        {
+            var controller = new NetworkJunqiMatchController(match.Transport, ToJunqiSide(match.Configuration.HostSide));
+            SwitchTo(new JunqiGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            return;
+        }
+        if (match.Configuration.Mode == TwoPlayerGameMode.Gomoku)
+        {
+            var options = new GomokuRoomOptions(match.Configuration.BoardSize,
+                (GomokuRuleSet)match.Configuration.RuleFlags,
+                match.Configuration.HostSide == PieceSide.Red ? StoneColor.Black : StoneColor.White);
+            var controller = new NetworkGomokuMatchController(match.Transport, match.IsHost ? options : null);
+            SwitchTo(new GomokuGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            return;
+        }
         var custom = CustomPlayerProfileFactory.Create(_settings, match.Profiles.Local.DisplayName);
         if (custom is not null) match.Profiles.ReplaceLocal(custom);
         SwitchTo(new GameScreen(
@@ -322,6 +465,7 @@ public partial class Main : Control
 
     public override void _ExitTree()
     {
+        _engineInstaller?.Dispose();
 #if GODOT_WINDOWS
         _threeSteam?.Dispose();
         if (_steam is null) return;
@@ -355,6 +499,17 @@ public partial class Main : Control
             return true;
         }
 #if GODOT_WINDOWS
+        if (arguments.Contains("--smoke-engine-install-rapfi") || arguments.Contains("--smoke-engine-install-pikafish"))
+        {
+            _ = RunEngineInstallSmokeAsync(arguments.Contains("--smoke-engine-install-rapfi")
+                ? EnginePackageKind.Rapfi : EnginePackageKind.Pikafish);
+            return true;
+        }
+        if (arguments.Contains("--smoke-gomoku-ai"))
+        {
+            _ = RunGomokuAiSmokeAsync();
+            return true;
+        }
         if (arguments.Contains("--smoke-steam-init"))
         {
             if (_steam is null)
@@ -438,8 +593,8 @@ public partial class Main : Control
         {
             ShowGallery();
             await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not ModeGalleryScreen { CardCount: 3, OptionCount: 19 })
-                throw new InvalidOperationException("Gallery must expose three horizontal mode cards and nineteen leaf routes.");
+            if (_currentScreen is not ModeGalleryScreen { CardCount: 5, OptionCount: 33 })
+                throw new InvalidOperationException("Gallery must expose five horizontal mode cards and thirty-three leaf routes.");
             if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
             {
                 await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
@@ -449,6 +604,36 @@ public partial class Main : Control
                 if (image.SavePng(System.IO.Path.Combine(directory, "mode-gallery.png")) != Error.Ok)
                     throw new IOException("Gallery capture failed.");
             }
+            ShowAiSettings();
+            await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not AiSettingsScreen) throw new InvalidOperationException("Classic AI settings failed to instantiate.");
+            ShowGomokuAiSettings();
+            await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GomokuAiSettingsScreen) throw new InvalidOperationException("Gomoku AI settings failed to instantiate.");
+            StartLanHost(EnetMatchTransport.DefaultPort,
+                new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red));
+            await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
+            var lanScreen = _currentScreen as GameScreen;
+            if (lanScreen is null || !lanScreen.IsMessagePanelFullyVisible)
+                throw new InvalidOperationException($"Classic LAN message panel is outside the viewport: {lanScreen?.MessagePanelBounds ?? "screen missing"}.");
+            StartGomokuLocal(new GomokuRoomOptions(19, GomokuRuleSet.RenjuForbiddenMoves, StoneColor.Black));
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GomokuGameScreen)
+                throw new InvalidOperationException("Gomoku local screen failed to instantiate.");
+            StartJunqiLocal();
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not JunqiGameScreen junqi)
+                throw new InvalidOperationException("Junqi local screen failed to instantiate.");
+            if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
+            {
+                junqi.RevealForSmoke();
+                await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+                var directory = ProjectSettings.GlobalizePath("res://build/ui-qa");
+                System.IO.Directory.CreateDirectory(directory);
+                using var image = GetViewport().GetTexture().GetImage();
+                if (image.SavePng(System.IO.Path.Combine(directory, "junqi-board.png")) != Error.Ok)
+                    throw new IOException("Junqi capture failed.");
+            }
             ShowSettings();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             var smokeSettings = _settings.Copy();
@@ -456,7 +641,7 @@ public partial class Main : Control
             smokeSettings.ShowBoardCoordinates = true;
             SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
-            GD.Print("[Xiangqi.UI.Smoke] Three gallery cards, nineteen routes, settings and spring-board local match instantiated.");
+            GD.Print("[Xiangqi.UI.Smoke] Five gallery cards, thirty-three routes, Junqi, Gomoku, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }
         catch (Exception error)
@@ -467,6 +652,60 @@ public partial class Main : Control
     }
 
 #if GODOT_WINDOWS
+    private async Task RunEngineInstallSmokeAsync(EnginePackageKind kind)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"xiangqi-engine-install-smoke-{Guid.NewGuid():N}");
+        try
+        {
+            using var installer = new EnginePackageInstaller(root);
+            var result = await installer.InstallAsync(kind);
+            if (!File.Exists(result.ExecutablePath) || !Path.GetFullPath(result.ExecutablePath).StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Installer returned an invalid executable path.");
+            if (kind == EnginePackageKind.Rapfi)
+            {
+                await using var engine = new PiskvorkProcessGomokuAiEngine(result.ExecutablePath);
+                await engine.InitializeAsync(15, GomokuRuleSet.RenjuForbiddenMoves);
+            }
+            else
+            {
+                var engine = new UciProcessAiEngine(result.ExecutablePath); AddChild(engine);
+                try
+                {
+                    await engine.InitializeAsync();
+                    var search = await engine.SearchAsync(new GameSession().Snapshot, new AiSearchRequest(250));
+                    if (search.BestMove == default) throw new InvalidOperationException("Pikafish returned no move.");
+                }
+                finally { await engine.DisposeAsync(); engine.QueueFree(); }
+            }
+            GD.Print($"[Xiangqi.EngineInstall.Smoke] PASS {kind} {result.Version} {Path.GetFileName(result.ExecutablePath)}");
+            GetTree().Quit();
+        }
+        catch (Exception error) { GD.PushError($"[Xiangqi.EngineInstall.Smoke] FAIL {kind} {error}"); GetTree().Quit(3); }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    private async Task RunGomokuAiSmokeAsync()
+    {
+        var path = System.Environment.GetEnvironmentVariable("XIANGQI_GOMOKU_AI_PATH");
+        if (string.IsNullOrWhiteSpace(path)) { GD.PushError("[Xiangqi.Gomoku.AI.Smoke] XIANGQI_GOMOKU_AI_PATH is missing."); GetTree().Quit(2); return; }
+        await using var controller = new AiGomokuMatchController(new PiskvorkProcessGomokuAiEngine(path),
+            15, GomokuRuleSet.RenjuForbiddenMoves, StoneColor.Black, 1000);
+        try
+        {
+            await controller.InitializeAsync();
+            var human = await controller.SubmitAsync(new GridPoint(7, 7));
+            if (!human.Accepted) throw new InvalidOperationException("Human smoke move was rejected.");
+            var deadline = Time.GetTicksMsec() + 15_000;
+            while (controller.Snapshot.PlyNumber < 2 && Time.GetTicksMsec() < deadline)
+            { await ToSignal(GetTree().CreateTimer(0.02), SceneTreeTimer.SignalName.Timeout); controller.Poll(); }
+            if (controller.Snapshot.PlyNumber != 2 || controller.Snapshot.LastMove is not { } move || move.Point == new GridPoint(7, 7))
+                throw new InvalidOperationException("Rapfi did not return one legal reply.");
+            GD.Print($"[Xiangqi.Gomoku.AI.Smoke] PASS reply={move.Point.Column},{move.Point.Row}");
+            GetTree().Quit();
+        }
+        catch (Exception error) { GD.PushError($"[Xiangqi.Gomoku.AI.Smoke] FAIL {error}"); GetTree().Quit(3); }
+    }
+
     private async Task RunSteamLobbySmokeAsync()
     {
         try

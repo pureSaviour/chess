@@ -8,85 +8,118 @@ using Xiangqi.Presentation.UI;
 
 namespace Xiangqi.Presentation.Screens;
 
-/// <summary>Local Jieqi match screen; the shared BoardView supplies classic movement and selection effects.</summary>
+/// <summary>Jieqi match view; every local or network move passes through the injected controller.</summary>
 public partial class JieqiGameScreen : Control
 {
-    private readonly JieqiGameSession _session;
+    private readonly IJieqiMatchController _controller;
     private readonly BoardView _board;
     private readonly Label _status = new();
     private readonly Button _save;
     private BoardPosition? _selected;
     private IReadOnlyList<BoardPosition> _legal = [];
     private bool _recentSaved;
+    private GameSnapshot _displayed;
 
     public JieqiGameScreen(AppSettings settings, IBoardThemeCatalog themes, ulong seed, Action back)
+        : this(settings, themes, new LocalJieqiMatchController(seed), "本地对决", back) { }
+
+    public JieqiGameScreen(AppSettings settings, IBoardThemeCatalog themes,
+        IJieqiMatchController controller, string roomTitle, Action back, Node? networkDriver = null)
     {
-        _session = new JieqiGameSession(seed);
+        _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        _displayed = controller.Snapshot;
+        if (networkDriver is not null) AddChild(networkDriver);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(32, 20); AddChild(margin);
         var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 10); margin.AddChild(root);
         var header = new HBoxContainer(); root.AddChild(header);
-        var title = UiStyle.CreateTitle("揭棋 · 本地对决", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
+        var title = UiStyle.CreateTitle($"揭棋 · {roomTitle}", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
         _save = UiStyle.CreateButton("保存棋局"); _save.Disabled = true; header.AddChild(_save);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
         var center = new CenterContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; root.AddChild(center);
         _board = new BoardView(themes); _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
-        // null is intentional: live UI receives no hidden-identity dictionary.
         _board.SetCoveredIdentityHints(null, false); center.AddChild(_board);
-        var hint = new Label { Text = "暗子首步按所在槽位走法；落子后翻明。翻明的士、象可走出九宫或过河。", HorizontalAlignment = HorizontalAlignment.Center };
+        var hint = new Label { Text = "暗子首步按所在槽位走法；联机对局只由房主保管秘密排列。", HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
         _board.SquarePressed += OnSquarePressed;
-        _session.StateChanged += Render;
-        _session.MoveCommitted += Animate;
-        _save.Pressed += Save;
-        Render(_session.Snapshot);
+        _controller.Changed += OnChanged; _controller.Message += OnMessage;
+        _save.Pressed += Save; Render(controller.Snapshot);
     }
 
-    private void OnSquarePressed(BoardPosition square)
+    private async void OnSquarePressed(BoardPosition square)
     {
-        if (_board.IsAnimating || _session.Snapshot.IsFinished) return;
-        var own = _session.Snapshot.Pieces.FirstOrDefault(x => x.Position == square).Piece;
-        if (own.Kind.Value is not null && own.Side == _session.Snapshot.SideToMove)
+        var snapshot = _controller.Snapshot;
+        if (_board.IsAnimating || snapshot.IsFinished || !_controller.CanSubmitMove) return;
+        var own = snapshot.Pieces.FirstOrDefault(x => x.Position == square).Piece;
+        if (own.Kind.Value is not null && own.Side == snapshot.SideToMove &&
+            (_controller.LocalSide is null || own.Side == _controller.LocalSide))
         {
-            _selected = square; _legal = _session.GetLegalDestinations(square); Render(_session.Snapshot); return;
+            _selected = square; _legal = _controller.GetLegalDestinations(square); Render(snapshot); return;
         }
         if (_selected is not { } from || !_legal.Contains(square)) return;
-        _session.TryMove(from, square); _selected = null; _legal = [];
+        var result = await _controller.SubmitMoveAsync(from, square); _selected = null; _legal = [];
+        if (!result.Accepted) OnMessage(result.Error ?? $"非法着法：{result.Rejection}。");
+        Render(_controller.Snapshot);
     }
 
-    private void Animate(GameSnapshot before, GameSnapshot after, ChessMove move, bool captured) =>
-        _board.AnimateMove(before, after, move, captured);
+    private void OnChanged()
+    {
+        var next = _controller.Snapshot;
+        if (next.PlyNumber == _displayed.PlyNumber + 1 && TryFindMove(_displayed, next, out var move))
+            _board.AnimateMove(_displayed, next, move, next.Pieces.Count < _displayed.Pieces.Count);
+        _displayed = next; Render(next);
+    }
 
+    private static bool TryFindMove(GameSnapshot before, GameSnapshot after, out ChessMove move)
+    {
+        foreach (var old in before.Pieces)
+        {
+            var current = after.Pieces.FirstOrDefault(x => x.Piece.PieceInstanceId == old.Piece.PieceInstanceId);
+            if (current.Piece.Kind.Value is null || current.Position == old.Position) continue;
+            move = new ChessMove(old.Position, current.Position); return true;
+        }
+        move = default; return false;
+    }
+
+    private void OnMessage(string message) => _status.Text = message;
     private void Render(GameSnapshot snapshot)
     {
         if (!_board.IsAnimating) _board.SetPosition(snapshot, _selected, _legal);
-        _status.Text = snapshot.IsFinished
-            ? snapshot.Winner == PieceSide.Red ? "红方胜" : "黑方胜"
-            : snapshot.SideToMove == PieceSide.Red ? "红方行棋" : "黑方行棋";
+        _status.Text = !_controller.IsConnected ? "等待联机连接"
+            : snapshot.IsFinished ? snapshot.Winner == PieceSide.Red ? "红方胜" : "黑方胜"
+            : $"{(snapshot.SideToMove == PieceSide.Red ? "红方" : "黑方")}行棋" +
+              (_controller.LocalSide is { } local ? $" · 你是{(local == PieceSide.Red ? "红方" : "黑方")}" : "");
         if (!snapshot.IsFinished) return;
         _save.Disabled = false;
         if (_recentSaved) return;
         _recentSaved = true;
-        try { JieqiRecordStore.SaveRecent(BuildRecord(snapshot)); }
+        try { if (TryBuildRecord(snapshot, out var record)) JieqiRecordStore.SaveRecent(record!); }
         catch (Exception error) { GD.PushWarning($"保存揭棋最近对局失败：{error.Message}"); }
     }
 
-    private JieqiGameRecord BuildRecord(GameSnapshot snapshot) => _session.CreateRecord(new Dictionary<string, string>
-    {
-        ["Event"] = "本地联机", ["Red"] = "本地玩家 1", ["Black"] = "本地玩家 2",
-        ["Result"] = snapshot.Winner == PieceSide.Red ? "1-0" : snapshot.Winner == PieceSide.Black ? "0-1" : "*"
-    });
+    private bool TryBuildRecord(GameSnapshot snapshot, out JieqiGameRecord? record) =>
+        _controller.TryCreateFinishedRecord(new Dictionary<string, string>
+        {
+            ["Event"] = _controller.LocalSide is null ? "本地联机" : "网络联机",
+            ["Red"] = "红方", ["Black"] = "黑方",
+            ["Result"] = snapshot.Winner == PieceSide.Red ? "1-0" : snapshot.Winner == PieceSide.Black ? "0-1" : "*"
+        }, out record, out _);
 
     private void Save()
     {
-        try { JieqiRecordStore.SavePermanent(BuildRecord(_session.Snapshot)); _save.Disabled = true; _save.Text = "已保存"; }
+        try
+        {
+            if (!TryBuildRecord(_controller.Snapshot, out var record)) throw new InvalidOperationException("赛后种子尚未就绪。");
+            JieqiRecordStore.SavePermanent(record!); _save.Disabled = true; _save.Text = "已保存";
+        }
         catch (Exception error) { GD.PushWarning($"保存揭棋棋局失败：{error.Message}"); }
     }
 
     public override void _ExitTree()
     {
-        _board.SquarePressed -= OnSquarePressed; _session.StateChanged -= Render; _session.MoveCommitted -= Animate;
+        _board.SquarePressed -= OnSquarePressed; _controller.Changed -= OnChanged; _controller.Message -= OnMessage;
+        _ = _controller.DisposeAsync();
     }
 }
 

@@ -82,6 +82,21 @@ public partial class GameScreen : Control
     private bool _trialOpponentMoveNotified;
     private Button _saveRecordButton = null!;
     private bool _recentRecordWritten;
+    private Control? _messageSidePanel;
+
+    internal bool IsMessagePanelFullyVisible
+    {
+        get
+        {
+            if (_messageSidePanel is null) return false;
+            var rect = _messageSidePanel.GetGlobalRect();
+            var viewport = GetViewportRect();
+            return rect.Position.X >= viewport.Position.X && rect.Position.Y >= viewport.Position.Y &&
+                   rect.End.X <= viewport.End.X + 0.5f && rect.End.Y <= viewport.End.Y + 0.5f;
+        }
+    }
+    internal string MessagePanelBounds => _messageSidePanel is null ? "missing" :
+        $"panel={_messageSidePanel.GetGlobalRect()} viewport={GetViewportRect()} screen={GetGlobalRect()}";
 
     public GameScreen(
         AppSettings settings,
@@ -235,32 +250,34 @@ public partial class GameScreen : Control
         var header = new HBoxContainer();
         header.AddThemeConstantOverride("separation", 10);
         page.AddChild(header);
-        var backButton = UiStyle.CreateButton("‹ 经典象棋");
-        backButton.CustomMinimumSize = new Vector2(130, 41);
+        var backButton = UiStyle.CreateButton("‹ 返回");
+        backButton.CustomMinimumSize = new Vector2(92, 41);
         backButton.Pressed += _back;
         header.AddChild(backButton);
         var title = UiStyle.CreateTitle("经典象棋", 26);
         title.VerticalAlignment = VerticalAlignment.Center;
+        title.ClipText = true;
         header.AddChild(title);
         _connectionLabel = new Label
         {
             Text = _matchLabel,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            ClipText = true
         };
         UiStyle.SetMuted(_connectionLabel, 14);
         header.AddChild(_connectionLabel);
         var settingsButton = UiStyle.CreateButton("设置");
-        settingsButton.CustomMinimumSize = new Vector2(82, 41);
+        settingsButton.CustomMinimumSize = new Vector2(70, 41);
         settingsButton.Pressed += () => _settingsDialog.PopupFor(_settings);
         header.AddChild(settingsButton);
         _trialButton = UiStyle.CreateButton("试下");
-        _trialButton.CustomMinimumSize = new Vector2(82, 41);
+        _trialButton.CustomMinimumSize = new Vector2(76, 41);
         _trialButton.Pressed += ToggleTrial;
         header.AddChild(_trialButton);
         _saveRecordButton = UiStyle.CreateButton("保存棋局");
-        _saveRecordButton.CustomMinimumSize = new Vector2(100, 41);
+        _saveRecordButton.CustomMinimumSize = new Vector2(88, 41);
         _saveRecordButton.Disabled = true;
         _saveRecordButton.Pressed += SaveRecord;
         header.AddChild(_saveRecordButton);
@@ -276,12 +293,12 @@ public partial class GameScreen : Control
         header.AddChild(restart);
 
         _requestUndoButton = UiStyle.CreateButton("申请悔棋");
-        _requestUndoButton.CustomMinimumSize = new Vector2(105, 41);
+        _requestUndoButton.CustomMinimumSize = new Vector2(92, 41);
         _requestUndoButton.Visible = _transport is not null;
         _requestUndoButton.Pressed += () => RequestMatchOffer(MatchOfferKind.Undo);
         header.AddChild(_requestUndoButton);
         _requestDrawButton = UiStyle.CreateButton("申请和棋");
-        _requestDrawButton.CustomMinimumSize = new Vector2(105, 41);
+        _requestDrawButton.CustomMinimumSize = new Vector2(92, 41);
         _requestDrawButton.Visible = _transport is not null;
         _requestDrawButton.Pressed += () => RequestMatchOffer(MatchOfferKind.Draw);
         header.AddChild(_requestDrawButton);
@@ -304,7 +321,9 @@ public partial class GameScreen : Control
         matchBody.AddChild(matchColumn);
         matchColumn.AddChild(CreatePlayerRow(isBottom: false));
         var boardPanel = UiStyle.CreatePanel();
-        boardPanel.CustomMinimumSize = new Vector2(680, 615);
+        // Keep enough horizontal budget for the fixed message rail at the 1100px design size.
+        // The board itself remains square inside the flexible column and grows on wide displays.
+        boardPanel.CustomMinimumSize = new Vector2(560, 560);
         boardPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         boardPanel.SizeFlagsVertical = SizeFlags.ExpandFill;
         matchColumn.AddChild(boardPanel);
@@ -312,7 +331,7 @@ public partial class GameScreen : Control
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(600, 600)
+            CustomMinimumSize = new Vector2(540, 540)
         };
         _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
         _board.SetFeedbackAnimated(settings.EffectsEnabled);
@@ -346,7 +365,9 @@ public partial class GameScreen : Control
     private void BuildMessageSidePanel(Container parent)
     {
         var panel = UiStyle.CreatePanel(UiStyle.PanelLight);
-        panel.CustomMinimumSize = new Vector2(280, 0);
+        _messageSidePanel = panel;
+        panel.CustomMinimumSize = new Vector2(300, 0);
+        panel.SizeFlagsHorizontal = SizeFlags.ShrinkEnd;
         panel.SizeFlagsVertical = SizeFlags.ExpandFill;
         parent.AddChild(panel);
         var margin = new MarginContainer();
@@ -363,7 +384,7 @@ public partial class GameScreen : Control
         _chatLog = new RichTextLabel
         {
             SizeFlagsVertical = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(250, 410),
+            CustomMinimumSize = new Vector2(0, 360),
             ScrollFollowing = true,
             SelectionEnabled = true
         };
@@ -427,6 +448,7 @@ public partial class GameScreen : Control
         try
         {
             MoveResult result;
+            var trialBefore = _trial?.Snapshot;
             if (_trial is not null) result = _trial.TryMove(from, position);
             else if (_ai is not null) result = _ai.SubmitHumanMove(from, position);
             else if (_network is null) result = _session.TryMove(from, position);
@@ -437,8 +459,14 @@ public partial class GameScreen : Control
                 _legalDestinations = [];
                 if (_trial is not null)
                 {
-                    _board.SetPosition(_trial.Snapshot);
-                    _displayedSnapshot = _trial.Snapshot;
+                    var after = _trial.Snapshot;
+                    foreach (var cue in _session.DescribeMove(trialBefore!, after, result))
+                    {
+                        _effects.Play(cue);
+                        _audio.PlayCue(cue);
+                    }
+                    _board.AnimateMove(trialBefore!, after, result.Move, result.CapturedPiece is not null);
+                    _displayedSnapshot = after;
                 }
                 // StateChanged already started the transition from authoritative snapshots.
                 // Reapplying the position here would intentionally cancel that animation.

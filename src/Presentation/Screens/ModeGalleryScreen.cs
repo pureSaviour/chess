@@ -33,7 +33,21 @@ public partial class ModeGalleryScreen : Control
         Action jieqiLan,
         Action jieqiSteam,
         Action jieqiRecent,
-        Action jieqiSaved)
+        Action jieqiSaved,
+        Action junqiLocal,
+        Action junqiLan,
+        Action junqiSteam,
+        Action junqiRecent,
+        Action junqiSaved,
+        Action gomokuLocal,
+        Action gomokuLan,
+        Action gomokuSteam,
+        Action gomokuRecent,
+        Action gomokuSaved,
+        Action gomokuSgfImport,
+        Action gomokuPositionImport,
+        Action gomokuAi,
+        Action gomokuAiSettings)
     {
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(46, 28);
@@ -66,7 +80,7 @@ public partial class ModeGalleryScreen : Control
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(1180, 520)
+            CustomMinimumSize = new Vector2(1970, 520)
         };
         modes.AddThemeConstantOverride("separation", 24);
         scroll.AddChild(modes);
@@ -88,6 +102,16 @@ public partial class ModeGalleryScreen : Control
             "res://assets/gallery/jieqi-card.png",
             [("联机模式", new (string, Action)[] { ("本地联机", jieqiLocal), ("局域网联机", jieqiLan), ("Steam 邀请好友", jieqiSteam) }),
              ("对局记录", new (string, Action)[] { ("最近对局", jieqiRecent), ("保存对局", jieqiSaved) })]));
+        modes.AddChild(CreateGroupedCard(
+            "军旗", "铁路纵横 · 夺旗制胜",
+            "res://assets/gallery/junqi-card.svg",
+            [("联机模式", new (string, Action)[] { ("本地联机", junqiLocal), ("局域网联机", junqiLan), ("Steam 邀请好友", junqiSteam) }),
+             ("对局记录", new (string, Action)[] { ("最近对局", junqiRecent), ("保存对局", junqiSaved) })]));
+        modes.AddChild(CreateTreeCard(
+            "五子棋", "纵横十九路 · 黑白连珠",
+            "res://assets/gallery/gomoku-card.svg",
+            gomokuLocal, gomokuLan, gomokuSteam, gomokuRecent, gomokuSaved,
+            gomokuSgfImport, gomokuPositionImport, gomokuAi, gomokuAiSettings));
     }
 
     private Control CreateTreeCard(string title, string subtitle, string texturePath,

@@ -41,6 +41,12 @@ public sealed class AppSettings
     public int AiMoveSeconds { get; set; } = 60;
     public int AiThinkMilliseconds { get; set; } = 1500;
     public int AiAnalysisMilliseconds { get; set; } = 500;
+    /// <summary>User-owned Rapfi/Piskvork executable; it is referenced but never copied into exports.</summary>
+    public string GomokuAiEnginePath { get; set; } = string.Empty;
+    public int GomokuAiSideChoice { get; set; } = 0;
+    public int GomokuAiBoardSize { get; set; } = 15;
+    public bool GomokuAiForbiddenMoves { get; set; }
+    public int GomokuAiThinkMilliseconds { get; set; } = 1500;
     public bool HasCustomProfile => !string.IsNullOrWhiteSpace(CustomPlayerId) ||
                                     !string.IsNullOrWhiteSpace(CustomAvatarPath);
 
@@ -72,6 +78,11 @@ public sealed class AppSettings
         result.AiMoveSeconds = config.GetValue("ai", "move_seconds", 60).AsInt32();
         result.AiThinkMilliseconds = config.GetValue("ai", "think_milliseconds", 1500).AsInt32();
         result.AiAnalysisMilliseconds = config.GetValue("ai", "analysis_milliseconds", 500).AsInt32();
+        result.GomokuAiEnginePath = config.GetValue("gomoku_ai", "engine_path", string.Empty).AsString();
+        result.GomokuAiSideChoice = config.GetValue("gomoku_ai", "side", 0).AsInt32();
+        result.GomokuAiBoardSize = config.GetValue("gomoku_ai", "board_size", 15).AsInt32();
+        result.GomokuAiForbiddenMoves = config.GetValue("gomoku_ai", "forbidden_moves", false).AsBool();
+        result.GomokuAiThinkMilliseconds = config.GetValue("gomoku_ai", "think_milliseconds", 1500).AsInt32();
         result.Clamp();
         return result;
     }
@@ -98,6 +109,11 @@ public sealed class AppSettings
         AiMoveSeconds = source.AiMoveSeconds;
         AiThinkMilliseconds = source.AiThinkMilliseconds;
         AiAnalysisMilliseconds = source.AiAnalysisMilliseconds;
+        GomokuAiEnginePath = source.GomokuAiEnginePath;
+        GomokuAiSideChoice = source.GomokuAiSideChoice;
+        GomokuAiBoardSize = source.GomokuAiBoardSize;
+        GomokuAiForbiddenMoves = source.GomokuAiForbiddenMoves;
+        GomokuAiThinkMilliseconds = source.GomokuAiThinkMilliseconds;
     }
 
     public void SaveAndApply()
@@ -122,6 +138,11 @@ public sealed class AppSettings
         config.SetValue("ai", "move_seconds", AiMoveSeconds);
         config.SetValue("ai", "think_milliseconds", AiThinkMilliseconds);
         config.SetValue("ai", "analysis_milliseconds", AiAnalysisMilliseconds);
+        config.SetValue("gomoku_ai", "engine_path", GomokuAiEnginePath);
+        config.SetValue("gomoku_ai", "side", GomokuAiSideChoice);
+        config.SetValue("gomoku_ai", "board_size", GomokuAiBoardSize);
+        config.SetValue("gomoku_ai", "forbidden_moves", GomokuAiForbiddenMoves);
+        config.SetValue("gomoku_ai", "think_milliseconds", GomokuAiThinkMilliseconds);
         var error = config.Save(SettingsPath);
         if (error != Error.Ok) GD.PushWarning($"无法保存设置：{error}");
         Apply();
@@ -160,6 +181,10 @@ public sealed class AppSettings
         AiMoveSeconds = Math.Clamp(AiMoveSeconds, 0, 300);
         AiThinkMilliseconds = Math.Clamp(AiThinkMilliseconds, 100, 120_000);
         AiAnalysisMilliseconds = Math.Clamp(AiAnalysisMilliseconds, 100, 10_000);
+        GomokuAiEnginePath = GomokuAiEnginePath.Trim();
+        GomokuAiSideChoice = Math.Clamp(GomokuAiSideChoice, 0, 2);
+        GomokuAiBoardSize = Math.Clamp(GomokuAiBoardSize, 9, 22);
+        GomokuAiThinkMilliseconds = Math.Clamp(GomokuAiThinkMilliseconds, 100, 120_000);
     }
 
     private static void SetBusVolume(string busName, float value, bool create)

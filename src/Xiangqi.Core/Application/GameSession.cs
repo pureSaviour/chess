@@ -54,28 +54,31 @@ public sealed class GameSession
 
         var after = _game.Snapshot;
         _moves.Add(result.Move);
-        CueRaised?.Invoke(new PresentationCue(
-            result.CapturedPiece is null ? PresentationCueKind.Move : PresentationCueKind.Capture,
-            result.Move, result.MovedPiece));
-
-        if (after.IsFinished)
-        {
-            var kind = after.EndReason == GameEndReason.Stalemate
-                ? PresentationCueKind.Stalemate
-                : PresentationCueKind.Checkmate;
-            CueRaised?.Invoke(new PresentationCue(kind, result.Move, result.MovedPiece));
-        }
-        else if (after.IsInCheck)
-        {
-            CueRaised?.Invoke(new PresentationCue(PresentationCueKind.Check, result.Move, result.MovedPiece));
-        }
-
-        foreach (var detector in _patternDetectors)
-        foreach (var cue in detector.Detect(before, after, result))
-            CueRaised?.Invoke(cue);
+        foreach (var cue in DescribeMove(before, after, result)) CueRaised?.Invoke(cue);
 
         StateChanged?.Invoke(after);
         return result;
+    }
+
+    /// <summary>
+    /// Produces the same ordered, presentation-neutral move/capture, terminal/check and registered
+    /// pattern cues used by the authoritative session. Trial/replay UI may consume these cues for
+    /// feedback, but they never mutate or submit either position. Inputs must describe one already
+    /// validated successful move; invalid inputs are rejected.
+    /// </summary>
+    public IReadOnlyList<PresentationCue> DescribeMove(GameSnapshot before, GameSnapshot after, MoveResult result)
+    {
+        if (!result.IsSuccess) throw new ArgumentException("只能描述已通过棋规校验的着法。", nameof(result));
+        var cues = new List<PresentationCue>
+        {
+            new(result.CapturedPiece is null ? PresentationCueKind.Move : PresentationCueKind.Capture,
+                result.Move, result.MovedPiece)
+        };
+        if (after.IsFinished) cues.Add(new(after.EndReason == GameEndReason.Stalemate
+            ? PresentationCueKind.Stalemate : PresentationCueKind.Checkmate, result.Move, result.MovedPiece));
+        else if (after.IsInCheck) cues.Add(new(PresentationCueKind.Check, result.Move, result.MovedPiece));
+        foreach (var detector in _patternDetectors) cues.AddRange(detector.Detect(before, after, result));
+        return cues.AsReadOnly();
     }
 
     public bool Undo()

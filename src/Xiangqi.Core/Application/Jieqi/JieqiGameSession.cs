@@ -29,6 +29,10 @@ public sealed class JieqiGameSession
         MoveCommitted?.Invoke(before, after, result.Move, result.CapturedPiece is not null); StateChanged?.Invoke(after);
         return result;
     }
-    public JieqiGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null) =>
-        new(_seed, _moves.ToArray(), tags ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    public JieqiGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null)
+    {
+        if (!_game.Snapshot.IsFinished)
+            throw new InvalidOperationException("揭棋秘密种子只能在对局结束后写入棋谱。");
+        return new(_seed, _moves.ToArray(), tags ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+    }
 }

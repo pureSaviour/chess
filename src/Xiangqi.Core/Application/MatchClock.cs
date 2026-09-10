@@ -11,7 +11,11 @@ public readonly record struct TimeControl(int GameSeconds, int MoveSeconds)
         : this;
 }
 
-public readonly record struct NetworkMatchConfiguration(TimeControl TimeControl, PieceSide HostSide)
+public enum TwoPlayerGameMode : byte { Classic, Jieqi, Junqi, Gomoku }
+
+public readonly record struct NetworkMatchConfiguration(
+    TimeControl TimeControl, PieceSide HostSide, TwoPlayerGameMode Mode = TwoPlayerGameMode.Classic,
+    int BoardSize = 0, int RuleFlags = 0)
 {
     public PieceSide ClientSide => HostSide.Opponent();
 }

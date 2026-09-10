@@ -12,7 +12,7 @@ namespace Xiangqi.Presentation.Networking;
 /// messages only from that exact Steam ID. Steam supplies NAT traversal/relay selection while this
 /// class retains the same bounded <see cref="MatchWireProtocol"/> used by LAN play.
 /// </summary>
-public partial class SteamMatchTransport : Node, IMatchTransport
+public partial class SteamMatchTransport : Node, IMatchTransport, ITwoPlayerPacketTransport
 {
     private const int MatchChannel = 48017;
     private const int ReceiveBatchSize = 16;
@@ -44,12 +44,16 @@ public partial class SteamMatchTransport : Node, IMatchTransport
     public event Action<MatchOfferResponse>? MatchOfferResponseReceived;
     public event Action<PlayerProfileCommand>? PlayerProfileReceived;
     public event Action<TransportStatus>? StatusChanged;
+    public event Action<ReadOnlyMemory<byte>>? PacketReceived;
+    public event Action<TransportStatus>? PacketStatusChanged;
     internal event Action? Closed;
     public new bool IsConnected { get; private set; }
     public bool IsHost => _isHost;
+    public bool IsPacketConnected => IsConnected;
+    public bool IsPacketHost => IsHost;
     internal CSteamID RemoteUser => _remoteUser;
 
-    public override void _Ready() => StatusChanged?.Invoke(new TransportStatus(
+    public override void _Ready() => PublishStatus(new TransportStatus(
         TransportConnectionState.Connected, "Steam 好友已加入，P2P 对局连接就绪。"));
 
     public override void _Process(double delta)
@@ -88,6 +92,12 @@ public partial class SteamMatchTransport : Node, IMatchTransport
     public ValueTask SendPlayerProfileAsync(
         PlayerProfileCommand command, CancellationToken cancellationToken = default) =>
         SendAsync(MatchWireProtocol.Encode(command), cancellationToken);
+    public ValueTask SendPacketAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
+    {
+        if (packet.Length is < 1 or > MatchWireProtocol.MaximumPacketBytes)
+            throw new ArgumentOutOfRangeException(nameof(packet), "联机数据包长度无效。");
+        return SendAsync(packet.ToArray(), cancellationToken);
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -108,7 +118,7 @@ public partial class SteamMatchTransport : Node, IMatchTransport
     {
         if (_disposed || !IsConnected) return;
         IsConnected = false;
-        StatusChanged?.Invoke(new TransportStatus(
+        PublishStatus(new TransportStatus(
             TransportConnectionState.Disconnected, "Steam 好友已离开房间。"));
     }
 
@@ -145,8 +155,9 @@ public partial class SteamMatchTransport : Node, IMatchTransport
                 native.m_cbSize is < 2 or > MatchWireProtocol.MaximumPacketBytes) return;
             var packet = new byte[native.m_cbSize];
             Marshal.Copy(native.m_pData, packet, 0, packet.Length);
-            if (!TryDispatch(packet))
-                StatusChanged?.Invoke(new TransportStatus(
+            if (PacketReceived is not null) PacketReceived.Invoke(packet);
+            else if (!TryDispatch(packet))
+                PublishStatus(new TransportStatus(
                     TransportConnectionState.Faulted, "收到格式或版本不正确的 Steam 对局数据。"));
         }
         finally
@@ -187,7 +198,7 @@ public partial class SteamMatchTransport : Node, IMatchTransport
     {
         if (callback.m_info.m_identityRemote.GetSteamID() != _remoteUser) return;
         IsConnected = false;
-        StatusChanged?.Invoke(new TransportStatus(
+        PublishStatus(new TransportStatus(
             TransportConnectionState.Faulted, "Steam P2P 会话失败，请检查双方 Steam 在线状态。"));
         _ = DisposeAfterCallbackAsync();
     }
@@ -196,6 +207,12 @@ public partial class SteamMatchTransport : Node, IMatchTransport
     {
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         await DisposeAsync();
+    }
+
+    private void PublishStatus(TransportStatus status)
+    {
+        StatusChanged?.Invoke(status);
+        PacketStatusChanged?.Invoke(status);
     }
 }
 #endif
