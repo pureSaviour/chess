@@ -1,6 +1,6 @@
 # 项目技术架构（Agent 与维护者入口）
 
-更新：2026-09-08。本文描述当前代码，不把规划中的接口当成已经落地的功能。开发约束见 [AGENTS.md](AGENTS.md)。
+更新：2026-09-10。本文描述当前代码，不把规划中的接口当成已经落地的功能。开发约束见 [AGENTS.md](AGENTS.md)。
 
 ## 1. 总架构
 
@@ -139,7 +139,7 @@ MatchClock 是 Core 内的纯 C# 双人棋钟，但启动/暂停、主机超时�
 
 经典 ENet 默认 UDP 27888，只允许一个远端；Steam 只接受确定的对手。断线结束当前经典网络流程，不具备三国的房主迁移/增量重连。
 
-IXiangqiAiEngine 只接受局面和搜索参数，返回 BestMove/候选变化；UciProcessAiEngine 使用非阻塞进程管道。AiGameCoordinator 检查局面手数、行棋方与结束状态，再复验着法；UndoHumanTurn 撤销人类最近一轮决策。当前思考期间不允许该悔棋入口，不能描述成已经支持任意时刻取消搜索并悔棋。
+IXiangqiAiEngine 只接受局面和搜索参数，返回 BestMove/候选变化；UciProcessAiEngine 使用 shell-free `.NET Process`，工作目录固定为可执行文件目录，后台 stdout/stderr 只进入有界队列并由 Godot `_Process` 解析。AiGameCoordinator 检查局面手数、行棋方与结束状态，再复验着法；UndoHumanTurn 撤销人类最近一轮决策。当前思考期间不允许该悔棋入口，不能描述成已经支持任意时刻取消搜索并悔棋。
 
 “向模型询问”当前是 UCI MultiPV 局面分析，不是自由文本对话。新的远程后端需要另外规划配置、鉴权/取消等；当前 Gallery 配置要求可执行文件路径，GameScreen 还要求引擎适配器是 Node，仅实现端口不足以直接替换正式 UI 后端。
 
@@ -218,7 +218,7 @@ Godot 基准视口为 1100×820，`canvas_items + expand` 在全屏时扩展逻�
 
 ### 4.2 设置、皮肤与反馈
 
-AppSettings 通过 ConfigFile 保存 user://settings.cfg，包含显示/特效、音量、资料、字符串 ThemeId、ShowBoardCoordinates，以及经典 UCI 与五子棋 Rapfi 的引擎路径、执子和思考参数。旧 `board/skin` 数值仍读取/写入一个兼容周期，首次加载映射为 `classic`/`spring`。全局/房间/人机设置先编辑副本，确认后更新、保存并应用，不进入领域棋规或网络棋谱；引擎路径仅在本机使用，不写入棋谱或网络。
+AppSettings 通过 ConfigFile 保存 user://settings.cfg，包含显示/特效、音量、资料、字符串 ThemeId、ShowBoardCoordinates，以及经典 UCI 与五子棋 Rapfi 的引擎路径、执子和思考参数。两个人机设置页可选择已有文件，也可在许可确认后调用 `EnginePackageInstaller` 将固定官方版本下载到 `user://engines`；只有哈希、解压和必要文件检查全部成功才保存路径。旧 `board/skin` 数值仍读取/写入一个兼容周期，首次加载映射为 `classic`/`spring`。全局/房间/人机设置先编辑副本，确认后更新、保存并应用，不进入领域棋规或网络棋谱；引擎路径仅在本机使用，不写入棋谱或网络。
 
 IBoardTheme / IBoardThemeCatalog 把稳定字符串 ID 解析为不可变调色板、分模式棋盘资源、semantic-v1 棋子 atlas 和语义特效描述；经典与三国棋盘均实际注入并消费。ThemePackageCatalog 扫描 `assets/themes` 与 `user://themes`，ThemeManifestReader 使用系统 XmlReader 禁用 DTD/实体并限制大小、深度、路径和资源类型，ThemeResourceLease 只在 Godot 主线程加载图片/shader并由视图幂等释放。主题不进入规则、快照或网络。内置春日 XML 使用更浅底色、低装饰强度以及动态柳叶、桃花和春燕。
 
@@ -291,6 +291,7 @@ Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于
 | --- | --- |
 | --smoke-ui / --capture-ui | 五张横向玩法卡片、三十三个叶子入口、五子棋/Junqi 页面构造、经典 LAN 消息栏边界、设置页与春季皮肤；可选画廊截图 |
 | --smoke-gomoku-ai | Windows 下读取 `XIANGQI_GOMOKU_AI_PATH`，以 15 路禁手局验证 Rapfi/Piskvork 探测、人类首着和一手合法回复 |
+| --smoke-engine-install-rapfi / --smoke-engine-install-pikafish | 下载固定官方 7z、核对 SHA-256、安全解压、选择 AVX2/SSE 后端，并实际完成 Piskvork 握手或 UCI+NNUE 搜索；临时安装随后删除 |
 | --smoke-feedback / --capture-feedback | 经典主题注入/回退、棋子与反馈配色、选中/落地/回复/撤销/翻转/空闲反馈；可选图形截图 |
 | --smoke-three / --capture-three | 三国三方朝下视角、三条命名国界留白、九宫中心、移动插值/落点、主题应用、405 次旋转命中往返、243 拓扑边、面积铺满与设置 |
 | --smoke-profile-ui | 经典资料卡与临时头像 |

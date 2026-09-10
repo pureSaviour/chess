@@ -4,6 +4,7 @@ using Xiangqi.Core.Application.Gomoku;
 using Xiangqi.Core.Domain.Gomoku;
 using Xiangqi.Core.Domain.Grid;
 using Xiangqi.Presentation.Boards;
+using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Records;
 using Xiangqi.Presentation.Settings;
@@ -71,12 +72,17 @@ public partial class GomokuImportScreen : Control
 
 public partial class GomokuAiSettingsScreen : Control
 {
-    public GomokuAiSettingsScreen(AppSettings current,Action<AppSettings> save,Action back)
+    public GomokuAiSettingsScreen(AppSettings current,EnginePackageInstaller installer,Action<AppSettings> save,Action back)
     {
         var draft=current.Copy();SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);var margin=UiStyle.CreatePageMargin(60,34);AddChild(margin);var root=new VBoxContainer();root.AddThemeConstantOverride("separation",14);margin.AddChild(root);var header=new HBoxContainer();root.AddChild(header);var title=UiStyle.CreateTitle("五子棋 · Rapfi 设置");title.SizeFlagsHorizontal=SizeFlags.ExpandFill;header.AddChild(title);var leave=UiStyle.CreateButton("返回画廊");leave.Pressed+=back;header.AddChild(leave);var panel=UiStyle.CreatePanel(UiStyle.PanelLight,14);panel.CustomMinimumSize=new(760,500);root.AddChild(panel);var content=new VBoxContainer();content.AddThemeConstantOverride("separation",16);panel.AddChild(content);
-        content.AddChild(new Label{Text="选择 Rapfi 的 pbrain 可执行文件。config.toml 与模型权重须留在同一目录；程序不会复制或打包这些 GPLv3 文件。",AutowrapMode=TextServer.AutowrapMode.WordSmart});
+        content.AddChild(new Label{Text="可选择现有 Rapfi，也可一键下载到本机应用数据目录。config.toml 与模型权重须留在同一目录；这些 GPLv3 文件不会打入应用安装包。",AutowrapMode=TextServer.AutowrapMode.WordSmart});
         var pathRow=new HBoxContainer();content.AddChild(pathRow);var path=new LineEdit{Text=draft.GomokuAiEnginePath,Editable=false,SizeFlagsHorizontal=SizeFlags.ExpandFill,PlaceholderText="例如 pbrain-rapfi-windows-sse.exe"};pathRow.AddChild(path);var browse=UiStyle.CreateButton("浏览…");pathRow.AddChild(browse);var picker=new FileDialog{Title="选择 Rapfi 引擎",FileMode=FileDialog.FileModeEnum.OpenFile,Access=FileDialog.AccessEnum.Filesystem,UseNativeDialog=true,Filters=["*.exe ; Windows 可执行文件","* ; 所有文件"]};picker.FileSelected+=selected=>path.Text=selected;browse.Pressed+=()=>picker.PopupCenteredRatio(.75f);AddChild(picker);
+        var installRow=new HBoxContainer();installRow.AddThemeConstantOverride("separation",12);content.AddChild(installRow);var install=UiStyle.CreateButton("一键下载并配置 Rapfi",true);installRow.AddChild(install);var installStatus=new Label{SizeFlagsHorizontal=SizeFlags.ExpandFill,AutowrapMode=TextServer.AutowrapMode.WordSmart};installRow.AddChild(installStatus);var consent=new ConfirmationDialog{Title="Rapfi 许可确认",DialogText=EnginePackageInstaller.LicenseNotice(EnginePackageKind.Rapfi),OkButtonText="同意并下载",CancelButtonText="取消"};AddChild(consent);var driver=new EngineInstallDriver(installer);AddChild(driver);
         var grid=new GridContainer{Columns=2};grid.AddThemeConstantOverride("h_separation",20);grid.AddThemeConstantOverride("v_separation",14);content.AddChild(grid);grid.AddChild(new Label{Text="玩家执子"});var side=new OptionButton();side.AddItem("玩家执黑");side.AddItem("玩家执白");side.AddItem("随机猜先");side.Select(draft.GomokuAiSideChoice);grid.AddChild(side);grid.AddChild(new Label{Text="棋盘路数（Rapfi 9–22）"});var size=new SpinBox{MinValue=9,MaxValue=22,Value=Math.Min(draft.GomokuAiBoardSize,22),Step=1};grid.AddChild(size);grid.AddChild(new Label{Text="规则"});var rules=new CheckButton{Text="启用连珠禁手",ButtonPressed=draft.GomokuAiForbiddenMoves};grid.AddChild(rules);grid.AddChild(new Label{Text="每步思考（秒）"});var think=new SpinBox{MinValue=.1,MaxValue=120,Value=draft.GomokuAiThinkMilliseconds/1000.0,Step=.1};grid.AddChild(think);
-        var note=new Label{Text="当前外部进程适配仅支持桌面系统；Android 不会尝试启动外部引擎。",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(note,13);content.AddChild(note);var saveButton=UiStyle.CreateButton("保存 Rapfi 设置",true);content.AddChild(saveButton);saveButton.Pressed+=()=>{draft.GomokuAiEnginePath=path.Text;draft.GomokuAiSideChoice=side.Selected;draft.GomokuAiBoardSize=(int)size.Value;draft.GomokuAiForbiddenMoves=rules.ButtonPressed;draft.GomokuAiThinkMilliseconds=(int)Math.Round(think.Value*1000);save(draft);};
+        var note=new Label{Text="当前外部进程适配仅支持 Windows 桌面版；Android 不会下载或启动外部引擎。",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(note,13);content.AddChild(note);var saveButton=UiStyle.CreateButton("保存 Rapfi 设置",true);content.AddChild(saveButton);void Capture(){draft.GomokuAiEnginePath=path.Text;draft.GomokuAiSideChoice=side.Selected;draft.GomokuAiBoardSize=(int)size.Value;draft.GomokuAiForbiddenMoves=rules.ButtonPressed;draft.GomokuAiThinkMilliseconds=(int)Math.Round(think.Value*1000);}saveButton.Pressed+=()=>{Capture();save(draft);};
+        install.Pressed+=()=>consent.PopupCentered(new Vector2I(650,260));consent.Confirmed+=()=>{Capture();install.Disabled=browse.Disabled=saveButton.Disabled=true;installStatus.Text="准备下载…";driver.Start(EnginePackageKind.Rapfi);};driver.ProgressChanged+=value=>installStatus.Text=value.TotalBytes is>0?$"{value.Stage} {Math.Clamp(value.CompletedBytes*100/value.TotalBytes.Value,0,100)}%":value.Stage;driver.Completed+=result=>{draft.GomokuAiEnginePath=result.ExecutablePath;path.Text=result.ExecutablePath;installStatus.Text=$"已配置 Rapfi {result.Version}";save(draft);};driver.Failed+=error=>{install.Disabled=browse.Disabled=saveButton.Disabled=false;installStatus.Text=$"安装失败：{error}";};
+#if GODOT_ANDROID
+        install.Disabled=true;install.TooltipText="Android 当前不支持外部进程引擎。";
+#endif
     }
 }

@@ -1,4 +1,5 @@
-using System.Text;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Godot;
 using Xiangqi.Core.Application;
 using Xiangqi.Core.Domain;
@@ -6,20 +7,23 @@ using Xiangqi.Core.Domain;
 namespace Xiangqi.Presentation.AI;
 
 /// <summary>
-/// Godot-owned adapter for UCI xiangqi engines such as Pikafish. It uses Godot 4.7's
-/// non-blocking redirected process API and drains output from _Process, so engine analysis never
-/// blocks rendering or input. The child process and both pipes are released with this node.
+/// Godot-owned adapter for UCI xiangqi engines such as Pikafish. A shell-free .NET child process
+/// runs in the executable directory so relative NNUE paths work even below Unicode user profiles.
+/// Background pipe callbacks only enqueue bounded lines; _Process parses them on the Godot thread.
+/// The child process, pipes and callbacks are released with this node.
 /// </summary>
 public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(8);
+    private const int MaximumOutputLines = 4096;
+    private const int MaximumLineLength = 8192;
     private readonly string _executablePath;
     private readonly SemaphoreSlim _searchGate = new(1, 1);
     private readonly Dictionary<int, AiVariation> _variations = [];
-    private readonly StringBuilder _lineBuffer = new();
-    private Godot.FileAccess? _stdio;
-    private Godot.FileAccess? _stderr;
-    private int _pid = -1;
+    private readonly ConcurrentQueue<OutputLine> _output = new();
+    private Process? _process;
+    private int _queuedLines;
+    private int _outputOverflow;
     private bool _disposed;
     private int _multiPv = 1;
     private TaskCompletionSource<bool>? _uciWaiter;
@@ -37,9 +41,16 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
 
     public override void _Process(double delta)
     {
-        DrainPipe(_stdio, isError: false);
-        DrainPipe(_stderr, isError: true);
-        if (_pid > 0 && !OS.IsProcessRunning(_pid) && !_disposed)
+        if (Interlocked.Exchange(ref _outputOverflow, 0) != 0)
+            FailAll(new InvalidDataException("AI 引擎输出队列超过上限。"));
+        while (_output.TryDequeue(out var item))
+        {
+            Interlocked.Decrement(ref _queuedLines);
+            if (item.Text.Length > MaximumLineLength) { FailAll(new InvalidDataException("AI 引擎输出行超过长度上限。")); continue; }
+            if (item.IsError) { if (!string.IsNullOrWhiteSpace(item.Text)) GD.PrintErr($"[Xiangqi.AI] {item.Text}"); }
+            else if (item.Text.Length > 0) HandleLine(item.Text.Trim());
+        }
+        if (_process is { HasExited: true } && !_disposed)
             FailAll(new InvalidOperationException("AI 引擎进程已意外退出。"));
     }
 
@@ -47,7 +58,7 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (IsReady) return;
-        if (_stdio is null) StartProcess();
+        if (_process is null) StartProcess();
 
         _uciWaiter = NewWaiter<bool>();
         Send("uci");
@@ -128,19 +139,22 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
         FailAll(new ObjectDisposedException(nameof(UciProcessAiEngine)));
         try
         {
-            if (_stdio is not null) Send("quit");
+            if (_process is { HasExited: false }) Send("quit");
         }
         catch
         {
             // The process may already have closed its pipe.
         }
-        await Task.Yield();
-        if (_pid > 0 && OS.IsProcessRunning(_pid)) OS.Kill(_pid);
-        _stdio?.Dispose();
-        _stderr?.Dispose();
-        _stdio = null;
-        _stderr = null;
-        _pid = -1;
+        if (_process is { } process)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException) { try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } }
+            process.OutputDataReceived -= OnOutput;
+            process.ErrorDataReceived -= OnError;
+            process.Dispose();
+        }
+        _process = null;
     }
 
     public override void _ExitTree()
@@ -153,13 +167,25 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
         if (string.IsNullOrWhiteSpace(_executablePath) || !System.IO.File.Exists(_executablePath))
             throw new FileNotFoundException("找不到 AI 引擎程序。", _executablePath);
 
-        var process = OS.ExecuteWithPipe(_executablePath, [], blocking: false);
-        if (process.Count == 0)
-            throw new InvalidOperationException("无法启动 AI 引擎进程。请检查文件权限与平台兼容性。");
-        _stdio = process["stdio"].AsGodotObject() as Godot.FileAccess
-                 ?? throw new InvalidOperationException("AI 引擎未提供标准输入输出管道。");
-        _stderr = process["stderr"].AsGodotObject() as Godot.FileAccess;
-        _pid = process["pid"].AsInt32();
+        var fullPath = Path.GetFullPath(_executablePath);
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = fullPath,
+                WorkingDirectory = Path.GetDirectoryName(fullPath)!,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            },
+            EnableRaisingEvents = true
+        };
+        process.OutputDataReceived += OnOutput;
+        process.ErrorDataReceived += OnError;
+        if (!process.Start()) throw new InvalidOperationException("无法启动 AI 引擎进程。请检查文件权限与平台兼容性。");
+        process.BeginOutputReadLine(); process.BeginErrorReadLine(); _process = process;
     }
 
     private async Task WaitUntilReadyAsync(CancellationToken cancellationToken)
@@ -185,37 +211,26 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
 
     private void Send(string command)
     {
-        if (_stdio is null) throw new InvalidOperationException("AI 引擎尚未启动。");
-        _stdio.StoreString(command + "\n");
-        _stdio.Flush();
+        if (_process is null || _process.HasExited) throw new InvalidOperationException("AI 引擎尚未启动。");
+        _process.StandardInput.WriteLine(command);
+        _process.StandardInput.Flush();
     }
 
-    private void DrainPipe(Godot.FileAccess? pipe, bool isError)
+    private void OnOutput(object sender, DataReceivedEventArgs args)
     {
-        if (pipe is null) return;
-        var bytes = pipe.GetBuffer(4096);
-        if (bytes.Length == 0) return;
-        var text = Encoding.UTF8.GetString(bytes);
-        if (isError)
-        {
-            if (!string.IsNullOrWhiteSpace(text)) GD.PrintErr($"[Xiangqi.AI] {text.TrimEnd()}");
-            return;
-        }
-        _lineBuffer.Append(text);
-        ConsumeCompleteLines();
+        if (args.Data is not null) Enqueue(args.Data, false);
     }
 
-    private void ConsumeCompleteLines()
+    private void OnError(object sender, DataReceivedEventArgs args)
     {
-        while (true)
-        {
-            var value = _lineBuffer.ToString();
-            var newline = value.IndexOf('\n');
-            if (newline < 0) return;
-            var line = value[..newline].TrimEnd('\r').Trim();
-            _lineBuffer.Remove(0, newline + 1);
-            if (line.Length > 0) HandleLine(line);
-        }
+        if (args.Data is not null) Enqueue(args.Data, true);
+    }
+
+    private void Enqueue(string text, bool isError)
+    {
+        if (Interlocked.Increment(ref _queuedLines) > MaximumOutputLines)
+        { Interlocked.Decrement(ref _queuedLines); Interlocked.Exchange(ref _outputOverflow, 1); return; }
+        _output.Enqueue(new(text, isError));
     }
 
     private void HandleLine(string line)
@@ -297,4 +312,6 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
 
     private static TaskCompletionSource<T> NewWaiter<T>() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private readonly record struct OutputLine(string Text, bool IsError);
 }

@@ -24,6 +24,7 @@ public partial class Main : Control
 {
     private AppSettings _settings = null!;
     private IBoardThemeCatalog _themes = null!;
+    private EnginePackageInstaller _engineInstaller = null!;
     private Control? _currentScreen;
     private AcceptDialog _errorDialog = null!;
     private bool _debugNetworkSmoke;
@@ -40,11 +41,12 @@ public partial class Main : Control
         AddChild(_errorDialog);
         _settings = AppSettings.Load();
         _themes = ThemePackageCatalog.CreateDefault();
+        _engineInstaller = new EnginePackageInstaller(ProjectSettings.GlobalizePath("user://engines"));
         _settings.Apply();
         // Steam Overlay and its client APIs require an interactive display. Keeping headless
         // smoke/tests out of the native initialization path also makes server-side CI deterministic.
         if (!string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase) &&
-            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback" or "--smoke-gomoku-ai")))
+            !(OS.IsDebugBuild() && OS.GetCmdlineUserArgs().Any(a => a is "--smoke-ui" or "--smoke-three" or "--smoke-feedback" or "--smoke-gomoku-ai" or "--smoke-engine-install-rapfi" or "--smoke-engine-install-pikafish")))
             InitializeSteam();
         if (TryStartDebugSmokeMode()) return;
         ShowMainMenu();
@@ -191,7 +193,7 @@ public partial class Main : Control
         record=>SwitchTo(new GomokuReplayScreen(record,()=>ShowGomokuRecords(saved)))));
     private void ShowGomokuImport(bool position)=>SwitchTo(new GomokuImportScreen(position,ShowGallery,
         record=>SwitchTo(new GomokuReplayScreen(record,ShowGallery))));
-    private void ShowGomokuAiSettings()=>SwitchTo(new GomokuAiSettingsScreen(_settings,saved=>{_settings=saved;_settings.SaveAndApply();ShowGallery();},ShowGallery));
+    private void ShowGomokuAiSettings()=>SwitchTo(new GomokuAiSettingsScreen(_settings,_engineInstaller,saved=>{_settings=saved;_settings.SaveAndApply();ShowGallery();},ShowGallery));
     private void StartConfiguredGomokuAiMatch()
     {
 #if GODOT_ANDROID
@@ -211,7 +213,7 @@ public partial class Main : Control
         _settings = saved;
         _settings.SaveAndApply();
         ShowGallery();
-    }, ShowGallery));
+    }, ShowGallery, _engineInstaller));
 
     private void StartConfiguredAiMatch()
     {
@@ -463,6 +465,7 @@ public partial class Main : Control
 
     public override void _ExitTree()
     {
+        _engineInstaller?.Dispose();
 #if GODOT_WINDOWS
         _threeSteam?.Dispose();
         if (_steam is null) return;
@@ -496,6 +499,12 @@ public partial class Main : Control
             return true;
         }
 #if GODOT_WINDOWS
+        if (arguments.Contains("--smoke-engine-install-rapfi") || arguments.Contains("--smoke-engine-install-pikafish"))
+        {
+            _ = RunEngineInstallSmokeAsync(arguments.Contains("--smoke-engine-install-rapfi")
+                ? EnginePackageKind.Rapfi : EnginePackageKind.Pikafish);
+            return true;
+        }
         if (arguments.Contains("--smoke-gomoku-ai"))
         {
             _ = RunGomokuAiSmokeAsync();
@@ -595,6 +604,12 @@ public partial class Main : Control
                 if (image.SavePng(System.IO.Path.Combine(directory, "mode-gallery.png")) != Error.Ok)
                     throw new IOException("Gallery capture failed.");
             }
+            ShowAiSettings();
+            await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not AiSettingsScreen) throw new InvalidOperationException("Classic AI settings failed to instantiate.");
+            ShowGomokuAiSettings();
+            await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GomokuAiSettingsScreen) throw new InvalidOperationException("Gomoku AI settings failed to instantiate.");
             StartLanHost(EnetMatchTransport.DefaultPort,
                 new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red));
             await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
@@ -637,6 +652,38 @@ public partial class Main : Control
     }
 
 #if GODOT_WINDOWS
+    private async Task RunEngineInstallSmokeAsync(EnginePackageKind kind)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"xiangqi-engine-install-smoke-{Guid.NewGuid():N}");
+        try
+        {
+            using var installer = new EnginePackageInstaller(root);
+            var result = await installer.InstallAsync(kind);
+            if (!File.Exists(result.ExecutablePath) || !Path.GetFullPath(result.ExecutablePath).StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Installer returned an invalid executable path.");
+            if (kind == EnginePackageKind.Rapfi)
+            {
+                await using var engine = new PiskvorkProcessGomokuAiEngine(result.ExecutablePath);
+                await engine.InitializeAsync(15, GomokuRuleSet.RenjuForbiddenMoves);
+            }
+            else
+            {
+                var engine = new UciProcessAiEngine(result.ExecutablePath); AddChild(engine);
+                try
+                {
+                    await engine.InitializeAsync();
+                    var search = await engine.SearchAsync(new GameSession().Snapshot, new AiSearchRequest(250));
+                    if (search.BestMove == default) throw new InvalidOperationException("Pikafish returned no move.");
+                }
+                finally { await engine.DisposeAsync(); engine.QueueFree(); }
+            }
+            GD.Print($"[Xiangqi.EngineInstall.Smoke] PASS {kind} {result.Version} {Path.GetFileName(result.ExecutablePath)}");
+            GetTree().Quit();
+        }
+        catch (Exception error) { GD.PushError($"[Xiangqi.EngineInstall.Smoke] FAIL {kind} {error}"); GetTree().Quit(3); }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
     private async Task RunGomokuAiSmokeAsync()
     {
         var path = System.Environment.GetEnvironmentVariable("XIANGQI_GOMOKU_AI_PATH");

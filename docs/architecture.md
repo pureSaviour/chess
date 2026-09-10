@@ -1,6 +1,6 @@
 # 经典象棋架构与运行流程
 
-更新：2026-09-08。本文件由原经典架构摘要原地整理，不是全项目总架构。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)；接口契约、扩展示例和注意事项见 [抽象层使用手册](abstractions.md)；三人玩法见 [三国象棋](three-kingdoms.md)。
+更新：2026-09-10。本文件由原经典架构摘要原地整理，不是全项目总架构。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)；接口契约、扩展示例和注意事项见 [抽象层使用手册](abstractions.md)；三人玩法见 [三国象棋](three-kingdoms.md)。
 
 ## 1. 层次与职责
 
@@ -57,7 +57,7 @@ GameScreen 在 CueRaised 缓存本手视觉信息，在 StateChanged 获取 afte
 
 ## 4. 四种房间的编排
 
-玩法画廊以经典、三国、揭棋、军旗、五子棋五张横向卡片为入口，宽度不足时横向滚动。每次只展开一组，裁剪容器通过 Tween 改变高度和透明度。经典与五子棋均含四组菜单；五子棋 AI 两个叶子当前只告知未实现。揭棋、军旗和五子棋的 LAN/Steam 均由各自权威控制器接入共享双人原始包端口。
+玩法画廊以经典、三国、揭棋、军旗、五子棋五张横向卡片为入口，宽度不足时横向滚动。每次只展开一组，裁剪容器通过 Tween 改变高度和透明度。经典与五子棋均含四组菜单且 AI 已接通。揭棋、军旗和五子棋的 LAN/Steam 均由各自权威控制器接入共享双人原始包端口。
 
 ### 4.1 本地双人
 
@@ -95,7 +95,7 @@ MatchClock.Advance/BeginTurn/Apply 是引擎无关算法；0 为不限时。Game
 
 ### 4.4 人机与局面分析
 
-Main 创建 UciProcessAiEngine，Screen 创建 AiGameCoordinator 并把引擎 Node 加入树。流程如下：
+Main 创建 UciProcessAiEngine，Screen 创建 AiGameCoordinator 并把引擎 Node 加入树。UCI 进程以可执行文件目录为工作目录，stdout/stderr 后台回调只写有界队列，`_Process` 在 Godot 主线程解析。流程如下：
 
 1. InitializeAsync 完成 UCI 握手与就绪检查。
 2. SubmitHumanMove 使用同一 GameSession，记录人类落子后的 ply。
@@ -111,6 +111,8 @@ XiangqiUciNotation 输出 FEN（从 Rank=9 向 Rank=0）及 a0..i9 坐标；它�
 复盘使用独立 ReplayAnalysisCoordinator，不复用 AiGameCoordinator 的落子职责。它以当前步优先顺序串行搜索、缓存分数与最佳着法，取消旧选择的扫描，把 UCI 的行棋方分数换算为红方视角，并通过临时 ChessGame 拒绝非法 BestMove。Replay Screen 将结果显示为右侧折线、随步数移动的竖线、分数文字和棋盘箭头；上/下一步按钮与带刻度 HSlider 共同修改同一个当前步索引，SetValueNoSignal 防止渲染反向触发跳转。这些表现状态不写回记录或会话。
 
 UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回复；CanUndoHumanTurn 在 IsThinking 时为 false。NewGame/Dispose 会取消当前操作，不能把这一点描述成“思考中已支持悔棋”。GameScreen 还依赖引擎为 Node、AiMatchConfiguration 要求 EnginePath；远程/自然语言模型尚需配置和生命周期抽象。
+
+人机设置可手动选择 UCI 程序，也可确认 GPLv3 与 NNUE 非商业许可后，一键下载固定 Pikafish 2026-01-02 官方 7z。共享安装器校验发布 SHA-256、安全解压到 `user://engines/pikafish`，按 CPU 选择 AVX2 或 SSE4.1/POPCNT，并将 `pikafish.nnue` 与 exe 同目录以兼容 Unicode 用户目录。只有真实 UCI 搜索可用后才视为 smoke 通过；应用自身不打包该引擎或权重。
 
 ## 5. 双人协议与兼容性
 

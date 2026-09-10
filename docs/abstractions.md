@@ -180,6 +180,16 @@ AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子�
 
 新增实现应复用这一端口并说明线程、取消和资源所有权。Piskvork 适配器每次搜索拥有子进程，禁用 shell，限制协议行，取消时终止进程树。常见误用包括：UI 直接采用引擎坐标、把 Rapfi 模型复制进导出包、从后台任务触碰 Godot 节点、或者把 rule 2 当成所有五子棋规则。测试入口为核心自运行测试中的 fake engine；真实适配器另做官方引擎烟测。当前 Android 没有外部进程实现。
 
+### 外部引擎包：EnginePackageInstaller / EngineInstallDriver
+
+定义：[EnginePackageInstaller.cs](../src/Presentation/AI/EnginePackageInstaller.cs) 与 [EngineInstallDriver.cs](../src/Presentation/AI/EngineInstallDriver.cs)。这是本机设置基础设施，不进入 Core，也不拥有 `AppSettings`。调用者传入 `user://engines` 的绝对路径、包类型、进度接收器和取消令牌；输出只是在完整发布目录中的可执行文件路径。设置页负责展示许可、保存结果和导航，安装器不得自行启用 AI 或更改棋局。
+
+安装器固定 Rapfi 250615 与 Pikafish 2026-01-02 官方 URL/SHA-256；限制下载 80 MiB、展开 256 MiB、512 个文件，拒绝空名、绝对/越目录路径、长度不符和缺失必要文件。下载/解压在同盘随机 staging 目录进行，完成后以目录移动发布；失败时删除本次 staging，不覆盖现有成功版本，且不得修改原设置。重复安装会复用完整版本；已损坏同名目录保留，并发布带时间后缀的新目录。CPU 支持 AVX2 时选 AVX2，否则选最低随包 Windows 构建。
+
+`EngineInstallDriver` 是具体 Godot Node：它拥有单次操作的 CTS，后台进度/完成只进入并发队列，`_Process` 才在主线程发布 UI 事件；退出树取消操作。共享 `EnginePackageInstaller` 由 Main 创建和释放。Rapfi/Pikafish 程序均 GPLv3；Pikafish NNUE 另限个人非商业用途免费、商业用途需授权。必须在下载前展示确认，不能把“一键”解释为静默接受许可证。当前只支持 Windows，Android 按钮禁用。SharpCompress 0.50.4（MIT，桌面程序集约 2.35 MiB）只负责读取 7z，并从 Android 依赖图排除；外部引擎包不进入应用导出。
+
+验证入口是两个 `--smoke-engine-install-*`：使用真实官方下载、哈希与解压，随后实际执行 Rapfi 握手或 Pikafish NNUE 搜索，最后删除临时目录。恶意官方同 URL 内容仍需先通过固定哈希，因此未知更新会失败而不是静默升级；升级版本必须同步 URL、哈希、许可说明、包内路径与 smoke。
+
 ## 10. 表现语义、反馈与主题
 
 IPositionPatternDetector 只读取经典前后局面和 MoveResult，返回 PresentationCue；只有 UI 决定颜色、音效和动效。新增 detector 先写纯 C# 测试，再注册到 GameSession；不要在检测器中更改棋规或调用 Godot。

@@ -12,6 +12,8 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Pure managed MIT-licensed 7z reader used only by the opt-in AI package installer. -->
+    <PackageReference Include="SharpCompress" Version="0.50.4" Condition=" '$(GodotTargetPlatform)' != 'android' " />
     <Compile Include="src/Presentation/**/*.cs" />
     <ProjectReference Include="src/Xiangqi.Core/Xiangqi.Core.csproj" />
     <ProjectReference Include="src/Xiangqi.Transport/Xiangqi.Transport.csproj" />
