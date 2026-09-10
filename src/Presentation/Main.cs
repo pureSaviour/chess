@@ -2,8 +2,10 @@ using Godot;
 using Xiangqi.Core.Application;
 using Xiangqi.Core.Application.Jieqi;
 using Xiangqi.Core.Application.Junqi;
+using Xiangqi.Core.Application.Gomoku;
 using Xiangqi.Core.Domain;
 using Xiangqi.Core.Domain.Junqi;
+using Xiangqi.Core.Domain.Gomoku;
 using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.Profiles;
@@ -77,7 +79,16 @@ public partial class Main : Control
         () => ShowJunqiGallery(ClassicGalleryEntry.Lan),
         () => ShowJunqiGallery(ClassicGalleryEntry.Steam),
         () => ShowJunqiRecords(false),
-        () => ShowJunqiRecords(true)));
+        () => ShowJunqiRecords(true),
+        () => ShowGomokuGallery(ClassicGalleryEntry.Local),
+        () => ShowGomokuGallery(ClassicGalleryEntry.Lan),
+        () => ShowGomokuGallery(ClassicGalleryEntry.Steam),
+        () => ShowGomokuRecords(false),
+        () => ShowGomokuRecords(true),
+        () => ShowGomokuImport(false),
+        () => ShowGomokuImport(true),
+        ShowGomokuAiNotice,
+        ShowGomokuAiNotice));
 
     private void StartJieqiLocal()
     {
@@ -155,6 +166,31 @@ public partial class Main : Control
         StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Junqi });
 
     private static JunqiSide ToJunqiSide(PieceSide side) => side == PieceSide.Red ? JunqiSide.First : JunqiSide.Second;
+
+    private void ShowGomokuGallery(ClassicGalleryEntry entry) => SwitchTo(new GomokuGalleryScreen(
+        ShowGallery, StartGomokuLocal, StartGomokuLanHost, StartGomokuLanClient, StartGomokuSteamInvite, entry));
+    private void StartGomokuLocal(GomokuRoomOptions options) => SwitchTo(new GomokuGameScreen(
+        new LocalGomokuMatchController(options.BoardSize, options.Rules), "本地对决", ShowGallery));
+    private void StartGomokuLanHost(int port, GomokuRoomOptions options)
+    {
+        try { var transport=EnetMatchTransport.Host(port); SwitchTo(new GomokuGameScreen(
+            new NetworkGomokuMatchController(transport,options), $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport)); }
+        catch(Exception error){ShowError(error.Message);}
+    }
+    private void StartGomokuLanClient(string address,int port)
+    {
+        try { var transport=EnetMatchTransport.Join(address,port); SwitchTo(new GomokuGameScreen(
+            new NetworkGomokuMatchController(transport,null), $"客户端 · {address}:{port}", ShowGallery, transport)); }
+        catch(Exception error){ShowError(error.Message);}
+    }
+    private void StartGomokuSteamInvite(GomokuRoomOptions options) => StartSteamInvite(new NetworkMatchConfiguration(
+        TimeControl.Unlimited, options.HostColor==StoneColor.Black?PieceSide.Red:PieceSide.Black,
+        TwoPlayerGameMode.Gomoku, options.BoardSize, (int)options.Rules));
+    private void ShowGomokuRecords(bool saved)=>SwitchTo(new GomokuRecordScreen(saved,ShowGallery,
+        record=>SwitchTo(new GomokuReplayScreen(record,()=>ShowGomokuRecords(saved)))));
+    private void ShowGomokuImport(bool position)=>SwitchTo(new GomokuImportScreen(position,ShowGallery,
+        record=>SwitchTo(new GomokuReplayScreen(record,ShowGallery))));
+    private void ShowGomokuAiNotice()=>SwitchTo(new GomokuAiNoticeScreen(ShowGallery));
 
     private void ShowAiSettings() => SwitchTo(new AiSettingsScreen(_settings, saved =>
     {
@@ -368,6 +404,15 @@ public partial class Main : Control
             SwitchTo(new JunqiGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
             return;
         }
+        if (match.Configuration.Mode == TwoPlayerGameMode.Gomoku)
+        {
+            var options = new GomokuRoomOptions(match.Configuration.BoardSize,
+                (GomokuRuleSet)match.Configuration.RuleFlags,
+                match.Configuration.HostSide == PieceSide.Red ? StoneColor.Black : StoneColor.White);
+            var controller = new NetworkGomokuMatchController(match.Transport, match.IsHost ? options : null);
+            SwitchTo(new GomokuGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            return;
+        }
         var custom = CustomPlayerProfileFactory.Create(_settings, match.Profiles.Local.DisplayName);
         if (custom is not null) match.Profiles.ReplaceLocal(custom);
         SwitchTo(new GameScreen(
@@ -520,8 +565,8 @@ public partial class Main : Control
         {
             ShowGallery();
             await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not ModeGalleryScreen { CardCount: 4, OptionCount: 24 })
-                throw new InvalidOperationException("Gallery must expose four horizontal mode cards and twenty-four leaf routes.");
+            if (_currentScreen is not ModeGalleryScreen { CardCount: 5, OptionCount: 33 })
+                throw new InvalidOperationException("Gallery must expose five horizontal mode cards and thirty-three leaf routes.");
             if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
             {
                 await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
@@ -531,6 +576,16 @@ public partial class Main : Control
                 if (image.SavePng(System.IO.Path.Combine(directory, "mode-gallery.png")) != Error.Ok)
                     throw new IOException("Gallery capture failed.");
             }
+            StartLanHost(EnetMatchTransport.DefaultPort,
+                new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red));
+            await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
+            var lanScreen = _currentScreen as GameScreen;
+            if (lanScreen is null || !lanScreen.IsMessagePanelFullyVisible)
+                throw new InvalidOperationException($"Classic LAN message panel is outside the viewport: {lanScreen?.MessagePanelBounds ?? "screen missing"}.");
+            StartGomokuLocal(new GomokuRoomOptions(19, GomokuRuleSet.RenjuForbiddenMoves, StoneColor.Black));
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GomokuGameScreen)
+                throw new InvalidOperationException("Gomoku local screen failed to instantiate.");
             StartJunqiLocal();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not JunqiGameScreen junqi)
@@ -552,7 +607,7 @@ public partial class Main : Control
             smokeSettings.ShowBoardCoordinates = true;
             SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
-            GD.Print("[Xiangqi.UI.Smoke] Four gallery cards, twenty-four routes, Junqi, settings and spring-board local match instantiated.");
+            GD.Print("[Xiangqi.UI.Smoke] Five gallery cards, thirty-three routes, Junqi, Gomoku, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }
         catch (Exception error)

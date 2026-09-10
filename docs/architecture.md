@@ -57,7 +57,7 @@ GameScreen 在 CueRaised 缓存本手视觉信息，在 StateChanged 获取 afte
 
 ## 4. 四种房间的编排
 
-玩法画廊以经典、三国、揭棋、军旗四张横向卡片为入口，宽度不足时横向滚动。每次只展开一组，裁剪容器通过 Tween 改变高度和透明度，父节点保持原位并把下方节点向下推；叶节点缩窄、降低字号并带树枝标记，与 0 级父节点区分。经典卡片含“联机模式、对局记录、棋谱导入、人机模式”；三国、揭棋与军旗含“联机模式、对局记录”。揭棋和军旗的 LAN/Steam 均由各自权威控制器接入共享双人原始包端口。
+玩法画廊以经典、三国、揭棋、军旗、五子棋五张横向卡片为入口，宽度不足时横向滚动。每次只展开一组，裁剪容器通过 Tween 改变高度和透明度。经典与五子棋均含四组菜单；五子棋 AI 两个叶子当前只告知未实现。揭棋、军旗和五子棋的 LAN/Steam 均由各自权威控制器接入共享双人原始包端口。
 
 ### 4.1 本地双人
 
@@ -114,12 +114,12 @@ UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回�
 
 ## 5. 双人协议与兼容性
 
-[MatchWireProtocol.cs](../src/Xiangqi.Core/Application/MatchWireProtocol.cs) 是经典类型化消息的唯一编解码事实来源。当前 v5，小端二进制帧：第 0 字节版本，第 1 字节消息类型，余下为固定类型 payload，最大包 16600 字节；配置帧增加玩法模式以供组合根路由。揭棋与军旗另在各自控制器中编解码原始包，不进入经典消息枚举。
+[MatchWireProtocol.cs](../src/Xiangqi.Core/Application/MatchWireProtocol.cs) 是经典类型化消息的唯一编解码事实来源。当前 v6，小端二进制帧；配置帧含玩法模式、棋盘尺寸和规则标志以供组合根路由。揭棋、军旗与五子棋另在各自控制器中编解码原始包，不进入经典消息枚举。
 
 | 消息 | 类型值 | Payload 与主要约束 |
 | --- | ---: | --- |
 | Move | 1 | sequence:int64 + 起终点各两个 int32；26 字节；坐标合法、序号 >0 |
-| Configuration | 2 | 局时/步时 int32 + hostSide byte；11 字节 |
+| Configuration | 2 | 局时/步时 int32 + hostSide/mode byte + boardSize/ruleFlags int32；20 字节 |
 | Timeout | 3 | ply:int64 + loser byte；11 字节 |
 | ClockSync | 4 | ply:int64 + 三个 double + 当前方 byte；35 字节；有限非负 |
 | Chat | 5 | 32 字节消息 ID + sender/target 席位 + UTF-8 长度与正文；目标可空，非空、无控制字符、最多 512 UTF-8 字节 |
@@ -129,7 +129,7 @@ UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回�
 
 适配器先验证来源/长度并调用 TryDecode，再发布类型化事件；协调器验证状态序号/权限，再进入领域。不能只在 UI 或发送端校验，也不能用任意对象反序列化覆盖棋盘。
 
-修改不兼容布局时必须提升 Version，同步所有 transport dispatch、Lobby 版本检查、FakeTransport 和往返/畸形包测试。不得改经典 v5 而遗漏 Steam 适配器，或把三国/揭棋/军旗 JSON 混入经典类型化消息流。
+修改不兼容布局时必须提升 Version，同步所有 transport dispatch、Lobby 版本检查、FakeTransport 和往返/畸形包测试。不得改经典 v6 而遗漏 Steam 适配器，或把新玩法 JSON 混入经典类型化消息流。
 
 ## 6. 资料、外观与生命周期
 

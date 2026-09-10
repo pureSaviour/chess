@@ -6,14 +6,15 @@
 
 ### 1.1 项目范围与架构结论
 
-项目使用 Godot 4.7.2 Mono + C#，包含三个独立玩法：
+项目使用 Godot 4.7.2 Mono + C#，包含五个独立玩法：
 
 - 经典象棋：本地双人、ENet 局域网、Steam 好友联机、外接 UCI AI。
 - 三国象棋：本地三人、TCP 局域网、Steam 三席邀请；包含收编、三方协商、进程内断线恢复和房主迁移。
 - 揭棋：本地、LAN 与 Steam 双人；房主权威脱敏协议、Seed 承诺/赛后验证、确定性暗子与扩展 PGN。
 - 军旗：独立 12×5 图拓扑、双人规则、热座/LAN/Steam、玩家视图脱敏及 AC2 `INFO[1.0]` 棋谱。
+- 五子棋：可配方格交叉点棋盘、可选连珠禁手、本地/LAN/Steam，以及 SGF FF[4]/GM[4] 记录/导入；AI 尚未实现。
 
-三种玩法各有领域模型与对局编排，共用部分棋种值对象、时间配置、设置、UI 样式、皮肤和反馈特效。并没有统一的“任意人数/任意棋盘玩法引擎”。
+五种玩法各有领域模型与对局编排，共用部分值对象、时间配置、设置、UI 样式、皮肤和反馈特效。并没有统一的“任意人数/任意棋盘玩法引擎”。
 
 检查结论：**核心棋规已与 UI/引擎分离；抽象层部分成熟，尚未达到所有对局流程与 UI 完全解耦。** 经典房间仍承担较多应用编排；三国的控制器查询面仍暴露可变对象，拓扑/投影接口尚未形成完整注入链。详见 [架构检查记录](docs/architecture-review.md)，不能将这些边界描述成已经修复。
 
@@ -81,6 +82,7 @@ UI 根据“轮到谁、是否协商、是否结束”关闭按钮属于交互�
 | [三国象棋](docs/three-kingdoms.md) | 已确认规则、拓扑、会话/控制器/传输、迁移重连与使用注意事项 |
 | [揭棋玩法](docs/jieqi.md) | 暗/明身份、槽位首步、确定性洗牌、棋谱与联机保密边界 |
 | [军旗玩法](docs/junqi.md) | 12×5 图拓扑、布阵/战斗、控制器、可信房主模型、AC2 棋谱与 UI 隐私 |
+| [五子棋玩法](docs/gomoku.md) | 通用方格几何、禁手、控制器、可信房主协议、SGF 和 AI 未实现边界 |
 | [架构检查记录](docs/architecture-review.md) | 2026-09-07 代码证据、分层评估、待改进项与验证范围 |
 | [Steam 集成](docs/steam-integration.md) | 平台配置、开发 App ID、验收；三国细节路由到对应玩法文档 |
 | [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md) | 引擎与运行时配置、API 取舍、兼容依据、验证证据与剩余风险 |
@@ -133,7 +135,7 @@ MatchClock 是 Core 内的纯 C# 双人棋钟，但启动/暂停、主机超时�
 
 ### 2.3 网络与 AI 边界
 
-经典 IMatchTransport 搬运类型化消息，EnetMatchTransport 与 SteamMatchTransport 共享 MatchWireProtocol v5（小端、封闭消息类型、最大 16600 字节）；v5 的房间配置增加 `TwoPlayerGameMode`，用于在经典、揭棋与军旗控制器之间路由。两适配器同时实现 `ITwoPlayerPacketTransport`，为新玩法搬运有界不透明包，但不解释 Seed、私密布阵或棋规。经典协调器仍验证序号、己方身份、申请 ID/局面手数，再调用同一个 GameSession。
+经典 IMatchTransport 搬运类型化消息，EnetMatchTransport 与 SteamMatchTransport 共享 MatchWireProtocol v6（小端、封闭消息类型、最大 16600 字节）；v6 配置帧增加通用棋盘尺寸与规则标志，供组合根路由五子棋。两适配器同时实现 `ITwoPlayerPacketTransport`，为新玩法搬运有界不透明包，但不解释 Seed、私密布阵或棋规。经典协调器仍验证序号、己方身份、申请 ID/局面手数，再调用同一个 GameSession。
 
 经典 ENet 默认 UDP 27888，只允许一个远端；Steam 只接受确定的对手。断线结束当前经典网络流程，不具备三国的房主迁移/增量重连。
 
@@ -205,11 +207,14 @@ MainMenuScreen
   │   ├── 三国卡片两组折叠菜单 → ThreeGalleryScreen 对应本地/LAN/Steam 设置 → ThreeGameScreen
   │   ├── 揭棋卡片两组折叠菜单 → 本地/LAN/Steam 对局 / 最近与保存记录
   │   └── 军旗卡片两组折叠菜单 → 本地/LAN/Steam 对局 / AC2 最近与保存记录
+  │   └── 五子棋卡片四组折叠菜单 → 本地/LAN/Steam、SGF 记录/导入、AI 未实现说明
   └── 全局设置：SettingsScreen
 房间内设置：InGameSettingsDialog
 ```
 
-Main.cs / Main.ThreeKingdoms.cs 负责创建平台服务、适配器和页面，Action 回调承担导航。ModeGalleryScreen 展示四张横向排列、可横向滚动的玩法卡片，二十四个叶节点经 Action 回调进入设置、记录或对局页；路由值不携带配置，也不创建房间。卡片背景只负责装饰并忽略输入。SwitchTo 移除并 QueueFree 旧页面；共享 Texture2D 由 Godot 资源缓存管理，卡片节点不手动 Dispose。房间负责释放交给它的控制器/适配器。经典会话和协调器仍在 GameScreen 内创建，并非全部对象都已移至组合根。
+Main.cs / Main.ThreeKingdoms.cs 负责创建平台服务、适配器和页面，Action 回调承担导航。ModeGalleryScreen 展示五张横向排列、可横向滚动的玩法卡片，三十三个叶节点经 Action 回调进入设置、记录或对局页；路由值不携带配置，也不创建房间。卡片背景只负责装饰并忽略输入。SwitchTo 移除并 QueueFree 旧页面；共享 Texture2D 由 Godot 资源缓存管理，卡片节点不手动 Dispose。房间负责释放交给它的控制器/适配器。经典会话和协调器仍在 GameScreen 内创建，并非全部对象都已移至组合根。
+
+Godot 基准视口为 1100×820，`canvas_items + expand` 在全屏时扩展逻辑视口以填满显示器，不使用 keep 造成宽高比黑边。经典 LAN 房间为右侧消息栏保留 300px 最小宽度，棋盘列负责弹性伸缩；`--smoke-ui` 在首次布局后检查消息栏四边均在视口内，不再依赖进入试下所触发的二次排版。
 
 ### 4.2 设置、皮肤与反馈
 
@@ -247,9 +252,9 @@ SteamLobbyService 是唯一 SteamAPI.InitEx/RunCallbacks/Shutdown 所有者。�
 
 `GameSession.CreateRecord`、`ThreeMatchSession.CreateRecord`、`JieqiGameSession.CreateRecord` 与 `JunqiGameRecord` 返回不可变主线；表现层分别在 `user://records/classic`、`user://records/three`、`user://records/jieqi`、`user://records/junqi` 下持有文件。`recent` 每玩法按修改时间仅保留十局，`saved` 不自动淘汰；写入失败只提示/记录，不反向改变权威胜负。揭棋 PGN 扩展额外保存版本化 Seed/Shuffle，直播禁止建谱，赛后才释放 Seed。军旗以 GB2312 写出 AC2 `INFO[1.0]`，包含双方布阵、着法、战果、亮旗和赛果，导入后逐手重放复验。
 
-四种玩法的复盘页均保留上一步/下一步按钮，并由带刻度、整数步长的 HSlider 跳转任意主线手数；按钮、滑杆和标签共享同一个索引，渲染时使用 `SetValueNoSignal` 避免事件递归。刻度最多显示 31 个以免长棋谱挤成实线，但滑杆仍可到达每一手。
+五种玩法的复盘页均保留上一步/下一步按钮；经典、三国、揭棋与军旗还提供带刻度的 HSlider，五子棋首版仅按步导航。
 
-`ClassicTrialSession` 与 `ThreeTrialSession` 是无网络、无棋钟、无合并操作的临时领域副本。界面开启试下后把点击送给副本并允许依次模拟各方；权威会话仍接收网络事件，Revision/Ply 前进会触发提示，退出即丢弃副本并显示最新真实局面。所有对象仅在 Godot 主线程使用，无需 Dispose；不得把试下着法发给 AI、transport 或写入正式棋谱。
+`ClassicTrialSession` 与 `ThreeTrialSession` 是无网络、无棋钟、无合并操作的临时领域副本。界面开启试下后把点击送给副本并允许依次模拟各方；经典试下通过 `GameSession.DescribeMove` 复用正常着法的表现语义，播放移动/吃子动画、提示、音效和落子反馈。权威会话仍接收网络事件，退出即丢弃副本并显示最新真实局面；试下着法不发给 AI/transport，也不写入正式棋谱。
 
 经典 `.pgn.meta.json` sidecar 保存列表展示所需的对局时间、方式、双方昵称、我方标记及最多 64×64 RGBA8 头像；System.Text.Json 负责通用编解码，读取限制 256 KiB 并复验字段/像素长度。PGN 仍可脱离 sidecar 交换，旧记录缺少 sidecar 时从 PGN 标签和默认色块回退。记录列表按已批准布局显示日期时间、双方头像/名称、我方胜败和对局方式；视图拥有临时 ImageTexture 并在退出时释放。
 
@@ -284,7 +289,7 @@ Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于
 
 | 参数 | 验证目标 |
 | --- | --- |
-| --smoke-ui / --capture-ui | 四张横向玩法卡片、二十四个叶子入口（全部按父/子层级折叠）、背景资源、设置页、经典本地房间与春季皮肤；可选画廊截图 |
+| --smoke-ui / --capture-ui | 五张横向玩法卡片、三十三个叶子入口、五子棋/Junqi 页面构造、经典 LAN 消息栏边界、设置页与春季皮肤；可选画廊截图 |
 | --smoke-feedback / --capture-feedback | 经典主题注入/回退、棋子与反馈配色、选中/落地/回复/撤销/翻转/空闲反馈；可选图形截图 |
 | --smoke-three / --capture-three | 三国三方朝下视角、三条命名国界留白、九宫中心、移动插值/落点、主题应用、405 次旋转命中往返、243 拓扑边、面积铺满与设置 |
 | --smoke-profile-ui | 经典资料卡与临时头像 |
@@ -301,6 +306,8 @@ Godot 4.7.2 路径由 `GODOT_NEW_PATH` 提供；旧版 `GODOT_PATH` 不再用于
 2026-09-08 本轮记录/复盘更新通过 45 项核心测试、三人网络测试和 Godot C# 编译；本机 Godot 4.5.1 Mono 的本轮 `--smoke-ui` headless 进程原生 signal 11，因此十四入口、记录头像、复盘曲线/箭头及菜单 Tween 尚未获得新的运行时视觉验收，不能沿用上一轮截图代替。
 
 2026-09-09 揭棋 LAN/Steam 房主权威脱敏、Seed 承诺/赛后验证和直播棋谱阻止已实现；军旗领域、网络控制器、独立棋盘、热座遮罩、四卡二十四叶画廊及 AC2 记录/复盘已实现，并通过 58 项核心测试和 Godot C# 编译。真实双机 LAN、Steam 好友实联、Android 触控及军旗/画廊人工视觉验收仍未完成；揭棋长打与 120 步无吃子裁决仍未实现。
+
+2026-09-10 五子棋领域、可配方格几何、本地/LAN/Steam 控制器、SGF 记录/导入和五卡三十三叶画廊已实现；AI 仍只有未实现告知。全屏 expand、经典 LAN 消息栏和试下完整动效亦已修复。核心测试与 Godot headless smoke 已通过；真实设备/账号及复杂禁手棋库对拍尚未验收。
 
 2026-09-09 暗子背面/翻面修复通过 48 项核心回归、Android 与最终 Windows 构建（均 0 警告/错误）。揭子平移和翻面现共用同一时间线，不再在落点后追加翻面阶段。`--smoke-feedback` 已增加无字背面、covered→明子翻面和动画释放断言；本机 Godot 4.7.2 headless 可初始化 .NET，但多种启动参数均在主场景 `_Ready` 前以 0 退出、没有 PASS/FAIL，因此该 smoke 和实际翻面观感仍记为未验收。
 
