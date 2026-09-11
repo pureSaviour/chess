@@ -91,6 +91,8 @@ public sealed class NetworkGomokuMatchController : IGomokuMatchController
     private async Task SendHello() { var o = _options!.Value; await Send(new(Protocol, "hello", 0, 0, 0, o.BoardSize, (int)o.Rules, ((int)o.HostColor).ToString())); await Broadcast(); }
     private void OnPacket(ReadOnlyMemory<byte> bytes)
     {
+        if (MatchWireProtocol.TryDecode(bytes.ToArray(), out var shared) &&
+            shared.Type == MatchWireMessageType.PlayerProfile) return;
         if (bytes.Length is 0 or > MaximumBytes) { Message?.Invoke("五子棋数据大小无效。"); return; }
         Packet? packet; try { packet = JsonSerializer.Deserialize<Packet>(bytes.Span); } catch (JsonException) { Message?.Invoke("五子棋数据格式无效。"); return; }
         if (packet is null || packet.Version != Protocol) { Message?.Invoke("五子棋协议版本不兼容。"); return; }

@@ -131,7 +131,7 @@ public sealed class ChessGame
     public bool DeclareLoss(PieceSide loser, GameEndReason reason)
     {
         if (_isFinished) return false;
-        if (reason != GameEndReason.Timeout)
+        if (reason is not (GameEndReason.Timeout or GameEndReason.Resignation))
             throw new ArgumentException("The supplied reason is not an external loss condition.", nameof(reason));
         _history.Push(CaptureMemento());
         _isFinished = true;

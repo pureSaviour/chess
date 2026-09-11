@@ -25,9 +25,13 @@ public interface IJieqiMatchController : IAsyncDisposable
     PieceSide? LocalSide { get; }
     bool IsConnected { get; }
     bool CanSubmitMove { get; }
+    TimeControl TimeControl { get; }
+    ClockSnapshot Clock { get; }
+    void Tick(double deltaSeconds);
     IReadOnlyList<BoardPosition> GetLegalDestinations(BoardPosition from);
     ValueTask<JieqiSubmitResult> SubmitMoveAsync(BoardPosition from, BoardPosition to,
         CancellationToken cancellationToken = default);
+    ValueTask<bool> SubmitResignationAsync(PieceSide side, CancellationToken cancellationToken = default);
     bool TryCreateFinishedRecord(IReadOnlyDictionary<string, string> tags,
         out JieqiGameRecord? record, out string? error);
 }
@@ -35,9 +39,13 @@ public interface IJieqiMatchController : IAsyncDisposable
 public sealed class LocalJieqiMatchController : IJieqiMatchController
 {
     private readonly JieqiGameSession _session;
-    public LocalJieqiMatchController(ulong seed)
+    private readonly MatchClock _clock;
+    public LocalJieqiMatchController(ulong seed, TimeControl? timeControl = null)
     {
+        TimeControl = (timeControl ?? TimeControl.Unlimited).Validate();
+        _clock = new MatchClock(TimeControl) { IsRunning = true };
         _session = new(seed); _session.StateChanged += OnChanged;
+        _clock.BeginTurn(_session.Snapshot.SideToMove);
     }
     public event Action? Changed;
     public event Action<string>? Message { add { } remove { } }
@@ -45,13 +53,30 @@ public sealed class LocalJieqiMatchController : IJieqiMatchController
     public PieceSide? LocalSide => null;
     public bool IsConnected => true;
     public bool CanSubmitMove => !Snapshot.IsFinished;
+    public TimeControl TimeControl { get; }
+    public ClockSnapshot Clock => _clock.Snapshot;
+    public void Tick(double deltaSeconds)
+    {
+        var loser = _clock.Advance(deltaSeconds);
+        if (loser is null) return;
+        _clock.IsRunning = false;
+        _session.DeclareLoss(loser.Value, GameEndReason.Timeout);
+    }
     public IReadOnlyList<BoardPosition> GetLegalDestinations(BoardPosition from) => _session.GetLegalDestinations(from);
     public ValueTask<JieqiSubmitResult> SubmitMoveAsync(BoardPosition from, BoardPosition to,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var result = _session.TryMove(from, to);
+        if (result.IsSuccess) _clock.BeginTurn(_session.Snapshot.SideToMove);
         return ValueTask.FromResult(result.IsSuccess ? JieqiSubmitResult.Applied() : JieqiSubmitResult.Rejected(result.Rejection));
+    }
+    public ValueTask<bool> SubmitResignationAsync(PieceSide side, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var applied = _session.DeclareLoss(side, GameEndReason.Resignation);
+        if (applied) _clock.IsRunning = false;
+        return ValueTask.FromResult(applied);
     }
     public bool TryCreateFinishedRecord(IReadOnlyDictionary<string, string> tags,
         out JieqiGameRecord? record, out string? error)
@@ -80,19 +105,28 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     private string? _commitment;
     private ulong? _releasedSeed;
     private long _nextRequest;
+    private MatchClock _clock;
+    private TimeControl _timeControl;
+    private double _clockSyncAccumulator;
+    private TaskCompletionSource<bool>? _pendingResignation;
+    private long _pendingResignationRequest;
     private bool _disposed;
 
-    public NetworkJieqiMatchController(ITwoPlayerPacketTransport transport, PieceSide? hostSide, ulong? hostSeed = null)
+    public NetworkJieqiMatchController(ITwoPlayerPacketTransport transport, PieceSide? hostSide,
+        ulong? hostSeed = null, TimeControl? timeControl = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         if (transport.IsPacketHost && hostSide is null || hostSide is { } configured && !Enum.IsDefined(configured))
             throw new ArgumentOutOfRangeException(nameof(hostSide));
         _transport = transport; HostSide = hostSide;
+        _timeControl = (timeControl ?? TimeControl.Unlimited).Validate();
+        _clock = new MatchClock(_timeControl);
         LocalSide = transport.IsPacketHost ? hostSide : hostSide?.Opponent();
         if (transport.IsPacketHost)
         {
             _authoritySeed = hostSeed ?? RandomSeed(); _authority = new(_authoritySeed.Value);
             _public = _authority.Snapshot; _commitment = Commitment(_authoritySeed.Value);
+            _clock.BeginTurn(_public.SideToMove);
             RefreshLegal();
         }
         else _public = new JieqiGameSession(0).Snapshot;
@@ -107,6 +141,27 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     public PieceSide? LocalSide { get; private set; }
     public bool IsConnected => _transport.IsPacketConnected;
     public bool CanSubmitMove => IsConnected && !_public.IsFinished && _public.SideToMove == LocalSide;
+    public TimeControl TimeControl => _timeControl;
+    public ClockSnapshot Clock => _clock.Snapshot;
+
+    public void Tick(double deltaSeconds)
+    {
+        if (_public.IsFinished) return;
+        var loser = _clock.Advance(deltaSeconds);
+        if (_authority is null) return;
+        if (loser is not null)
+        {
+            _clock.IsRunning = false;
+            if (_authority.DeclareLoss(loser.Value, GameEndReason.Timeout)) PublishAuthorityState();
+            _ = SendStateAsync(0, null);
+            return;
+        }
+        if (!IsConnected || !_timeControl.IsEnabled) return;
+        _clockSyncAccumulator += deltaSeconds;
+        if (_clockSyncAccumulator < 0.25) return;
+        _clockSyncAccumulator = 0;
+        _ = SendStateAsync(0, null);
+    }
     public IReadOnlyList<BoardPosition> GetLegalDestinations(BoardPosition from) =>
         _legal.TryGetValue(from, out var value) ? value : [];
 
@@ -123,9 +178,31 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
         }
         var result = _authority.TryMove(from, to);
         if (!result.IsSuccess) return JieqiSubmitResult.Rejected(result.Rejection);
+        _clock.BeginTurn(_authority.Snapshot.SideToMove);
         _moves.Add(result.Move); PublishAuthorityState();
         await SendStateAsync(0, result.Move, cancellationToken);
         return JieqiSubmitResult.Applied();
+    }
+
+    public async ValueTask<bool> SubmitResignationAsync(PieceSide side,
+        CancellationToken cancellationToken = default)
+    {
+        if (_public.IsFinished || LocalSide != side) return false;
+        if (_authority is null)
+        {
+            _pendingResignationRequest = ++_nextRequest;
+            _pendingResignation = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            await SendAsync(new JieqiPacket("resign", _pendingResignationRequest, _public.PlyNumber, (int)side,
+                -1, -1, -1, -1, null, null, null, null), cancellationToken);
+            try { return await _pendingResignation.Task.WaitAsync(TimeSpan.FromSeconds(3), cancellationToken); }
+            catch (TimeoutException) { return false; }
+            finally { _pendingResignation = null; _pendingResignationRequest = 0; }
+        }
+        if (!_authority.DeclareLoss(side, GameEndReason.Resignation)) return false;
+        _clock.IsRunning = false;
+        PublishAuthorityState();
+        await SendStateAsync(0, null, cancellationToken);
+        return true;
     }
 
     public bool TryCreateFinishedRecord(IReadOnlyDictionary<string, string> tags,
@@ -144,23 +221,32 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     {
         if (_disposed) return; _disposed = true;
         _transport.PacketReceived -= OnPacket; _transport.PacketStatusChanged -= OnStatus;
+        _pendingResignation?.TrySetResult(false);
         await _transport.DisposeAsync();
     }
 
     private void OnStatus(TransportStatus status)
     {
         Message?.Invoke(status.Detail ?? status.State.ToString());
+        _clock.IsRunning = status.State == TransportConnectionState.Connected && !_public.IsFinished;
         if (status.State == TransportConnectionState.Connected && _authority is not null) _ = SendStateAsync(0, null);
         Changed?.Invoke();
     }
 
     private void OnPacket(ReadOnlyMemory<byte> bytes)
     {
+        if (MatchWireProtocol.TryDecode(bytes.ToArray(), out var shared) &&
+            shared.Type == MatchWireMessageType.PlayerProfile) return;
         if (!JieqiWireProtocol.TryDecode(bytes.Span, out var packet, out var error))
         { Message?.Invoke(error ?? "收到无效揭棋数据。"); return; }
         if (packet!.Type == "move") ReceiveMoveRequest(packet);
+        else if (packet.Type == "resign") ReceiveResignationRequest(packet);
         else if (packet.Type == "state") ReceiveState(packet);
-        else if (packet.Type == "reject" && _authority is null) Message?.Invoke(packet.Error ?? "房主拒绝了着法。");
+        else if (packet.Type == "reject" && _authority is null)
+        {
+            if (packet.RequestId == _pendingResignationRequest) _pendingResignation?.TrySetResult(false);
+            Message?.Invoke(packet.Error ?? "房主拒绝了请求。");
+        }
         else Message?.Invoke("收到与本机角色不匹配的揭棋消息。");
     }
 
@@ -172,7 +258,20 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
         var from = new BoardPosition(packet.FromFile, packet.FromRank); var to = new BoardPosition(packet.ToFile, packet.ToRank);
         var result = _authority.TryMove(from, to);
         if (!result.IsSuccess) { _ = SendRejectAsync(packet.RequestId, $"非法着法：{result.Rejection}。"); return; }
+        _clock.BeginTurn(_authority.Snapshot.SideToMove);
         _moves.Add(result.Move); PublishAuthorityState(); _ = SendStateAsync(packet.RequestId, result.Move);
+    }
+
+    private void ReceiveResignationRequest(JieqiPacket packet)
+    {
+        if (_authority is null || packet.Side != (int)HostSide!.Value.Opponent() ||
+            packet.ExpectedPly != _public.PlyNumber || packet.RequestId <= 0 || _public.IsFinished)
+        { _ = SendRejectAsync(packet.RequestId, "认输身份、序号或局面版本无效。"); return; }
+        if (!_authority.DeclareLoss((PieceSide)packet.Side, GameEndReason.Resignation))
+        { _ = SendRejectAsync(packet.RequestId, "当前不能认输。"); return; }
+        _clock.IsRunning = false;
+        PublishAuthorityState();
+        _ = SendStateAsync(packet.RequestId, null);
     }
 
     private void ReceiveState(JieqiPacket packet)
@@ -187,11 +286,18 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
         if (_commitment is not null && !CryptographicOperations.FixedTimeEquals(
                 Encoding.ASCII.GetBytes(_commitment), Encoding.ASCII.GetBytes(packet.Commitment)))
         { Message?.Invoke("房主更换了揭棋随机承诺，已拒绝同步。"); return; }
-        if (!TrySnapshot(packet.State, out var next, out var error) ||
-            next!.PlyNumber == 0 && _public.PlyNumber != 0 ||
-            next.PlyNumber != 0 && next.PlyNumber != _public.PlyNumber + 1)
-        { Message?.Invoke(error ?? "揭棋局面序号不连续。"); return; }
+        if (!TrySnapshot(packet.State, out var next, out var error))
+        { Message?.Invoke(error ?? "揭棋公开局面无效。"); return; }
+        if (!TryParseClock(packet, next!.SideToMove, out var timeControl, out var clock, out var clockError))
+        { Message?.Invoke(clockError ?? "揭棋棋钟无效。"); return; }
+        if (next!.PlyNumber < _public.PlyNumber || next.PlyNumber > _public.PlyNumber + 1)
+        { Message?.Invoke("揭棋局面序号不连续。"); return; }
         var advanced = next.PlyNumber == _public.PlyNumber + 1;
+        if (!advanced && !SameSnapshot(next, _public) &&
+            !(!_public.IsFinished && next.IsFinished && next.Pieces.SequenceEqual(_public.Pieces) &&
+              next.SideToMove == _public.SideToMove &&
+              next.EndReason is GameEndReason.Timeout or GameEndReason.Resignation))
+        { Message?.Invoke("揭棋同手数状态包含未经着法产生的局面变化。"); return; }
         var move = new ChessMove(new(packet.FromFile, packet.FromRank), new(packet.ToFile, packet.ToRank));
         if (advanced && (!move.From.IsInside || !move.To.IsInside))
         { Message?.Invoke("揭棋权威着法坐标无效。"); return; }
@@ -205,7 +311,13 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
         }
         else if (next.IsFinished) { Message?.Invoke("揭棋终局缺少赛后种子。"); return; }
         if (advanced) _moves.Add(move);
+        _timeControl = timeControl;
+        _clock = new MatchClock(timeControl);
+        _clock.Apply(clock);
         _commitment = packet.Commitment; _public = next; LoadLegal(packet.Legal);
+        _clock.IsRunning = IsConnected && !next.IsFinished;
+        if (next.IsFinished && packet.RequestId == _pendingResignationRequest)
+            _pendingResignation?.TrySetResult(next.EndReason == GameEndReason.Resignation);
         Changed?.Invoke();
     }
 
@@ -213,6 +325,8 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     {
         var game = new JieqiGameSession(seed);
         foreach (var move in moves) if (!game.TryMove(move.From, move.To).IsSuccess) return false;
+        if (expected.IsFinished && expected.EndReason is (GameEndReason.Timeout or GameEndReason.Resignation) &&
+            expected.Winner is { } winner && !game.DeclareLoss(winner.Opponent(), expected.EndReason)) return false;
         return game.Snapshot == expected || SameSnapshot(game.Snapshot, expected);
     }
 
@@ -240,7 +354,10 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
             move?.From.File ?? -1, move?.From.Rank ?? -1, move?.To.File ?? -1, move?.To.Rank ?? -1,
             _commitment, _public.IsFinished ? _authoritySeed!.Value.ToString("X16") : null,
             FromSnapshot(_public), _legal.Select(x => new JieqiLegal(x.Key.File, x.Key.Rank,
-                x.Value.Select(y => new[] { y.File, y.Rank }).ToArray())).ToArray());
+                x.Value.Select(y => new[] { y.File, y.Rank }).ToArray())).ToArray(), null,
+            new JieqiClock(_clock.Snapshot.RedGameSeconds, _clock.Snapshot.BlackGameSeconds,
+                _clock.Snapshot.MoveSeconds, (int)_clock.Snapshot.SideToMove),
+            _timeControl.GameSeconds, _timeControl.MoveSeconds);
         await SendAsync(packet, cancellationToken);
     }
     private ValueTask SendRejectAsync(long id, string error) => SendAsync(new JieqiPacket("reject", id,
@@ -278,14 +395,36 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     private static bool SameSnapshot(GameSnapshot a, GameSnapshot b) => a.SideToMove == b.SideToMove &&
         a.IsInCheck == b.IsInCheck && a.IsFinished == b.IsFinished && a.Winner == b.Winner && a.EndReason == b.EndReason &&
         a.PlyNumber == b.PlyNumber && a.Pieces.OrderBy(x => x.Piece.PieceInstanceId).SequenceEqual(b.Pieces.OrderBy(x => x.Piece.PieceInstanceId));
+
+    private static bool TryParseClock(JieqiPacket packet, PieceSide expectedTurn,
+        out TimeControl timeControl, out ClockSnapshot clock, out string? error)
+    {
+        timeControl = TimeControl.Unlimited;
+        clock = default;
+        error = null;
+        if (packet.GameSeconds is < 0 or > 864000 || packet.MoveSeconds is < 0 or > 86400 || packet.Clock is null ||
+            packet.Clock.Side is < 0 or > 1 || !double.IsFinite(packet.Clock.Red) ||
+            !double.IsFinite(packet.Clock.Black) || !double.IsFinite(packet.Clock.Move) ||
+            packet.Clock.Red < 0 || packet.Clock.Black < 0 || packet.Clock.Move < 0 ||
+            (PieceSide)packet.Clock.Side != expectedTurn ||
+            (packet.GameSeconds == 0 ? packet.Clock.Red != 0 || packet.Clock.Black != 0 :
+                packet.Clock.Red > packet.GameSeconds || packet.Clock.Black > packet.GameSeconds) ||
+            (packet.MoveSeconds == 0 ? packet.Clock.Move != 0 : packet.Clock.Move > packet.MoveSeconds))
+        { error = "揭棋棋钟字段无效。"; return false; }
+        timeControl = new(packet.GameSeconds, packet.MoveSeconds);
+        clock = new(packet.Clock.Red, packet.Clock.Black, packet.Clock.Move, (PieceSide)packet.Clock.Side);
+        return true;
+    }
 }
 
 internal sealed record JieqiPacket(string Type, long RequestId, long ExpectedPly, int Side,
     int FromFile, int FromRank, int ToFile, int ToRank, string? Commitment, string? Seed,
-    JieqiState? State, JieqiLegal[]? Legal, string? Error = null);
+    JieqiState? State, JieqiLegal[]? Legal, string? Error = null, JieqiClock? Clock = null,
+    int GameSeconds = 0, int MoveSeconds = 0);
 internal sealed record JieqiState(JieqiPieceDto[] Pieces, int Side, bool Check, bool Finished, int? Winner, int EndReason, int Ply);
 internal sealed record JieqiPieceDto(int File, int Rank, int Id, int Side, string? Kind);
 internal sealed record JieqiLegal(int File, int Rank, int[][] Targets);
+internal sealed record JieqiClock(double Red, double Black, double Move, int Side);
 
 internal static class JieqiWireProtocol
 {
@@ -295,17 +434,17 @@ internal static class JieqiWireProtocol
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(packet, Json);
         if (body.Length > MaximumPacketBytes) throw new InvalidOperationException("揭棋数据包超过上限。");
-        var result = new byte[body.Length + 2]; result[0] = 1; result[1] = 0x4a; body.CopyTo(result, 2); return result;
+        var result = new byte[body.Length + 2]; result[0] = 2; result[1] = 0x4a; body.CopyTo(result, 2); return result;
     }
     public static bool TryDecode(ReadOnlySpan<byte> bytes, out JieqiPacket? packet, out string? error)
     {
         packet = null; error = null;
-        if (bytes.Length is < 3 or > MaximumPacketBytes + 2 || bytes[0] != 1 || bytes[1] != 0x4a)
+        if (bytes.Length is < 3 or > MaximumPacketBytes + 2 || bytes[0] != 2 || bytes[1] != 0x4a)
         { error = "揭棋协议版本或长度无效。"; return false; }
         try
         {
             packet = JsonSerializer.Deserialize<JieqiPacket>(bytes[2..], Json);
-            if (packet is null || packet.Type is not ("move" or "state" or "reject")) throw new JsonException();
+            if (packet is null || packet.Type is not ("move" or "resign" or "state" or "reject")) throw new JsonException();
             return true;
         }
         catch (JsonException) { error = "揭棋数据包 JSON 无效。"; return false; }

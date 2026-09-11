@@ -4,9 +4,11 @@ using Xiangqi.Core.Application.ThreeKingdoms;
 using Xiangqi.Core.Domain.ThreeKingdoms;
 using Xiangqi.Core.Domain.Topology;
 using Xiangqi.Presentation.Boards;
+using Xiangqi.Presentation.Audio;
 using Xiangqi.Presentation.Settings;
 using Xiangqi.Presentation.Records;
 using Xiangqi.Presentation.UI;
+using Xiangqi.Presentation.Profiles;
 
 namespace Xiangqi.Presentation.Screens;
 
@@ -16,6 +18,7 @@ public partial class ThreeGameScreen : Control
     private readonly IThreeMatchController _controller;
     private readonly AppSettings _settings;
     private readonly ThreeBoardView _board;
+    private readonly GameplayAudioPlayer _audio = new();
     private readonly Label _status = new();
     private readonly Label[] _players = [new(), new(), new()];
     private readonly VBoxContainer _votes = new();
@@ -101,7 +104,9 @@ public partial class ThreeGameScreen : Control
         };
         AddChild(_error); AddChild(_settingsDialog);
         _settingsDialog.Saved += saved => { _settings.UpdateFrom(saved); _settings.SaveAndApply(); _board.ApplyAppearance(_settings); };
+        AddChild(_audio);
         _board.ApplyAppearance(_settings); _board.CellPressed += OnCell;
+        _board.MoveAnimationFinished += OnMoveAnimationFinished;
         _controller.Changed += Refresh; _controller.Message += OnMessage;
         _controller.Chat.MessageAdded += OnChatMessage;
         foreach (var entry in _controller.Chat.Entries) OnChatMessage(entry);
@@ -141,6 +146,7 @@ public partial class ThreeGameScreen : Control
             }
         }
     }
+    private void OnMoveAnimationFinished(bool captured) => _audio.PlayLanding(captured);
     private bool Send(ThreeCommand command)
     {
         var error = _controller.Submit(command);
@@ -175,7 +181,7 @@ public partial class ThreeGameScreen : Control
             if (!_recentWritten)
             {
                 _recentWritten = true;
-                try { ThreeRecordStore.SaveRecent(BuildRecord()); } catch (Exception error) { GD.PushWarning(error.Message); }
+                try { ThreeRecordStore.SaveRecent(BuildRecord(), BuildPresentation()); } catch (Exception error) { GD.PushWarning(error.Message); }
             }
         }
         foreach (var child in _votes.GetChildren()) { _votes.RemoveChild(child); child.QueueFree(); }
@@ -224,9 +230,30 @@ public partial class ThreeGameScreen : Control
         var result = state.Winner is { } winner ? $"{ThreeMatchSession.Name(winner)}-win" : state.IsFinished ? "1/2-1/2" : "*";
         return _controller.Session.CreateRecord(new Dictionary<string, string> { ["Result"] = result, ["Date"] = DateTime.Now.ToString("yyyy.MM.dd") });
     }
+    private MatchRecordPresentation BuildPresentation()
+    {
+        var state = _controller.Session.Game.Snapshot;
+        var localKingdom = _controller.LocalKingdom ?? Kingdom.Wei;
+        var localName = _controller.PlayerNames[(int)localKingdom];
+        var localProfile = _controller.PlayerProfiles[(int)localKingdom];
+        var custom = localProfile is null ? CustomPlayerProfileFactory.Create(_settings, localName) : null;
+        var local = localProfile is { } transmittedLocal
+            ? FromProfile(transmittedLocal, true)
+            : new RecordPlayer(custom?.DisplayName ?? localName, true, custom?.Avatar?.Width ?? 0,
+                custom?.Avatar?.Height ?? 0, custom?.Avatar?.CopyRgba());
+        custom?.Avatar?.Dispose();
+        var opponents = Enum.GetValues<Kingdom>().Where(k => k != localKingdom)
+            .Select(k => _controller.PlayerProfiles[(int)k] is { } profile
+                ? FromProfile(profile, false)
+                : new RecordPlayer(_controller.PlayerNames[(int)k], false)).ToArray();
+        var result = state.Winner is null ? "和" : state.Winner == localKingdom ? "胜" : "败";
+        return new(DateTimeOffset.Now, "三国象棋", local, opponents, result);
+    }
+    private static RecordPlayer FromProfile(PlayerProfileCommand profile, bool isLocal) =>
+        new(profile.DisplayName, isLocal, profile.AvatarWidth, profile.AvatarHeight, profile.AvatarRgba.ToArray());
     private void SaveRecord()
     {
-        try { ThreeRecordStore.SavePermanent(BuildRecord()); _saveButton.Text = "已保存"; _saveButton.Disabled = true; }
+        try { ThreeRecordStore.SavePermanent(BuildRecord(), BuildPresentation()); _saveButton.Text = "已保存"; _saveButton.Disabled = true; }
         catch (Exception error) { _error.DialogText = $"保存失败：{error.Message}"; _error.PopupCentered(new(520, 150)); }
     }
     private void OnMessage(Kingdom? k, string text)
@@ -280,6 +307,7 @@ public partial class ThreeGameScreen : Control
     {
         _controller.Changed -= Refresh; _controller.Message -= OnMessage;
         _controller.Chat.MessageAdded -= OnChatMessage;
+        _board.MoveAnimationFinished -= OnMoveAnimationFinished;
         _controller.Dispose();
     }
 }

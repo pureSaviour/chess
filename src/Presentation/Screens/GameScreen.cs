@@ -252,7 +252,7 @@ public partial class GameScreen : Control
         page.AddChild(header);
         var backButton = UiStyle.CreateButton("‹ 返回");
         backButton.CustomMinimumSize = new Vector2(92, 41);
-        backButton.Pressed += _back;
+        backButton.Pressed += LeaveForGallery;
         header.AddChild(backButton);
         var title = UiStyle.CreateTitle("经典象棋", 26);
         title.VerticalAlignment = VerticalAlignment.Center;
@@ -281,6 +281,18 @@ public partial class GameScreen : Control
         _saveRecordButton.Disabled = true;
         _saveRecordButton.Pressed += SaveRecord;
         header.AddChild(_saveRecordButton);
+        var resign = UiStyle.CreateButton("认输");
+        resign.CustomMinimumSize = new Vector2(76, 41);
+        var resignDialog = new ConfirmationDialog
+        {
+            Title = "认输",
+            DialogText = "确定认输并结束本局？",
+            OkButtonText = "确认认输"
+        };
+        resignDialog.Confirmed += Resign;
+        AddChild(resignDialog);
+        resign.Pressed += () => resignDialog.PopupCentered();
+        header.AddChild(resign);
         _undoButton = UiStyle.CreateButton("悔棋");
         _undoButton.CustomMinimumSize = new Vector2(95, 41);
         _undoButton.Visible = _transport is null;
@@ -463,7 +475,6 @@ public partial class GameScreen : Control
                     foreach (var cue in _session.DescribeMove(trialBefore!, after, result))
                     {
                         _effects.Play(cue);
-                        _audio.PlayCue(cue);
                     }
                     _board.AnimateMove(trialBefore!, after, result.Move, result.CapturedPiece is not null);
                     _displayedSnapshot = after;
@@ -489,7 +500,6 @@ public partial class GameScreen : Control
         _selected = position;
         _legalDestinations = _trial?.GetLegalDestinations(position) ?? _session.GetLegalDestinations(position);
         _board.SetPosition(_trial?.Snapshot ?? _session.Snapshot, _selected, _legalDestinations);
-        _audio.PlaySelection();
     }
 
     private void OnStateChanged(GameSnapshot snapshot)
@@ -658,13 +668,37 @@ public partial class GameScreen : Control
             _pendingVisualCapture = cue.Kind == PresentationCueKind.Capture;
         }
         _effects.Play(cue);
-        _audio.PlayCue(cue);
     }
 
     private void OnMoveAnimationFinished(bool captured)
     {
         _audio.PlayLanding(captured);
         ScheduleAiMoveIfReady();
+    }
+
+    private async void Resign()
+    {
+        try { await DeclareLocalResignationAsync(); }
+        catch (Exception error) { OnSynchronizationFailed($"认输失败：{error.Message}"); }
+    }
+
+    private async void LeaveForGallery()
+    {
+        try { await DeclareLocalResignationAsync(); }
+        catch (Exception error) { GD.PushWarning($"返回画廊前同步认输失败：{error.Message}"); }
+        _back();
+    }
+
+    private async ValueTask<bool> DeclareLocalResignationAsync()
+    {
+        if (_session.Snapshot.IsFinished) return true;
+        if (_transport is not null)
+        {
+            if (_network is null) return false;
+            return await _network.DeclareResignationAsync();
+        }
+        _clock.IsRunning = false;
+        return _session.DeclareResignation(_localSide ?? PieceSide.Red);
     }
 
     private async void SendChat()

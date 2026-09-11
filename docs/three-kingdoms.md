@@ -55,7 +55,7 @@
 
 ## 网络与重连
 
-LAN 与 Steam 共用 `ThreeNetworkController` 协议 v2（与经典二进制 v5 相互独立），最大应用包 128 KiB；Steam 模式键同步提升为 `three-kingdoms-v2`。名册顺序即魏/吴/蜀，满三席后禁止补位。命令 Actor 和实时聊天 SenderSeat 必须匹配传输认证身份；移动仍由同一领域聚合校验。Steam64/公钥指纹只作内部身份键，界面名称使用 Steam Persona Name 或 LAN 房间昵称。
+LAN 与 Steam 共用 `ThreeNetworkController` 协议 v3（与经典二进制 v7 相互独立），最大应用包 128 KiB；Steam 房间模式键仍为 `three-kingdoms-v2`，它是平台路由键而非线协议版本。名册顺序即魏/吴/蜀，满三席后禁止补位。命令 Actor、实时聊天 SenderSeat 和资料包来源必须匹配 transport 认证身份；移动仍由同一领域聚合校验。v3 资料包同步受限昵称与最多 64×64 RGBA8 头像，供本局记录 sidecar 使用，不进入棋谱哈希或权威棋局。Steam64/公钥指纹只作内部身份键，界面名称使用资料昵称、Steam Persona Name 或 LAN 房间昵称。
 
 LAN 默认 **TCP 48028**。每位玩家都持有独立监听端口，加入者用系统分配的空闲 TCP 端口；所有设备需要允许本游戏在私有网络上的入站连接，且路由器不能开启客户端隔离。每位加入者先接房主，随后根据名册建立另外一条直连；因此初始房主失联不会切断另外两人的联系。ECDSA P-256 临时私钥只留本机，公钥指纹是本局身份，每帧签名并绑定连接 nonce。不是把经典双人 ENet 的远端数量简单改成二。
 

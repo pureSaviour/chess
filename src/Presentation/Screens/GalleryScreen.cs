@@ -57,9 +57,9 @@ public partial class GalleryScreen : Control
         ClearPage();
         AddHeader("本地对决", _back);
         var content = AddSettingsCard(600, 380);
-        AddDescription(content, _mode == TwoPlayerGameMode.Classic ? "两名玩家共用当前设备。可启用局时与步时。" :
+        AddDescription(content, _mode is TwoPlayerGameMode.Classic or TwoPlayerGameMode.Jieqi ? "两名玩家共用当前设备。可启用局时与步时。" :
             "两名玩家共用当前设备，本玩法当前不启用计时。", "本地房间设置");
-        var time = _mode == TwoPlayerGameMode.Classic ? AddTimeControls(content) : null;
+        var time = _mode is TwoPlayerGameMode.Classic or TwoPlayerGameMode.Jieqi ? AddTimeControls(content) : null;
         var start = UiStyle.CreateButton("开始本地对决", true);
         start.Pressed += () => _startLocal(time?.Value ?? TimeControl.Unlimited);
         content.AddChild(start);
@@ -74,7 +74,7 @@ public partial class GalleryScreen : Control
         var side = _mode == TwoPlayerGameMode.Junqi
             ? AddSideControl(content, "房主为先手", "房主为后手", "随机猜先")
             : AddSideControl(content, "房主执红", "房主执黑", "随机猜先");
-        var time = _mode == TwoPlayerGameMode.Classic ? AddTimeControls(content) : null;
+        var time = _mode is TwoPlayerGameMode.Classic or TwoPlayerGameMode.Jieqi ? AddTimeControls(content) : null;
         var form = new GridContainer { Columns = 2 };
         form.AddThemeConstantOverride("h_separation", 10);
         form.AddThemeConstantOverride("v_separation", 10);
@@ -113,7 +113,7 @@ public partial class GalleryScreen : Control
         var side = _mode == TwoPlayerGameMode.Junqi
             ? AddSideControl(content, "房主为先手", "房主为后手", "随机猜先")
             : AddSideControl(content, "房主执红", "房主执黑", "随机猜先");
-        var time = _mode == TwoPlayerGameMode.Classic ? AddTimeControls(content) : null;
+        var time = _mode is TwoPlayerGameMode.Classic or TwoPlayerGameMode.Jieqi ? AddTimeControls(content) : null;
         var start = UiStyle.CreateButton("创建房间并邀请好友", true);
         start.Pressed += () => _steamInvite(
             new NetworkMatchConfiguration(time?.Value ?? TimeControl.Unlimited, ResolveSide(side.Selected), _mode));

@@ -52,7 +52,6 @@ public partial class BoardView : Control
     private bool _showCoveredIdentityHints;
     private bool _coveredPieceMode;
     private int _moveDurationMs;
-    private int _captureDurationMs;
     private int _revealDurationMs = 280;
 
     public event Action<BoardPosition>? SquarePressed;
@@ -126,7 +125,6 @@ public partial class BoardView : Control
         _skinBackground.Material = _boardMaterial;
         _palette = theme.Palette;
         _moveDurationMs = theme.Effects.GetValueOrDefault(ThemeEffectSlot.Move)?.DurationMs ?? 0;
-        _captureDurationMs = theme.Effects.GetValueOrDefault(ThemeEffectSlot.Capture)?.DurationMs ?? 0;
         // A reveal is a landing presentation, so themes can tune it without adding a Jieqi-only
         // manifest slot. Clamp prevents a looping landing shader's long pulse from stalling turns.
         _revealDurationMs = Math.Clamp(
@@ -186,9 +184,6 @@ public partial class BoardView : Control
             return;
         }
 
-        var capturedPiece = captured
-            ? before.Pieces.FirstOrDefault(item => item.Position == move.To)
-            : (PlacedPiece?)null;
         var landed = after.Pieces.FirstOrDefault(item =>
             item.Position == move.To && item.Piece.PieceInstanceId == moving.Piece.PieceInstanceId);
         var revealedPiece = moving.Piece.Kind == BuiltInPieceKinds.Covered &&
@@ -202,16 +197,14 @@ public partial class BoardView : Control
         _lastMovePly = after.PlyNumber;
         _selected = null;
         _legalDestinations = [];
-        var configuredDuration = captured ? _captureDurationMs : _moveDurationMs;
-        var duration = configuredDuration > 0 ? configuredDuration / 1000f :
-            Mathf.Clamp(0.18f + distance * 0.025f, 0.22f, 0.42f);
+        var duration = PieceMotion.Duration(_moveDurationMs, distance);
         // A covered piece translates and turns over on one shared timeline. Extending the move
         // to the themed landing duration keeps both motions concurrent instead of appending a
         // second phase after arrival.
         if (revealedPiece is not null)
-            duration = Mathf.Max(duration, _revealDurationMs / 1000f);
+            duration = Mathf.Max(duration, Math.Min(0.30f, _revealDurationMs / 1000f * 0.72f));
         _moveAnimation = new MoveAnimation(
-            moving.Piece, capturedPiece, move.From, move.To, duration, captured,
+            moving.Piece, move.From, move.To, duration, captured,
             revealedPiece);
         SetProcess(true);
         QueueRedraw();
@@ -402,12 +395,9 @@ public partial class BoardView : Control
     private void DrawAnimatedMove(MoveAnimation animation)
     {
         var raw = Mathf.Clamp(animation.Elapsed / animation.Duration, 0, 1);
-        var eased = raw * raw * (3f - 2f * raw);
         var from = ToScreen(animation.From);
         var to = ToScreen(animation.To);
-        var center = from.Lerp(to, eased) - new Vector2(0, Mathf.Sin(raw * Mathf.Pi) * _cellSize * 0.13f);
-        if (animation.CapturedPiece is { } captured && raw < 0.82f)
-            DrawPiece(captured.Piece, to, Mathf.Clamp((0.82f - raw) / 0.32f, 0, 1));
+        var center = PieceMotion.Position(from, to, raw, _cellSize);
         if (animation.RevealedPiece is { } revealed)
         {
             var horizontalScale = Mathf.Max(0.035f, Mathf.Abs(Mathf.Cos(raw * Mathf.Pi)));
@@ -534,12 +524,7 @@ public partial class BoardView : Control
         if (_moveAnimation is { } animation)
         {
             var raw = Mathf.Clamp(animation.Elapsed / animation.Duration, 0, 1);
-            var eased = raw * raw * (3f - 2f * raw);
-            var center = ToScreen(animation.From).Lerp(ToScreen(animation.To), eased) -
-                         Vector2.Down * (Mathf.Sin(raw * Mathf.Pi) * _cellSize * 0.13f);
-            if (animation.CapturedPiece is { } captured && raw < 0.82f)
-                commands.Add(AtlasCommand(captured.Piece, ToScreen(animation.To),
-                    Mathf.Clamp((0.82f - raw) / 0.32f, 0, 1)));
+            var center = PieceMotion.Position(ToScreen(animation.From), ToScreen(animation.To), raw, _cellSize);
             commands.Add(AtlasCommand(animation.Piece, center, 1, 1.055f));
         }
         else if (_selected is { } selectedPosition)
@@ -564,7 +549,6 @@ public partial class BoardView : Control
 
     private sealed class MoveAnimation(
         ChessPiece piece,
-        PlacedPiece? capturedPiece,
         BoardPosition from,
         BoardPosition to,
         float duration,
@@ -572,7 +556,6 @@ public partial class BoardView : Control
         ChessPiece? revealedPiece)
     {
         public ChessPiece Piece { get; } = piece;
-        public PlacedPiece? CapturedPiece { get; } = capturedPiece;
         public BoardPosition From { get; } = from;
         public BoardPosition To { get; } = to;
         public float Duration { get; } = duration;

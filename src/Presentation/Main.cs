@@ -73,7 +73,7 @@ public partial class Main : Control
         () => ShowThreeGallery(ThreeGalleryEntry.Steam),
         () => ShowThreeRecords(false),
         () => ShowThreeRecords(true),
-        StartJieqiLocal,
+        () => StartJieqiLocal(TimeControl.Unlimited),
         () => ShowJieqiGallery(ClassicGalleryEntry.Lan),
         () => ShowJieqiGallery(ClassicGalleryEntry.Steam),
         () => ShowJieqiRecords(false),
@@ -93,18 +93,19 @@ public partial class Main : Control
         StartConfiguredGomokuAiMatch,
         ShowGomokuAiSettings));
 
-    private void StartJieqiLocal()
+    private void StartJieqiLocal(TimeControl timeControl)
     {
         Span<byte> bytes = stackalloc byte[8]; System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
         var seed = BitConverter.ToUInt64(bytes);
-        SwitchTo(new JieqiGameScreen(_settings, _themes, seed, ShowGallery));
+        SwitchTo(new JieqiGameScreen(_settings, _themes, seed, timeControl, ShowGallery,
+            CreateOfflineProfiles("本地玩家 2")));
     }
 
     private void ShowJieqiRecords(bool saved) => SwitchTo(new JieqiRecordScreen(saved, ShowGallery,
         record => SwitchTo(new JieqiReplayScreen(_settings, _themes, record, () => ShowJieqiRecords(saved)))));
 
     private void ShowJieqiGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
-        ShowGallery, _ => StartJieqiLocal(), StartJieqiLanHost, StartJieqiLanClient,
+        ShowGallery, StartJieqiLocal, StartJieqiLanHost, StartJieqiLanClient,
         StartJieqiSteamInvite, entry, TwoPlayerGameMode.Jieqi));
 
     private void StartJieqiLanHost(int port, NetworkMatchConfiguration configuration)
@@ -112,9 +113,10 @@ public partial class Main : Control
         try
         {
             var transport = EnetMatchTransport.Host(port);
-            var controller = new NetworkJieqiMatchController(transport, configuration.HostSide);
+            var controller = new NetworkJieqiMatchController(transport, configuration.HostSide,
+                timeControl: configuration.TimeControl);
             SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
-                $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport));
+                $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport, CreateLanProfiles()));
         }
         catch (Exception error) { ShowError(error.Message); }
     }
@@ -126,7 +128,7 @@ public partial class Main : Control
             var transport = EnetMatchTransport.Join(address, port);
             var controller = new NetworkJieqiMatchController(transport, null);
             SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
-                $"客户端 · {address}:{port}", ShowGallery, transport));
+                $"客户端 · {address}:{port}", ShowGallery, transport, CreateLanProfiles()));
         }
         catch (Exception error) { ShowError(error.Message); }
     }
@@ -134,7 +136,7 @@ public partial class Main : Control
     private void StartJieqiSteamInvite(NetworkMatchConfiguration configuration) =>
         StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Jieqi });
 
-    private void StartJunqiLocal() => SwitchTo(new JunqiGameScreen(ShowGallery));
+    private void StartJunqiLocal() => SwitchTo(new JunqiGameScreen(ShowGallery, CreateOfflineProfiles("本地玩家 2")));
 
     private void ShowJunqiRecords(bool saved) => SwitchTo(new JunqiRecordScreen(saved, ShowGallery,
         record => SwitchTo(new JunqiReplayScreen(record, () => ShowJunqiRecords(saved)))));
@@ -149,7 +151,7 @@ public partial class Main : Control
         {
             var transport = EnetMatchTransport.Host(port);
             var controller = new NetworkJunqiMatchController(transport, ToJunqiSide(configuration.HostSide));
-            SwitchTo(new JunqiGameScreen(controller, $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport));
+            SwitchTo(new JunqiGameScreen(controller, $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport, CreateLanProfiles()));
         }
         catch (Exception error) { ShowError(error.Message); }
     }
@@ -160,7 +162,7 @@ public partial class Main : Control
         {
             var transport = EnetMatchTransport.Join(address, port);
             var controller = new NetworkJunqiMatchController(transport, null);
-            SwitchTo(new JunqiGameScreen(controller, $"客户端 · {address}:{port}", ShowGallery, transport));
+            SwitchTo(new JunqiGameScreen(controller, $"客户端 · {address}:{port}", ShowGallery, transport, CreateLanProfiles()));
         }
         catch (Exception error) { ShowError(error.Message); }
     }
@@ -173,17 +175,18 @@ public partial class Main : Control
     private void ShowGomokuGallery(ClassicGalleryEntry entry) => SwitchTo(new GomokuGalleryScreen(
         ShowGallery, StartGomokuLocal, StartGomokuLanHost, StartGomokuLanClient, StartGomokuSteamInvite, entry));
     private void StartGomokuLocal(GomokuRoomOptions options) => SwitchTo(new GomokuGameScreen(
-        new LocalGomokuMatchController(options.BoardSize, options.Rules), "本地对决", ShowGallery));
+        new LocalGomokuMatchController(options.BoardSize, options.Rules), "本地对决", ShowGallery,
+        profiles: CreateOfflineProfiles("本地玩家 2")));
     private void StartGomokuLanHost(int port, GomokuRoomOptions options)
     {
         try { var transport=EnetMatchTransport.Host(port); SwitchTo(new GomokuGameScreen(
-            new NetworkGomokuMatchController(transport,options), $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport)); }
+            new NetworkGomokuMatchController(transport,options), $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport, CreateLanProfiles())); }
         catch(Exception error){ShowError(error.Message);}
     }
     private void StartGomokuLanClient(string address,int port)
     {
         try { var transport=EnetMatchTransport.Join(address,port); SwitchTo(new GomokuGameScreen(
-            new NetworkGomokuMatchController(transport,null), $"客户端 · {address}:{port}", ShowGallery, transport)); }
+            new NetworkGomokuMatchController(transport,null), $"客户端 · {address}:{port}", ShowGallery, transport, CreateLanProfiles())); }
         catch(Exception error){ShowError(error.Message);}
     }
     private void StartGomokuSteamInvite(GomokuRoomOptions options) => StartSteamInvite(new NetworkMatchConfiguration(
@@ -204,7 +207,8 @@ public partial class Main : Control
         var rules=_settings.GomokuAiForbiddenMoves?GomokuRuleSet.RenjuForbiddenMoves:GomokuRuleSet.Freestyle;
         var engine=new PiskvorkProcessGomokuAiEngine(_settings.GomokuAiEnginePath);
         var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,_settings.GomokuAiThinkMilliseconds);
-        SwitchTo(new GomokuGameScreen(controller,$"人机对决 · Rapfi · 玩家执{(human==StoneColor.Black?"黑":"白")}",ShowGallery));
+        SwitchTo(new GomokuGameScreen(controller,$"人机对决 · Rapfi · 玩家执{(human==StoneColor.Black?"黑":"白")}",ShowGallery,
+            profiles:CreateOfflineProfiles("AI 引擎")));
 #endif
     }
 
@@ -407,17 +411,20 @@ public partial class Main : Control
 
     private void OnSteamMatchReady(SteamMatchReady match)
     {
+        var custom = CustomPlayerProfileFactory.Create(_settings, match.Profiles.Local.DisplayName);
+        if (custom is not null) match.Profiles.ReplaceLocal(custom);
         if (match.Configuration.Mode == TwoPlayerGameMode.Jieqi)
         {
-            var controller = new NetworkJieqiMatchController(match.Transport, match.Configuration.HostSide);
+            var controller = new NetworkJieqiMatchController(match.Transport, match.Configuration.HostSide,
+                timeControl: match.Configuration.TimeControl);
             SwitchTo(new JieqiGameScreen(_settings, _themes, controller,
-                $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+                $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport, match.Profiles));
             return;
         }
         if (match.Configuration.Mode == TwoPlayerGameMode.Junqi)
         {
             var controller = new NetworkJunqiMatchController(match.Transport, ToJunqiSide(match.Configuration.HostSide));
-            SwitchTo(new JunqiGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            SwitchTo(new JunqiGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport, match.Profiles));
             return;
         }
         if (match.Configuration.Mode == TwoPlayerGameMode.Gomoku)
@@ -426,11 +433,9 @@ public partial class Main : Control
                 (GomokuRuleSet)match.Configuration.RuleFlags,
                 match.Configuration.HostSide == PieceSide.Red ? StoneColor.Black : StoneColor.White);
             var controller = new NetworkGomokuMatchController(match.Transport, match.IsHost ? options : null);
-            SwitchTo(new GomokuGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport));
+            SwitchTo(new GomokuGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport, match.Profiles));
             return;
         }
-        var custom = CustomPlayerProfileFactory.Create(_settings, match.Profiles.Local.DisplayName);
-        if (custom is not null) match.Profiles.ReplaceLocal(custom);
         SwitchTo(new GameScreen(
             _settings,
             ShowGallery,

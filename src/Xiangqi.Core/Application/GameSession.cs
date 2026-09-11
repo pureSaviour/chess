@@ -108,6 +108,14 @@ public sealed class GameSession
         return true;
     }
 
+    /// <summary>Ends the match because the authorized player conceded; no move is appended.</summary>
+    public bool DeclareResignation(PieceSide loser)
+    {
+        if (!_game.DeclareLoss(loser, GameEndReason.Resignation)) return false;
+        StateChanged?.Invoke(_game.Snapshot);
+        return true;
+    }
+
     public bool DeclareDraw()
     {
         if (!_game.DeclareDraw()) return false;

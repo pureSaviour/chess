@@ -11,7 +11,8 @@ internal static class JieqiTests
         ("揭棋公开局面隐藏真实身份且首步按槽位走法", RedactionAndCoverMove),
         ("揭棋落子后翻明并在棋谱中往返种子", RevealAndRecordRoundTrip),
         ("揭棋未结束时不允许释放种子棋谱", LiveRecordIsBlocked),
-        ("揭棋房主权威协议只同步脱敏局面", AuthoritativeNetworkRedaction)
+        ("揭棋房主权威协议只同步脱敏局面", AuthoritativeNetworkRedaction),
+        ("揭棋计时和联机认输均由控制器裁决", ClockAndResignation)
     ];
 
     private static void DeterministicSeed()
@@ -72,6 +73,28 @@ internal static class JieqiTests
         True(submit.Accepted); Equal(1, host.Snapshot.PlyNumber); Equal(1, client.Snapshot.PlyNumber);
         True(host.Snapshot.Pieces.SequenceEqual(client.Snapshot.Pieces));
         False(clientTransport.ReceivedText.Any(x => x.Contains(seed.ToString("X16"), StringComparison.OrdinalIgnoreCase)));
+        host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private static void ClockAndResignation()
+    {
+        var local = new LocalJieqiMatchController(7, new TimeControl(2, 0));
+        local.Tick(2.1);
+        True(local.Snapshot.IsFinished);
+        Equal(GameEndReason.Timeout, local.Snapshot.EndReason);
+        Equal(PieceSide.Black, local.Snapshot.Winner);
+        local.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        var hostTransport = new FakePacketTransport(true); var clientTransport = new FakePacketTransport(false);
+        hostTransport.Peer = clientTransport; clientTransport.Peer = hostTransport;
+        var host = new NetworkJieqiMatchController(hostTransport, PieceSide.Black, 9, new TimeControl(30, 5));
+        var client = new NetworkJieqiMatchController(clientTransport, PieceSide.Black);
+        hostTransport.Connect(); clientTransport.Connect();
+        True(client.SubmitResignationAsync(PieceSide.Red).AsTask().GetAwaiter().GetResult());
+        Equal(GameEndReason.Resignation, host.Snapshot.EndReason);
+        Equal(GameEndReason.Resignation, client.Snapshot.EndReason);
+        Equal(PieceSide.Black, client.Snapshot.Winner);
+        Equal(new TimeControl(30, 5), client.TimeControl);
         host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 

@@ -131,3 +131,55 @@ public static class CustomPlayerProfileFactory
             command.AvatarRgba.Length == 0 ? null :
                 new PlayerAvatarPixels(command.AvatarWidth, command.AvatarHeight, command.AvatarRgba));
 }
+
+/// <summary>
+/// Exchanges the already-bounded shared profile command over a raw two-player game channel.
+/// It does not own the transport or profile lease; the match screen disposes both after unsubscribing.
+/// </summary>
+public sealed class RawMatchProfileExchange : IDisposable
+{
+    private readonly ITwoPlayerPacketTransport _transport;
+    private readonly MatchPlayerProfiles _profiles;
+    private bool _disposed;
+    private bool _sent;
+
+    public RawMatchProfileExchange(ITwoPlayerPacketTransport transport, MatchPlayerProfiles profiles)
+    {
+        _transport = transport;
+        _profiles = profiles;
+        _transport.PacketReceived += OnPacket;
+        _transport.PacketStatusChanged += OnStatus;
+        if (_transport.IsPacketConnected) SendLocal();
+    }
+
+    public event Action? OpponentChanged;
+
+    private void OnStatus(TransportStatus status)
+    {
+        if (status.State == TransportConnectionState.Connected) SendLocal();
+    }
+
+    private async void SendLocal()
+    {
+        if (_sent || _disposed) return;
+        _sent = true;
+        try { await _transport.SendPacketAsync(MatchWireProtocol.Encode(CustomPlayerProfileFactory.ToCommand(_profiles.Local))); }
+        catch (Exception error) { _sent = false; GD.PushWarning($"发送玩家资料失败：{error.Message}"); }
+    }
+
+    private void OnPacket(ReadOnlyMemory<byte> packet)
+    {
+        if (!MatchWireProtocol.TryDecode(packet.ToArray(), out var message) ||
+            message.Type != MatchWireMessageType.PlayerProfile) return;
+        _profiles.ReplaceOpponent(CustomPlayerProfileFactory.FromCommand((PlayerProfileCommand)message.Payload));
+        OpponentChanged?.Invoke();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _transport.PacketReceived -= OnPacket;
+        _transport.PacketStatusChanged -= OnStatus;
+    }
+}

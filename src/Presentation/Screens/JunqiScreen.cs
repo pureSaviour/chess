@@ -4,6 +4,8 @@ using Xiangqi.Core.Domain.Junqi;
 using Xiangqi.Presentation.Boards;
 using Xiangqi.Presentation.Records;
 using Xiangqi.Presentation.UI;
+using Xiangqi.Presentation.Profiles;
+using Xiangqi.Core.Application;
 
 namespace Xiangqi.Presentation.Screens;
 
@@ -14,17 +16,23 @@ public partial class JunqiGameScreen : Control
     private readonly JunqiBoardView _board = new();
     private readonly Label _status = new();
     private readonly Button _save;
+    private readonly MatchPlayerProfiles? _profiles;
+    private readonly RawMatchProfileExchange? _profileExchange;
     private readonly Control? _privacyCurtain;
     private JunqiCell? _selected;
     private IReadOnlyList<JunqiCell> _legal = [];
     private bool _recentSaved;
     private bool _turnRevealed;
 
-    public JunqiGameScreen(Action back) : this(new LocalJunqiMatchController(), "本地联机", back) { }
+    public JunqiGameScreen(Action back, MatchPlayerProfiles? profiles = null) : this(new LocalJunqiMatchController(), "本地联机", back, profiles: profiles) { }
 
-    public JunqiGameScreen(IJunqiMatchController controller, string roomTitle, Action back, Node? networkDriver = null)
+    public JunqiGameScreen(IJunqiMatchController controller, string roomTitle, Action back, Node? networkDriver = null,
+        MatchPlayerProfiles? profiles = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        _profiles = profiles;
+        if (networkDriver is ITwoPlayerPacketTransport packetTransport && profiles is not null)
+            _profileExchange = new RawMatchProfileExchange(packetTransport, profiles);
         if (networkDriver is not null) AddChild(networkDriver);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(30, 18); AddChild(margin);
@@ -91,16 +99,33 @@ public partial class JunqiGameScreen : Control
         if (!snapshot.IsFinished) return;
         _save.Disabled = false;
         if (_recentSaved) return; _recentSaved = true;
-        try { if (TryRecord(out var record)) JunqiRecordStore.SaveRecent(record!); }
+        try { if (TryRecord(out var record)) JunqiRecordStore.SaveRecent(record!, BuildPresentation(snapshot)); }
         catch (Exception error) { GD.PushWarning($"保存军旗最近对局失败：{error.Message}"); }
     }
-    private bool TryRecord(out JunqiGameRecord? record) => _controller.TryCreateFinishedRecord("先手", "后手", out record, out _);
+    private bool TryRecord(out JunqiGameRecord? record)
+    {
+        var localSide = _controller.LocalSide ?? JunqiSide.First;
+        var localName = _profiles?.Local.DisplayName ?? (localSide == JunqiSide.First ? "先手" : "后手");
+        var opponentName = _profiles?.Opponent.DisplayName ?? (localSide == JunqiSide.First ? "后手" : "先手");
+        return _controller.TryCreateFinishedRecord(localSide == JunqiSide.First ? localName : opponentName,
+            localSide == JunqiSide.Second ? localName : opponentName, out record, out _);
+    }
+    private MatchRecordPresentation BuildPresentation(JunqiPlayerSnapshot snapshot)
+    {
+        var localSide = _controller.LocalSide ?? JunqiSide.First;
+        RecordPlayer FromProfile(PlayerProfileSnapshot profile, bool local) => new(profile.DisplayName, local,
+            profile.Avatar?.Width ?? 0, profile.Avatar?.Height ?? 0, profile.Avatar?.CopyRgba());
+        var local = _profiles is null ? new RecordPlayer(localSide == JunqiSide.First ? "先手" : "后手", true) : FromProfile(_profiles.Local, true);
+        var opponent = _profiles is null ? new RecordPlayer(localSide == JunqiSide.First ? "后手" : "先手", false) : FromProfile(_profiles.Opponent, false);
+        var result = snapshot.Winner is null ? "和" : snapshot.Winner == localSide ? "胜" : "败";
+        return new(DateTimeOffset.Now, "军旗", local, [opponent], result);
+    }
     private void Save()
     {
         try
         {
             if (!TryRecord(out var record)) throw new InvalidOperationException("对局或赛后布阵尚未就绪。");
-            JunqiRecordStore.SavePermanent(record!); _save.Disabled = true; _save.Text = "已保存";
+            JunqiRecordStore.SavePermanent(record!, BuildPresentation(_controller.Snapshot)); _save.Disabled = true; _save.Text = "已保存";
         }
         catch (Exception error) { GD.PushWarning($"保存军旗棋局失败：{error.Message}"); }
     }
@@ -111,27 +136,30 @@ public partial class JunqiGameScreen : Control
     }
     public override void _ExitTree()
     {
-        _board.CellPressed -= OnCellPressed; _controller.Changed -= OnChanged; _controller.Message -= OnMessage; _ = _controller.DisposeAsync();
+        _board.CellPressed -= OnCellPressed; _controller.Changed -= OnChanged; _controller.Message -= OnMessage;
+        _profileExchange?.Dispose(); _profiles?.Dispose(); _ = _controller.DisposeAsync();
     }
 }
 
 public partial class JunqiRecordScreen : Control
 {
+    private readonly List<ImageTexture> _textures = [];
     public JunqiRecordScreen(bool saved, Action back, Action<JunqiGameRecord> replay)
     {
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        var margin = UiStyle.CreatePageMargin(54, 34); AddChild(margin); var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 12); margin.AddChild(root);
+        var margin = UiStyle.CreatePageMargin(60, 36); AddChild(margin); var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 12); margin.AddChild(root);
         var header = new HBoxContainer(); root.AddChild(header); var title = UiStyle.CreateTitle(saved ? "军旗 · 保存对局" : "军旗 · 最近对局"); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
-        var scroll = new ScrollContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; root.AddChild(scroll);
-        var rows = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill }; rows.AddThemeConstantOverride("separation", 8); scroll.AddChild(rows);
-        foreach (var path in JunqiRecordStore.List(saved))
+        root.AddChild(RecordEntryRow.CreateHeadings());
+        var scroll = new ScrollContainer { SizeFlagsVertical = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(900, 360) }; root.AddChild(scroll);
+        var rows = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill }; rows.AddThemeConstantOverride("separation", 10); scroll.AddChild(rows);
+        foreach (var entry in JunqiRecordStore.ListEntries(saved))
         {
-            var record = JunqiRecordStore.Load(path); var result = record.Winner == JunqiSide.First ? "先手胜" : record.Winner == JunqiSide.Second ? "后手胜" : "未决";
-            var button = UiStyle.CreateButton($"{File.GetLastWriteTime(path):yyyy-MM-dd HH-mm}    {record.FirstPlayer}  {result}  {record.SecondPlayer}");
-            button.Pressed += () => replay(record); rows.AddChild(button);
+            rows.AddChild(RecordEntryRow.Create(entry.Presentation,
+                () => replay(JunqiRecordStore.Load(entry.RecordPath)), _textures));
         }
     }
+    public override void _ExitTree() { foreach (var texture in _textures) texture.Dispose(); _textures.Clear(); }
 }
 
 public partial class JunqiReplayScreen : Control

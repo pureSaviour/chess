@@ -31,7 +31,6 @@ public partial class ThreeBoardView : Control
     private double _selectionTime;
     private MoveAnimation? _moveAnimation;
     private int _moveDurationMs;
-    private int _captureDurationMs;
     public event Action<BoardCellId>? CellPressed;
     public event Action<bool>? MoveAnimationFinished;
     internal ThreeBoardProjection Projection => _projection;
@@ -84,7 +83,6 @@ public partial class ThreeBoardView : Control
         _spring.Material = replacementMaterial; _spring.Texture = replacementTexture;
         _palette = theme.Palette;
         _moveDurationMs = theme.Effects.GetValueOrDefault(ThemeEffectSlot.Move)?.DurationMs ?? 0;
-        _captureDurationMs = theme.Effects.GetValueOrDefault(ThemeEffectSlot.Capture)?.DurationMs ?? 0;
         _coordinates = settings.ShowBoardCoordinates;
         _animated = settings.EffectsEnabled;
         _feedback.SetAnimated(settings.EffectsEnabled);
@@ -129,7 +127,7 @@ public partial class ThreeBoardView : Control
             _moveAnimation.Elapsed += (float)delta;
             if (_moveAnimation.Elapsed >= _moveAnimation.Duration)
             {
-                var captured = _moveAnimation.CapturedPiece is not null;
+                var captured = _moveAnimation.Captured;
                 _moveAnimation = null;
                 MoveAnimationFinished?.Invoke(captured);
             }
@@ -206,12 +204,8 @@ public partial class ThreeBoardView : Control
         if (_moveAnimation is { } animation)
         {
             var raw = Mathf.Clamp(animation.Elapsed / animation.Duration, 0, 1);
-            var eased = raw * raw * (3f - 2f * raw);
-            var center = _projection.Point(animation.From).Lerp(_projection.Point(animation.To), eased) -
-                         Vector2.Down * (Mathf.Sin(raw * Mathf.Pi) * _projection.CellSize * 0.13f);
-            if (animation.CapturedPiece is { Piece.Owner: not null } captured && raw < 0.82f)
-                commands.Add(AtlasCommand(captured, _projection.Point(animation.To),
-                    Mathf.Clamp((0.82f - raw) / 0.32f, 0, 1)));
+            var center = PieceMotion.Position(_projection.Point(animation.From),
+                _projection.Point(animation.To), raw, _projection.CellSize);
             commands.Add(AtlasCommand(animation.Moving, center, 1, 1.055f));
         }
         else if (_snapshot.Pieces.FirstOrDefault(p => p.Cell == _selected) is { Piece.Owner: not null } chosen)
@@ -316,21 +310,16 @@ public partial class ThreeBoardView : Control
             Math.Max(1, _projection.CellSize);
         _selected = null;
         _legal = Array.Empty<BoardCellId>();
-        var configuredDuration = captured is null ? _moveDurationMs : _captureDurationMs;
-        var duration = configuredDuration > 0 ? configuredDuration / 1000f :
-            Mathf.Clamp(0.18f + distance * 0.025f, 0.22f, 0.42f);
-        _moveAnimation = new(landed, captured, move.From, move.To, duration);
+        var duration = PieceMotion.Duration(_moveDurationMs, distance);
+        _moveAnimation = new(landed, captured is not null, move.From, move.To, duration);
     }
 
     private void DrawAnimatedMove(MoveAnimation animation)
     {
         var raw = Mathf.Clamp(animation.Elapsed / animation.Duration, 0, 1);
-        var eased = raw * raw * (3f - 2f * raw);
         var from = _projection.Point(animation.From);
         var to = _projection.Point(animation.To);
-        var center = from.Lerp(to, eased) - Vector2.Down * (Mathf.Sin(raw * Mathf.Pi) * _projection.CellSize * 0.13f);
-        if (animation.CapturedPiece is { } captured && raw < 0.82f)
-            Piece(captured, false, to, Mathf.Clamp((0.82f - raw) / 0.32f, 0, 1));
+        var center = PieceMotion.Position(from, to, raw, _projection.CellSize);
         Piece(animation.Moving, false, center, 1, 1.055f);
     }
     private Vector2 Point(int k, int f, int r) => _projection.Point(new(45 * k + 9 * r + f));
@@ -369,13 +358,13 @@ public partial class ThreeBoardView : Control
 
     private sealed class MoveAnimation(
         KingdomPlacement moving,
-        KingdomPlacement? capturedPiece,
+        bool captured,
         BoardCellId from,
         BoardCellId to,
         float duration)
     {
         public KingdomPlacement Moving { get; } = moving;
-        public KingdomPlacement? CapturedPiece { get; } = capturedPiece;
+        public bool Captured { get; } = captured;
         public BoardCellId From { get; } = from;
         public BoardCellId To { get; } = to;
         public float Duration { get; } = duration;
