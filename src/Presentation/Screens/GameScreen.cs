@@ -66,7 +66,6 @@ public partial class GameScreen : Control
     private Button _chatSendButton = null!;
     private RichTextLabel _chatLog = null!;
     private LineEdit _chatInput = null!;
-    private OptionButton? _chatTarget;
     private ConfirmationDialog _offerDialog = null!;
     private GameplayAudioPlayer _audio = null!;
     private InGameSettingsDialog _settingsDialog = null!;
@@ -252,7 +251,7 @@ public partial class GameScreen : Control
         page.AddChild(header);
         var backButton = UiStyle.CreateButton("‹ 返回");
         backButton.CustomMinimumSize = new Vector2(92, 41);
-        backButton.Pressed += _back;
+        backButton.Pressed += LeaveForGallery;
         header.AddChild(backButton);
         var title = UiStyle.CreateTitle("经典象棋", 26);
         title.VerticalAlignment = VerticalAlignment.Center;
@@ -281,6 +280,18 @@ public partial class GameScreen : Control
         _saveRecordButton.Disabled = true;
         _saveRecordButton.Pressed += SaveRecord;
         header.AddChild(_saveRecordButton);
+        var resign = UiStyle.CreateButton("认输");
+        resign.CustomMinimumSize = new Vector2(76, 41);
+        var resignDialog = new ConfirmationDialog
+        {
+            Title = "认输",
+            DialogText = "确定认输并结束本局？",
+            OkButtonText = "确认认输"
+        };
+        resignDialog.Confirmed += Resign;
+        AddChild(resignDialog);
+        resign.Pressed += () => resignDialog.PopupCentered();
+        header.AddChild(resign);
         _undoButton = UiStyle.CreateButton("悔棋");
         _undoButton.CustomMinimumSize = new Vector2(95, 41);
         _undoButton.Visible = _transport is null;
@@ -399,13 +410,6 @@ public partial class GameScreen : Control
         };
         _chatInput.TextSubmitted += _ => SendChat();
         column.AddChild(_chatInput);
-        if (_transport is not null)
-        {
-            _chatTarget = new OptionButton();
-            _chatTarget.AddItem("发送给：房间所有人", 100);
-            _chatTarget.AddItem("仅发送给：对方", 1);
-            column.AddChild(_chatTarget);
-        }
         _chatSendButton = UiStyle.CreateButton("发送", true);
         _chatSendButton.CustomMinimumSize = new Vector2(0, 40);
         _chatSendButton.Pressed += SendChat;
@@ -463,7 +467,6 @@ public partial class GameScreen : Control
                     foreach (var cue in _session.DescribeMove(trialBefore!, after, result))
                     {
                         _effects.Play(cue);
-                        _audio.PlayCue(cue);
                     }
                     _board.AnimateMove(trialBefore!, after, result.Move, result.CapturedPiece is not null);
                     _displayedSnapshot = after;
@@ -489,7 +492,6 @@ public partial class GameScreen : Control
         _selected = position;
         _legalDestinations = _trial?.GetLegalDestinations(position) ?? _session.GetLegalDestinations(position);
         _board.SetPosition(_trial?.Snapshot ?? _session.Snapshot, _selected, _legalDestinations);
-        _audio.PlaySelection();
     }
 
     private void OnStateChanged(GameSnapshot snapshot)
@@ -658,13 +660,37 @@ public partial class GameScreen : Control
             _pendingVisualCapture = cue.Kind == PresentationCueKind.Capture;
         }
         _effects.Play(cue);
-        _audio.PlayCue(cue);
     }
 
     private void OnMoveAnimationFinished(bool captured)
     {
         _audio.PlayLanding(captured);
         ScheduleAiMoveIfReady();
+    }
+
+    private async void Resign()
+    {
+        try { await DeclareLocalResignationAsync(); }
+        catch (Exception error) { OnSynchronizationFailed($"认输失败：{error.Message}"); }
+    }
+
+    private async void LeaveForGallery()
+    {
+        try { await DeclareLocalResignationAsync(); }
+        catch (Exception error) { GD.PushWarning($"返回画廊前同步认输失败：{error.Message}"); }
+        _back();
+    }
+
+    private async ValueTask<bool> DeclareLocalResignationAsync()
+    {
+        if (_session.Snapshot.IsFinished) return true;
+        if (_transport is not null)
+        {
+            if (_network is null) return false;
+            return await _network.DeclareResignationAsync();
+        }
+        _clock.IsRunning = false;
+        return _session.DeclareResignation(_localSide ?? PieceSide.Red);
     }
 
     private async void SendChat()
@@ -696,10 +722,7 @@ public partial class GameScreen : Control
         }
         try
         {
-            var selectedTarget = _chatTarget is { Selected: >= 0 }
-                ? _chatTarget.GetItemId(_chatTarget.Selected) : 100;
-            var targetSeat = selectedTarget == 100 ? (int?)null : (int)_network!.LocalSide.Opponent();
-            var error = await _network!.SendChatAsync(text, targetSeat);
+            var error = await _network!.SendChatAsync(text);
             if (error is not null) throw new InvalidOperationException(error);
             _chatInput.Clear();
             _chatInput.GrabFocus();
@@ -728,8 +751,7 @@ public partial class GameScreen : Control
     {
         if (_network is null || !RoomChatManager.IsVisibleTo(entry, (int)_network.LocalSide)) return;
         var sender = entry.SenderSeat == (int)_network.LocalSide ? "我" : "对方";
-        var destination = entry.TargetSeat is null ? " → 房间" : " → 私聊";
-        AppendChat(sender + destination, entry.Text);
+        AppendChat(sender, entry.Text);
         if (_debugNetworkSmoke && entry.Text == "联机协商冒烟消息" && sender == "对方")
             GD.Print("[Xiangqi.Network.Smoke] Chat message received.");
     }

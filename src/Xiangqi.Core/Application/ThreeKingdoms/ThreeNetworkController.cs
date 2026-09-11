@@ -17,7 +17,7 @@ namespace Xiangqi.Core.Application.ThreeKingdoms;
 /// </summary>
 public sealed class ThreeNetworkController : IThreeMatchController
 {
-    public const int Protocol = 2;
+    public const int Protocol = 3;
     public const int MaximumPacketBytes = 128 * 1024;
     private readonly IThreeRoomTransport _transport;
     private readonly TimeControl _configuredTime;
@@ -31,6 +31,8 @@ public sealed class ThreeNetworkController : IThreeMatchController
     private double _resendAt;
     private readonly Dictionary<Kingdom, ThreeCommand> _deferredForfeits = [];
     private readonly bool[] _observed = new bool[3];
+    private readonly PlayerProfileCommand?[] _profiles = new PlayerProfileCommand?[3];
+    private readonly PlayerProfileCommand? _localProfile;
     private readonly double[] _displayGame = new double[3], _displayStep = new double[3];
     public IReadOnlyList<bool> Connections { get; }
     public IReadOnlyList<double> DisplayedGameTimes { get; }
@@ -51,13 +53,15 @@ public sealed class ThreeNetworkController : IThreeMatchController
     private IReadOnlyList<string> _names = Array.Empty<string>(), _ids = Array.Empty<string>();
     public IReadOnlyList<string> PlayerNames { get { CacheNames(); return _names; } }
     public IReadOnlyList<string> PlayerIds { get { CacheNames(); return _ids; } }
+    public IReadOnlyList<PlayerProfileCommand?> PlayerProfiles { get; }
     private void CacheNames()
     {
         var roster = _transport.Roster;
         var key = string.Join('|', roster.Select(peer => peer.Id + "\u001f" + peer.Name));
         if (_nameCacheKey == key) return;
         _nameCacheKey = key;
-        _names = Array.AsReadOnly(Enumerable.Range(0, 3).Select(i => i < roster.Count ? roster[i].Name : "等待玩家").ToArray());
+        _names = Array.AsReadOnly(Enumerable.Range(0, 3).Select(i =>
+            _profiles[i]?.DisplayName ?? (i < roster.Count ? roster[i].Name : "等待玩家")).ToArray());
         _ids = Array.AsReadOnly(Enumerable.Range(0, 3).Select(i => i < roster.Count ? roster[i].Id : "").ToArray());
     }
     public string Status => _fault ?? (!_started ? $"{_transport.Status} · 等待三席就绪（{_transport.Roster.Count}/3）" :
@@ -69,17 +73,21 @@ public sealed class ThreeNetworkController : IThreeMatchController
     private sealed record Packet(int Version = Protocol, string Kind = "", long Term = 0, string Leader = "",
         int Count = 0, string Hash = "", int GameSeconds = 0, int MoveSeconds = 0, int Policy = 0,
         int Start = 0, LogEntry[]? Entries = null, ThreeCommand? Command = null,
-        RoomChatEntry? Chat = null, RoomChatEntry[]? ChatEntries = null, string Request = "", string Error = "");
+        RoomChatEntry? Chat = null, RoomChatEntry[]? ChatEntries = null, PlayerProfileCommand? Profile = null,
+        string Request = "", string Error = "");
     private string Head => _log.Count == 0 ? "genesis" : _log[^1].Hash;
     private bool IsLeader => _leader == _transport.LocalId;
     private bool HasReplica => _transport.Roster.Any(p => p.Id != _transport.LocalId && Online(p.Id));
     private bool CanPropose => IsLeader && HasReplica && _fault is null && _now >= _settleUntil;
-    public ThreeNetworkController(IThreeRoomTransport transport, TimeControl time, AdvisorConquestPolicy policy)
+    public ThreeNetworkController(IThreeRoomTransport transport, TimeControl time, AdvisorConquestPolicy policy,
+        PlayerProfileCommand? localProfile = null)
     {
         _transport = transport; _configuredTime = time.Validate(); _configuredPolicy = policy;
+        if (localProfile is { } profile && ValidProfile(profile)) _localProfile = CopyProfile(profile);
         Session = CreateSession(time, policy); Session.IsRunning = false;
         Connections = Array.AsReadOnly(_observed);
         DisplayedGameTimes = Array.AsReadOnly(_displayGame); DisplayedStepTimes = Array.AsReadOnly(_displayStep);
+        PlayerProfiles = Array.AsReadOnly(_profiles);
         transport.Received += Receive;
     }
     private ThreeMatchSession CreateSession(TimeControl time, AdvisorConquestPolicy policy)
@@ -203,6 +211,13 @@ public sealed class ThreeNetworkController : IThreeMatchController
     {
         _helloAt = _now + 0.75;
         Broadcast(new(Kind: "hello"));
+        var localSeat = Seat(_transport.LocalId);
+        if (localSeat >= 0 && _localProfile is { } profile)
+        {
+            _profiles[localSeat] = profile;
+            _nameCacheKey = "";
+            Broadcast(new(Kind: "profile", Profile: profile));
+        }
         if (_started) Broadcast(Configuration());
     }
     private bool Online(string? id) => id is not null && _transport.Connected.Contains(id) &&
@@ -296,7 +311,17 @@ public sealed class ThreeNetworkController : IThreeMatchController
         {
             case "hello":
                 SendChatHistory(sender);
+                var ownSeat = Seat(_transport.LocalId);
+                if (ownSeat >= 0 && _localProfile is { } ownProfile)
+                    Send(sender, new(Kind: "profile", Profile: ownProfile));
                 if (_started) Send(sender, Configuration());
+                break;
+            case "profile":
+                if (p.Profile is not { } profile || !ValidProfile(profile)) return;
+                var profileSeat = Seat(sender);
+                _profiles[profileSeat] = CopyProfile(profile);
+                _nameCacheKey = "";
+                Changed?.Invoke();
                 break;
             case "chat":
                 Chat.AcceptLive(p.Chat, Seat(sender));
@@ -371,6 +396,14 @@ public sealed class ThreeNetworkController : IThreeMatchController
     }
     private static bool Valid(ThreeCommand c) => c is not null && Enum.IsDefined(c.Kind) && Enum.IsDefined(c.Actor) &&
         Enum.IsDefined(c.Target) && double.IsFinite(c.Seconds) && c.Seconds is >= 0 and <= 86400;
+    private static bool ValidProfile(PlayerProfileCommand profile)
+    {
+        if (profile.PlayerId is null || profile.DisplayName is null || profile.AvatarRgba is null) return false;
+        try { return MatchWireProtocol.Encode(profile).Length <= MatchWireProtocol.MaximumPacketBytes; }
+        catch (ArgumentException) { return false; }
+    }
+    private static PlayerProfileCommand CopyProfile(PlayerProfileCommand profile) =>
+        profile with { AvatarRgba = profile.AvatarRgba.ToArray() };
     private void SendChatHistory(string id) => Send(id,
         new(Kind: "chat-state", ChatEntries: Chat.Entries.TakeLast(RoomChatManager.DefaultCapacity).ToArray()));
     private void RequestTail(string id) => Send(id, new(Kind: "fetch", Term: _term, Start: _log.Count, Hash: Head));

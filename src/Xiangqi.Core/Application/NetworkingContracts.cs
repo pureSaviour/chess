@@ -4,6 +4,7 @@ namespace Xiangqi.Core.Application;
 
 public readonly record struct MoveCommand(long Sequence, ChessMove Move);
 public readonly record struct TimeoutCommand(long PlyNumber, PieceSide Loser);
+public readonly record struct ResignationCommand(long PlyNumber, PieceSide Loser);
 public readonly record struct ClockSyncCommand(long PlyNumber, ClockSnapshot Clock);
 public readonly record struct ChatCommand(RoomChatEntry Entry);
 public readonly record struct PlayerProfileCommand(
@@ -46,6 +47,7 @@ public interface IMatchTransport : IAsyncDisposable
     event Action<MoveCommand>? MoveReceived;
     event Action<NetworkMatchConfiguration>? MatchConfigurationReceived;
     event Action<TimeoutCommand>? TimeoutReceived;
+    event Action<ResignationCommand>? ResignationReceived;
     event Action<ClockSyncCommand>? ClockSyncReceived;
     event Action<ChatCommand>? ChatReceived;
     event Action<MatchOfferRequest>? MatchOfferReceived;
@@ -56,6 +58,7 @@ public interface IMatchTransport : IAsyncDisposable
     ValueTask SendMoveAsync(MoveCommand command, CancellationToken cancellationToken = default);
     ValueTask SendMatchConfigurationAsync(NetworkMatchConfiguration configuration, CancellationToken cancellationToken = default);
     ValueTask SendTimeoutAsync(TimeoutCommand command, CancellationToken cancellationToken = default);
+    ValueTask SendResignationAsync(ResignationCommand command, CancellationToken cancellationToken = default);
     ValueTask SendClockSyncAsync(ClockSyncCommand command, CancellationToken cancellationToken = default);
     ValueTask SendChatAsync(ChatCommand command, CancellationToken cancellationToken = default);
     ValueTask SendMatchOfferAsync(MatchOfferRequest command, CancellationToken cancellationToken = default);
@@ -83,6 +86,7 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         LocalSide = localSide;
         _transport.MoveReceived += OnMoveReceived;
         _transport.TimeoutReceived += OnTimeoutReceived;
+        _transport.ResignationReceived += OnResignationReceived;
         _transport.ChatReceived += OnChatReceived;
         _transport.MatchOfferReceived += OnMatchOfferReceived;
         _transport.MatchOfferResponseReceived += OnMatchOfferResponseReceived;
@@ -123,6 +127,7 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
     {
         _transport.MoveReceived -= OnMoveReceived;
         _transport.TimeoutReceived -= OnTimeoutReceived;
+        _transport.ResignationReceived -= OnResignationReceived;
         _transport.ChatReceived -= OnChatReceived;
         _transport.MatchOfferReceived -= OnMatchOfferReceived;
         _transport.MatchOfferResponseReceived -= OnMatchOfferResponseReceived;
@@ -130,10 +135,11 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         await _transport.DisposeAsync();
     }
 
+    /// <summary>Sends directly to the sole opponent; two-player rooms do not expose recipient selection.</summary>
     public async ValueTask<string?> SendChatAsync(
-        string text, int? targetSeat = null, CancellationToken cancellationToken = default)
+        string text, CancellationToken cancellationToken = default)
     {
-        var error = Chat.Post((int)LocalSide, targetSeat, text, out var entry);
+        var error = Chat.PostToOpponent((int)LocalSide, text, out var entry);
         if (error is not null) return error;
         await _transport.SendChatAsync(new ChatCommand(entry!), cancellationToken);
         return null;
@@ -194,6 +200,16 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         if (!_session.DeclareTimeout(loser)) return false;
         await _transport.SendTimeoutAsync(
             new TimeoutCommand(_session.Snapshot.PlyNumber, loser), cancellationToken);
+        return true;
+    }
+
+    /// <summary>Applies a concession by the local side and broadcasts it when the peer is connected.</summary>
+    public async ValueTask<bool> DeclareResignationAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_session.DeclareResignation(LocalSide)) return false;
+        if (!_transport.IsConnected) return true;
+        await _transport.SendResignationAsync(
+            new ResignationCommand(_session.Snapshot.PlyNumber, LocalSide), cancellationToken);
         return true;
     }
 
@@ -300,5 +316,12 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
             return;
         }
         _session.DeclareTimeout(command.Loser);
+    }
+
+    private void OnResignationReceived(ResignationCommand command)
+    {
+        if (command.PlyNumber != _session.Snapshot.PlyNumber || command.Loser != LocalSide.Opponent() ||
+            !_session.DeclareResignation(command.Loser))
+            SynchronizationFailed?.Invoke("远端认输消息与当前局面或身份不匹配。");
     }
 }

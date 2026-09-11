@@ -1,6 +1,6 @@
 # 揭棋玩法与实现边界
 
-更新：2026-09-09。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)，共享接口见 [抽象层使用手册](abstractions.md)。规则基线参考棋者文章及 Mistboard 揭棋规则；不同平台的长打、暗子被吃后谁可查看等约定并不完全一致，首版固定下述语义，后续变体必须显式版本化。
+更新：2026-09-11。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)，共享接口见 [抽象层使用手册](abstractions.md)。规则基线参考棋者文章及 Mistboard 揭棋规则；不同平台的长打、暗子被吃后谁可查看等约定并不完全一致，首版固定下述语义，后续变体必须显式版本化。
 
 ## 已实现规则
 
@@ -21,7 +21,9 @@
 
 `JieqiGameScreen` 通过 `JieqiGameSession` 提交意图；Session 的 Snapshot/StateChanged/MoveCommitted 只发布脱敏 `GameSnapshot`，不把权威 `JieqiSnapshot` 交给直播 UI。页面复用经典 `BoardView` 的选中、合法落点和位移动画。暗子使用双方一致、无文字的木质背面（同心饰环与环形纹点），不占用 semantic-v1 七列正面 atlas。`BoardView.AnimateMove` 只在提交前后同一稳定棋子 ID 从 `covered` 变为具体棋种时，让位置插值与横向翻面共享同一条 0..1 时间线：棋子离开起点时开始收窄，中途切换为正面，并在到达终点时完全展开；普通移动不翻面。揭子移动总时长取普通移动时长和主题 `landing` 时长的较大值，后者限制为 180..420 ms、未配置时为 280 ms，因此不会在落点后追加停顿。动画结束后才发出 `MoveAnimationFinished`。这些状态都由 BoardView 持有，在主线程 `_Process` 推进；SetPosition、重同步或退出节点会丢弃瞬态动画，不写回 Session。
 
-`JieqiReplayScreen` 保留上/下一步，并提供带刻度滑杆；“隐约显示暗子身份”在无字背面的中心以低透明度叠加实际棋种，仅消费 replay snapshot，不改变正常对局背面。
+联网界面把本机席位写入 `BoardView.BottomSide`，因此双方设备上自己的初始阵地都显示在棋盘下方；该旋转只影响绘制、坐标标签和命中映射，不改变权威坐标。
+
+`JieqiReplayScreen` 保留上/下一步，并提供带刻度滑杆；棋盘在复盘页使用受限最小高度，为时间轴和底部按钮保留固定布局空间，避免常见窗口高度下被裁切。“隐约显示暗子身份”在无字背面的中心以低透明度叠加实际棋种，仅消费 replay snapshot，不改变正常对局背面。
 
 Session 拥有游戏和正式着法；Screen 拥有 Godot 节点；Store 拥有文件；均在当前主线程同步使用。离开页面后节点释放，纯 C# Session 无非托管资源。
 
@@ -31,6 +33,6 @@ LAN 与 Steam 通过 `NetworkJieqiMatchController` 使用房主权威模型：�
 
 连接建立时房主发送 `SHA-256("jieqi-authority-v1:{seed:X16}")` 承诺；对局结束后才释放 Seed，客户端重新计算承诺并逐手重放。`JieqiGameSession.CreateRecord` 也拒绝未结束的会话，防止 UI 或日志提前泄露。该机制能发现房主赛后更换 Seed，但 P2P 房主仍是实时裁决者，不能阻止恶意房主选择有利初始排列；需要消除此信任时应引入中立服务器或双方提交后联合派生随机数。
 
-当前协议没有经典房间的悔棋、和棋协商、聊天、棋钟与断线续局；断线后的当前对局不可恢复。界面不显示未实现的计时选项。事件由 Godot transport 轮询所在主线程同步进入控制器；`JieqiGameScreen` 负责解绑事件并释放控制器，控制器幂等释放其 transport。
+当前揭棋协议为 v2。房主拥有 `MatchClock` 并裁决局时/步时超时，按约 250 ms 发布脱敏棋钟；客户端只应用权威同步。认输请求带请求号、预期 Ply 和认证席位，房主裁决后发送终局公开状态，并仅在终局释放 Seed；客户端等待该状态确认。界面提供与经典一致的计时显示和认输入口，未结束时返回画廊会先提交本地认输。房间布局与经典一致：对手资料在棋盘上方，本机资料在下方，均显示本局昵称、头像、席位和棋钟；联网时右侧使用共享双人聊天面板，消息固定发给唯一对手、不提供目标选择。聊天与资料采用共享有界辅助帧，不进入揭棋权威状态或 Seed 承诺。协议仍没有悔棋、和棋协商或断线续局。事件由 Godot transport 轮询所在主线程同步进入控制器；`JieqiGameScreen` 先解绑资料、聊天与 UI 事件，再幂等释放控制器及 transport。
 
-测试入口：`dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`，覆盖确定性排列、公开投影脱敏、首步槽位走法、翻明、Seed/Shuffle 棋谱往返、直播棋谱阻止、房主/客户端同步和 Seed 不进入直播数据。`--smoke-feedback` 另外断言背面标签为空、covered→明子会安排翻面阶段且最终释放动画状态；真实双机 LAN、Steam 好友实联、断线体验与不同分辨率视觉仍需人工验收。
+测试入口：`dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`，覆盖确定性排列、公开投影脱敏、首步槽位走法、翻明、Seed/Shuffle 棋谱往返、直播棋谱阻止、房主/客户端同步、计时超时、联机认输和 Seed 不进入直播数据。`--smoke-feedback` 另外断言背面标签为空、covered→明子会安排翻面阶段且最终释放动画状态；真实双机 LAN、Steam 好友实联、断线体验与不同分辨率视觉仍需人工验收。

@@ -10,7 +10,8 @@ static void Check(bool ok, string reason) { if (!ok) throw new InvalidOperationE
 static int C(int k, int f, int r) => 45 * k + 9 * r + f;
 static ThreeCommand Move(int k) => new(ThreeCommandKind.Move, (Kingdom)k, C(k, 0, 3), C(k, 0, 4));
 var peers = new FakeMesh();
-var controllers = peers.Ends.Select(e => new ThreeNetworkController(e, new TimeControl(600, 60), AdvisorConquestPolicy.SharedTerritory)).ToArray();
+var controllers = peers.Ends.Select((e, i) => new ThreeNetworkController(e, new TimeControl(600, 60),
+    AdvisorConquestPolicy.SharedTerritory, new PlayerProfileCommand($"id-{i}", $"棋手 {i}", 1, 1, [(byte)i, 2, 3, 255]))).ToArray();
 void Pump(double duration, params int[] excluded)
 {
     for (var elapsed = 0d; elapsed < duration; elapsed += 0.05)
@@ -18,6 +19,9 @@ void Pump(double duration, params int[] excluded)
 }
 Pump(3);
 Check(controllers.All(c => c.Session.IsRunning), "Three seats did not start.");
+Check(controllers.All(c => c.PlayerProfiles.Select((profile, i) => profile is not null &&
+    profile.Value.DisplayName == $"棋手 {i}" && profile.Value.AvatarRgba.SequenceEqual(new byte[] { (byte)i, 2, 3, 255 })).All(valid => valid)),
+    "Three-player names and avatars did not synchronize.");
 Check(controllers[0].Submit(Move(0)) is null, "Wei move rejected."); Pump(1);
 Check(controllers.All(c => c.Session.Game.Snapshot.Ply == 1), "Move did not synchronize.");
 Check(controllers[1].Submit(Move(0)) is not null, "Actor spoof accepted.");

@@ -25,7 +25,7 @@ public readonly record struct MoveResult(
         new(false, move, null, null, rejection);
 }
 
-public enum GameEndReason { None, Checkmate, Stalemate, GeneralCaptured, Timeout, Draw }
+public enum GameEndReason { None, Checkmate, Stalemate, GeneralCaptured, Timeout, Draw, Resignation }
 
 public sealed record GameSnapshot(
     IReadOnlyList<PlacedPiece> Pieces,

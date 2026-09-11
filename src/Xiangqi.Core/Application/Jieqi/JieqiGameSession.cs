@@ -29,6 +29,13 @@ public sealed class JieqiGameSession
         MoveCommitted?.Invoke(before, after, result.Move, result.CapturedPiece is not null); StateChanged?.Invoke(after);
         return result;
     }
+    /// <summary>Applies a controller-authorized timeout or resignation without revealing the seed.</summary>
+    public bool DeclareLoss(PieceSide loser, GameEndReason reason)
+    {
+        if (!_game.DeclareLoss(loser, reason)) return false;
+        StateChanged?.Invoke(Snapshot);
+        return true;
+    }
     public JieqiGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null)
     {
         if (!_game.Snapshot.IsFinished)

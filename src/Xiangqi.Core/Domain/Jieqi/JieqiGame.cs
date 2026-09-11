@@ -126,6 +126,18 @@ public sealed class JieqiGame
         JieqiMoveResult Reject(MoveRejection why) => new(false, move, null, null, false, why);
     }
 
+    /// <summary>Applies a room-authorized external loss without exposing or changing hidden identities.</summary>
+    public bool DeclareLoss(PieceSide loser, GameEndReason reason)
+    {
+        if (_isFinished || !Enum.IsDefined(loser) ||
+            reason is not (GameEndReason.Timeout or GameEndReason.Resignation)) return false;
+        _isFinished = true;
+        _winner = loser.Opponent();
+        _endReason = reason;
+        _isInCheck = false;
+        return true;
+    }
+
     private MoveRejection ValidateMove(Dictionary<BoardPosition, JieqiPiece> state, PieceSide side, ChessMove move)
     {
         if (!move.From.IsInside || !move.To.IsInside) return MoveRejection.OutsideBoard;

@@ -412,7 +412,21 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
             var byteCount = checked((int)(width * height * 4));
             var rgba = new byte[byteCount];
             if (SteamUtils.GetImageRGBA(imageHandle, rgba, rgba.Length))
-                avatar = new PlayerAvatarPixels((int)width, (int)height, rgba);
+            {
+                var avatarWidth = (int)width;
+                var avatarHeight = (int)height;
+                if (avatarWidth > MatchWireProtocol.MaximumAvatarSide ||
+                    avatarHeight > MatchWireProtocol.MaximumAvatarSide)
+                {
+                    using var image = Image.CreateFromData(avatarWidth, avatarHeight, false, Image.Format.Rgba8, rgba);
+                    image.Resize(MatchWireProtocol.MaximumAvatarSide, MatchWireProtocol.MaximumAvatarSide,
+                        Image.Interpolation.Lanczos);
+                    avatarWidth = image.GetWidth();
+                    avatarHeight = image.GetHeight();
+                    rgba = image.GetData();
+                }
+                avatar = new PlayerAvatarPixels(avatarWidth, avatarHeight, rgba);
+            }
         }
 
         var localUser = user == SteamUser.GetSteamID();
@@ -424,6 +438,26 @@ public partial class SteamLobbyService : Node, ISteamLobbyService
             string.IsNullOrWhiteSpace(displayName) ? "Steam 玩家" : displayName,
             avatar);
         _profileCache[userId] = profile;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns a caller-owned copy of the signed-in Steam player's display profile for a
+    /// non-classic room. The avatar is already reduced to the shared 64×64 wire/record bound.
+    /// </summary>
+    public bool TryGetLocalPlayerProfile(out PlayerProfileSnapshot profile)
+    {
+        ThrowIfUnavailable();
+        if (!TryGetPlayerProfile(SteamUser.GetSteamID(), true, out var cached))
+        {
+            profile = null!;
+            return false;
+        }
+        var avatar = cached.Avatar;
+        profile = cached with
+        {
+            Avatar = avatar is null ? null : new PlayerAvatarPixels(avatar.Width, avatar.Height, avatar.CopyRgba())
+        };
         return true;
     }
 

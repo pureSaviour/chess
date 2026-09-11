@@ -12,7 +12,8 @@ public enum MatchWireMessageType : byte
     Chat = 5,
     MatchOffer = 6,
     MatchOfferResponse = 7,
-    PlayerProfile = 8
+    PlayerProfile = 8,
+    Resignation = 9
 }
 
 public readonly record struct MatchWireMessage(MatchWireMessageType Type, object Payload);
@@ -26,7 +27,7 @@ public readonly record struct MatchWireMessage(MatchWireMessageType Type, object
 /// </summary>
 public static class MatchWireProtocol
 {
-    public const byte Version = 6;
+    public const byte Version = 7;
     public const int MaximumPacketBytes = 16600;
     public const int MaximumChatUtf8Bytes = RoomChatManager.MaximumTextUtf8Bytes;
     public const int MaximumProfileTextUtf8Bytes = 96;
@@ -65,6 +66,15 @@ public static class MatchWireProtocol
     {
         using var stream = new MemoryStream(11);
         using var writer = Writer(stream, MatchWireMessageType.Timeout);
+        writer.Write(command.PlyNumber);
+        writer.Write((byte)command.Loser);
+        return stream.ToArray();
+    }
+
+    public static byte[] Encode(ResignationCommand command)
+    {
+        using var stream = new MemoryStream(11);
+        using var writer = Writer(stream, MatchWireMessageType.Resignation);
         writer.Write(command.PlyNumber);
         writer.Write((byte)command.Loser);
         return stream.ToArray();
@@ -160,6 +170,7 @@ public static class MatchWireProtocol
             MatchWireMessageType.MatchOffer when TryDecodeMatchOffer(packet, out var value) => value,
             MatchWireMessageType.MatchOfferResponse when TryDecodeMatchOfferResponse(packet, out var value) => value,
             MatchWireMessageType.PlayerProfile when TryDecodePlayerProfile(packet, out var value) => value,
+            MatchWireMessageType.Resignation when TryDecodeResignation(packet, out var value) => value,
             _ => null
         };
         if (payload is null) return false;
@@ -207,6 +218,18 @@ public static class MatchWireProtocol
         var loser = (PieceSide)reader.ReadByte();
         if (ply < 0 || !Enum.IsDefined(loser)) return false;
         command = new TimeoutCommand(ply, loser);
+        return true;
+    }
+
+    private static bool TryDecodeResignation(byte[] packet, out ResignationCommand command)
+    {
+        command = default;
+        if (packet.Length != 11) return false;
+        using var reader = ReaderAfterHeader(packet);
+        var ply = reader.ReadInt64();
+        var loser = (PieceSide)reader.ReadByte();
+        if (ply < 0 || !Enum.IsDefined(loser)) return false;
+        command = new ResignationCommand(ply, loser);
         return true;
     }
 

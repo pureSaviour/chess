@@ -29,6 +29,7 @@ public partial class EnetMatchTransport : Node, IMatchTransport, ITwoPlayerPacke
     public event Action<MoveCommand>? MoveReceived;
     public event Action<NetworkMatchConfiguration>? MatchConfigurationReceived;
     public event Action<TimeoutCommand>? TimeoutReceived;
+    public event Action<ResignationCommand>? ResignationReceived;
     public event Action<ClockSyncCommand>? ClockSyncReceived;
     public event Action<ChatCommand>? ChatReceived;
     public event Action<MatchOfferRequest>? MatchOfferReceived;
@@ -110,6 +111,9 @@ public partial class EnetMatchTransport : Node, IMatchTransport, ITwoPlayerPacke
         SendAsync(MatchWireProtocol.Encode(configuration), cancellationToken);
     public ValueTask SendTimeoutAsync(
         TimeoutCommand command, CancellationToken cancellationToken = default) =>
+        SendAsync(MatchWireProtocol.Encode(command), cancellationToken);
+    public ValueTask SendResignationAsync(
+        ResignationCommand command, CancellationToken cancellationToken = default) =>
         SendAsync(MatchWireProtocol.Encode(command), cancellationToken);
     public ValueTask SendClockSyncAsync(
         ClockSyncCommand command, CancellationToken cancellationToken = default) =>
@@ -204,6 +208,7 @@ public partial class EnetMatchTransport : Node, IMatchTransport, ITwoPlayerPacke
             case MatchWireMessageType.Configuration:
                 MatchConfigurationReceived?.Invoke((NetworkMatchConfiguration)message.Payload); break;
             case MatchWireMessageType.Timeout: TimeoutReceived?.Invoke((TimeoutCommand)message.Payload); break;
+            case MatchWireMessageType.Resignation: ResignationReceived?.Invoke((ResignationCommand)message.Payload); break;
             case MatchWireMessageType.ClockSync: ClockSyncReceived?.Invoke((ClockSyncCommand)message.Payload); break;
             case MatchWireMessageType.Chat: ChatReceived?.Invoke((ChatCommand)message.Payload); break;
             case MatchWireMessageType.MatchOffer:

@@ -1,6 +1,6 @@
 # 经典象棋架构与运行流程
 
-更新：2026-09-10。本文件由原经典架构摘要原地整理，不是全项目总架构。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)；接口契约、扩展示例和注意事项见 [抽象层使用手册](abstractions.md)；三人玩法见 [三国象棋](three-kingdoms.md)。
+更新：2026-09-11。本文件由原经典架构摘要原地整理，不是全项目总架构。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)；接口契约、扩展示例和注意事项见 [抽象层使用手册](abstractions.md)；三人玩法见 [三国象棋](three-kingdoms.md)。
 
 ## 1. 层次与职责
 
@@ -48,7 +48,7 @@ GameSession 包含私有 ChessGame；提供 Snapshot、CanUndo、GetLegalDestina
 
 合法着法时，GameSession 先保存 before，执行聚合，再发布移动/吃子、将军/结束等 CueRaised，随后运行已注册 IPositionPatternDetector，最后发布 StateChanged。失败着法只发出拒绝提示，不产生新权威局面。
 
-GameScreen 在 CueRaised 缓存本手视觉信息，在 StateChanged 获取 after，与之前显示的 before 一起调用 BoardView.AnimateMove。领域此时已提交 after，动画只是表现；动画结束后播放落子/吃子音效。
+GameScreen 在 CueRaised 缓存本手视觉信息，在 StateChanged 获取 after，与之前显示的 before 一起调用 BoardView.AnimateMove。领域此时已提交 after，动画只是表现；动画结束后播放经典落子/吃子音效。选中不播放音效；吃子不为被吃棋子建立淡出/飞行动画，也不再向中央特效层显示“吃”字，只保留吃子音效。经典、揭棋与三国共用 `PieceMotion`：以较短的距离相关时长先移到终点斜上方，再沿竖直方向加速落下；它只计算表现坐标，不修改棋位。
 
 - IPositionPatternDetector 目前为经典接口，参数是 GameSnapshot/MoveResult。
 - DoubleChariotMateDetector 只识别“双车错”语义，不影响合法性。
@@ -81,7 +81,7 @@ Main 创建具体 IMatchTransport，GameScreen 在配置就绪后创建 NetworkG
 
 EnetMatchTransport 默认 UDP 27888，CreateServer 只允许一个远端，使用可靠包并绑定唯一 PeerId。SteamMatchTransport 绑定确定的对手 SteamID，使用专用可靠消息通道；不能接受任意 Lobby 成员的包。
 
-经典网络聊天由 NetworkGameCoordinator 的 RoomChatManager 管理，与三国共用正文/席位/目标/去重规则。界面可选择全房间或唯一对手（双人语义上接收者相同，但 payload 仍保留目标语义）；远端 SenderSeat 必须匹配唯一认证对手。经典 transport 断线即结束流程，当前不具备三国的历史补齐能力。
+经典网络聊天由 NetworkGameCoordinator 的 RoomChatManager 管理，与其他玩法共用正文/席位/目标/去重规则。双人界面不显示目标选择，`SendChatAsync` 通过 `PostToOpponent` 固定发送给唯一对手；远端 SenderSeat 必须匹配唯一认证对手。三人及以上房间才可选择全房间或指定席位。经典 transport 断线即结束流程，当前不具备三国的历史补齐能力。
 
 GameScreen 当前要求 IMatchTransport 实例同时为 Godot Node 并将其 AddChild。Core 协调器可用 FakeTransport 测试，但一个普通 C# transport 不能直接注入现有 GameScreen，需显式生命周期适配或后续拆分驱动职责。
 
@@ -116,7 +116,7 @@ UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回�
 
 ## 5. 双人协议与兼容性
 
-[MatchWireProtocol.cs](../src/Xiangqi.Core/Application/MatchWireProtocol.cs) 是经典类型化消息的唯一编解码事实来源。当前 v6，小端二进制帧；配置帧含玩法模式、棋盘尺寸和规则标志以供组合根路由。揭棋、军旗与五子棋另在各自控制器中编解码原始包，不进入经典消息枚举。
+[MatchWireProtocol.cs](../src/Xiangqi.Core/Application/MatchWireProtocol.cs) 是经典类型化消息的唯一编解码事实来源。当前 v7，小端二进制帧；配置帧含玩法模式、棋盘尺寸和规则标志以供组合根路由。v7 新增带当前 Ply 与败方的认输消息；协调器用已认证连接绑定远端一方，并在领域会话中复验终局。揭棋、军旗与五子棋另在各自控制器中编解码原始包，不进入经典消息枚举。
 
 | 消息 | 类型值 | Payload 与主要约束 |
 | --- | ---: | --- |
@@ -128,6 +128,7 @@ UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回�
 | MatchOffer | 6 | 请求 ID、ply、申请类型；19 字节 |
 | MatchOfferResponse | 7 | 同上 + accepted bool；20 字节；必须匹配待处理申请 |
 | PlayerProfile | 8 | ID、昵称、尺寸、RGBA8；文字各 ≤96 UTF-8 字节，头像 ≤64×64 |
+| Resignation | 9 | 当前 Ply、认输方；接收端复验席位与局面版本 |
 
 适配器先验证来源/长度并调用 TryDecode，再发布类型化事件；协调器验证状态序号/权限，再进入领域。不能只在 UI 或发送端校验，也不能用任意对象反序列化覆盖棋盘。
 

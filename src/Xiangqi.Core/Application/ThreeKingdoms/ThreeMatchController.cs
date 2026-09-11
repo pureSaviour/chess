@@ -24,6 +24,7 @@ public interface IThreeMatchController : IDisposable
     Kingdom? LocalKingdom { get; }
     IReadOnlyList<string> PlayerNames { get; }
     IReadOnlyList<string> PlayerIds => PlayerNames;
+    IReadOnlyList<PlayerProfileCommand?> PlayerProfiles => Array.AsReadOnly(new PlayerProfileCommand?[3]);
     IReadOnlyList<bool> Connections => Session.Connected;
     IReadOnlyList<double> DisplayedGameTimes => Session.GameTimes;
     IReadOnlyList<double> DisplayedStepTimes => Session.StepTimes;
@@ -63,6 +64,8 @@ public sealed class LocalThreeMatchController : IThreeMatchController
     public ThreeMatchSession Session { get; }
     public Kingdom? LocalKingdom => null;
     public IReadOnlyList<string> PlayerNames { get; } = Array.AsReadOnly(new[] { "玩家 1", "玩家 2", "玩家 3" });
+    public IReadOnlyList<PlayerProfileCommand?> PlayerProfiles { get; } =
+        Array.AsReadOnly(new PlayerProfileCommand?[] { null, null, null });
     public string Status => "本地三人 · 魏 → 吴 → 蜀";
     public RoomChatManager Chat { get; } = new(3);
     public event Action? Changed;

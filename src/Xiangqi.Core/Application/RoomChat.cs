@@ -60,6 +60,19 @@ public sealed class RoomChatManager
     }
 
     /// <summary>
+    /// Creates the only meaningful directed message in a two-seat room. This keeps two-player
+    /// screens and future two-player coordinators from exposing or reimplementing recipient
+    /// selection. It is invalid for rooms with any other seat count.
+    /// </summary>
+    public string? PostToOpponent(int senderSeat, string text, out RoomChatEntry? entry)
+    {
+        entry = null;
+        if (_seatCount != 2) return "仅双人房间可以直接发送给唯一对手。";
+        if (senderSeat is < 0 or > 1) return "消息目标无效。";
+        return Post(senderSeat, 1 - senderSeat, text, out entry);
+    }
+
+    /// <summary>
     /// Accepts a live item only when its sender matches the transport-authenticated seat. Returns
     /// false for malformed, spoofed or duplicate input; malformed input never raises an event.
     /// </summary>

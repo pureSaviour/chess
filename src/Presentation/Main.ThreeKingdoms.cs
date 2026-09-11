@@ -2,6 +2,7 @@ using Godot;
 using Xiangqi.Core.Application;
 using Xiangqi.Core.Application.ThreeKingdoms;
 using Xiangqi.Core.Domain.ThreeKingdoms;
+using Xiangqi.Presentation.Profiles;
 using Xiangqi.Presentation.Screens;
 using Xiangqi.Transport;
 #if GODOT_WINDOWS
@@ -29,6 +30,18 @@ public partial class Main
             new LocalThreeMatchController(time, policy), themes: _themes));
     }
     private string ThreePlayerName => string.IsNullOrWhiteSpace(_settings.CustomPlayerId) ? $"棋手 {System.Environment.ProcessId}" : _settings.CustomPlayerId;
+    private PlayerProfileCommand CreateThreePlayerProfile(PlayerProfileSnapshot? platformProfile = null)
+    {
+        var custom = CustomPlayerProfileFactory.Create(_settings, platformProfile?.DisplayName ?? ThreePlayerName);
+        var profile = custom ?? platformProfile ??
+            new PlayerProfileSnapshot("本地", $"local:{System.Environment.ProcessId}", ThreePlayerName);
+        try { return CustomPlayerProfileFactory.ToCommand(profile); }
+        finally
+        {
+            profile.Avatar?.Dispose();
+            if (!ReferenceEquals(profile.Avatar, platformProfile?.Avatar)) platformProfile?.Avatar?.Dispose();
+        }
+    }
     private void StartThreeLanHost(int port, TimeControl time, AdvisorConquestPolicy policy)
     {
         CancelWaitingSteamLobby();
@@ -36,7 +49,7 @@ public partial class Main
         {
             var transport = ThreeLanTransport.Host(port, ThreePlayerName, GetPreferredLanAddress());
             SwitchTo(new ThreeGameScreen(_settings, ShowGallery,
-                new ThreeNetworkController(transport, time, policy), themes: _themes));
+                new ThreeNetworkController(transport, time, policy, CreateThreePlayerProfile()), themes: _themes));
         }
         catch (Exception e) { ShowError(e.Message); }
     }
@@ -47,7 +60,8 @@ public partial class Main
         {
             var transport = ThreeLanTransport.Join(address, port, ThreePlayerName);
             SwitchTo(new ThreeGameScreen(_settings, ShowGallery,
-                new ThreeNetworkController(transport, TimeControl.Unlimited, AdvisorConquestPolicy.SharedTerritory),
+                new ThreeNetworkController(transport, TimeControl.Unlimited, AdvisorConquestPolicy.SharedTerritory,
+                    CreateThreePlayerProfile()),
                 themes: _themes));
         }
         catch (Exception e) { ShowError(e.Message); }
@@ -72,8 +86,9 @@ public partial class Main
         _threeSteam.Ready += (transport, time, policy) =>
         {
             _steam!.ReleaseThreeLobby(transport.Lobby);
+            _steam.TryGetLocalPlayerProfile(out var steamProfile);
             SwitchTo(new ThreeGameScreen(_settings, ShowGallery,
-                new ThreeNetworkController(transport, time, policy), transport.InviteFriends, _themes));
+                new ThreeNetworkController(transport, time, policy, CreateThreePlayerProfile(steamProfile)), transport.InviteFriends, _themes));
         };
         _steam!.ThreeLobbyEntered += lobby => _threeSteam.Enter(lobby.Value);
     }

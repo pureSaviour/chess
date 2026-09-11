@@ -16,6 +16,7 @@ var tests = new (string Name, Action Run)[]
     ("联机协调器同步双方着法并校验序号", NetworkCoordinator),
     ("局时和步时任一耗尽都会返回超时方", MatchClockTimeout),
     ("超时裁决结束棋局并指定另一方获胜", TimeoutAdjudication),
+    ("认输裁决在会话与联机协调器中指定对手获胜", ResignationAdjudication),
     ("悔棋完整恢复棋盘与行棋方", UndoRestoresState),
     ("双方同意和棋后对局无胜方结束", DrawAdjudication),
     ("联机聊天消息通过协调器双向传递", NetworkChat),
@@ -230,6 +231,22 @@ static void TimeoutAdjudication()
     False(session.DeclareTimeout(PieceSide.Red));
 }
 
+static void ResignationAdjudication()
+{
+    var local = new GameSession();
+    True(local.DeclareResignation(PieceSide.Red));
+    Equal(PieceSide.Black, local.Snapshot.Winner);
+    Equal(GameEndReason.Resignation, local.Snapshot.EndReason);
+
+    var network = new GameSession();
+    var transport = new FakeTransport();
+    var coordinator = new NetworkGameCoordinator(network, transport, PieceSide.Black);
+    True(coordinator.DeclareResignationAsync().AsTask().GetAwaiter().GetResult());
+    Equal(PieceSide.Red, network.Snapshot.Winner);
+    Equal(GameEndReason.Resignation, network.Snapshot.EndReason);
+    coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+}
+
 static void UndoRestoresState()
 {
     var game = ChessGame.CreateStandard();
@@ -258,6 +275,7 @@ static void NetworkChat()
     var coordinator = new NetworkGameCoordinator(session, transport, PieceSide.Red);
     coordinator.SendChatAsync("你好").AsTask().GetAwaiter().GetResult();
     Equal("你好", transport.LastChat?.Entry.Text);
+    Equal(1, transport.LastChat?.Entry.TargetSeat);
     RoomChatEntry? received = null;
     coordinator.Chat.MessageAdded += message => received = message;
     transport.Receive(new ChatCommand(new RoomChatEntry(Guid.NewGuid().ToString("N"), 1, 0, "轮到你了")));
@@ -280,6 +298,12 @@ static void RoomChatManagement()
     Equal(1, peer.ImportTrustedHistory(room.Entries));
     Equal(0, peer.ImportTrustedHistory(room.Entries));
     False(peer.AcceptLive(new RoomChatEntry(Guid.NewGuid().ToString("N"), 1, null, "伪造"), 2));
+
+    var pair = new RoomChatManager(2);
+    Equal<string?>(null, pair.PostToOpponent(0, "只发给对方", out var opponentOnly));
+    Equal(1, opponentOnly?.TargetSeat);
+    Equal("仅双人房间可以直接发送给唯一对手。",
+        room.PostToOpponent(0, "三人房不适用", out _));
 }
 
 static void NetworkUndoOffer()
@@ -376,6 +400,7 @@ static void MatchWireRoundTrip()
     RoundTrip(new NetworkMatchConfiguration(
         new TimeControl(1200, 60), PieceSide.Black), MatchWireMessageType.Configuration);
     RoundTrip(new TimeoutCommand(8, PieceSide.Red), MatchWireMessageType.Timeout);
+    RoundTrip(new ResignationCommand(8, PieceSide.Black), MatchWireMessageType.Resignation);
     RoundTrip(new ClockSyncCommand(9,
         new ClockSnapshot(101.5, 82.25, 11, PieceSide.Black)), MatchWireMessageType.ClockSync);
     RoundTrip(new ChatCommand(new RoomChatEntry(Guid.NewGuid().ToString("N"), 0, 1, "你好，Steam 好友")), MatchWireMessageType.Chat);
@@ -527,6 +552,7 @@ static void RoundTrip<T>(T expected, MatchWireMessageType type) where T : struct
         MoveCommand value => MatchWireProtocol.Encode(value),
         NetworkMatchConfiguration value => MatchWireProtocol.Encode(value),
         TimeoutCommand value => MatchWireProtocol.Encode(value),
+        ResignationCommand value => MatchWireProtocol.Encode(value),
         ClockSyncCommand value => MatchWireProtocol.Encode(value),
         ChatCommand value => MatchWireProtocol.Encode(value),
         MatchOfferRequest value => MatchWireProtocol.Encode(value),
@@ -573,6 +599,7 @@ sealed class FakeTransport : IMatchTransport
     public event Action<MoveCommand>? MoveReceived;
     public event Action<NetworkMatchConfiguration>? MatchConfigurationReceived;
     public event Action<TimeoutCommand>? TimeoutReceived;
+    public event Action<ResignationCommand>? ResignationReceived;
     public event Action<ClockSyncCommand>? ClockSyncReceived;
     public event Action<ChatCommand>? ChatReceived;
     public event Action<MatchOfferRequest>? MatchOfferReceived;
@@ -600,6 +627,11 @@ sealed class FakeTransport : IMatchTransport
     public ValueTask SendTimeoutAsync(TimeoutCommand command, CancellationToken cancellationToken = default)
     {
         TimeoutReceived?.Invoke(command);
+        return ValueTask.CompletedTask;
+    }
+    public ValueTask SendResignationAsync(ResignationCommand command, CancellationToken cancellationToken = default)
+    {
+        ResignationReceived?.Invoke(command);
         return ValueTask.CompletedTask;
     }
 
