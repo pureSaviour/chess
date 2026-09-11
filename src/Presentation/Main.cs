@@ -621,6 +621,17 @@ public partial class Main : Control
             var lanScreen = _currentScreen as GameScreen;
             if (lanScreen is null || !lanScreen.IsMessagePanelFullyVisible)
                 throw new InvalidOperationException($"Classic LAN message panel is outside the viewport: {lanScreen?.MessagePanelBounds ?? "screen missing"}.");
+            StartJieqiLanHost(EnetMatchTransport.DefaultPort + 1,
+                new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red,
+                    TwoPlayerGameMode.Jieqi));
+            await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not JieqiGameScreen { HasClassicTwoPlayerRoomLayout: true, HasNetworkChat: true })
+                throw new InvalidOperationException("Jieqi network room must expose classic player strips and two-player chat.");
+            SwitchTo(new JieqiReplayScreen(_settings, _themes,
+                new JieqiGameRecord(1, [], new Dictionary<string, string>()), ShowGallery));
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not JieqiReplayScreen { AreBottomControlsFullyVisible: true })
+                throw new InvalidOperationException("Jieqi replay controls are outside the viewport.");
             StartGomokuLocal(new GomokuRoomOptions(19, GomokuRuleSet.RenjuForbiddenMoves, StoneColor.Black));
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not GomokuGameScreen)

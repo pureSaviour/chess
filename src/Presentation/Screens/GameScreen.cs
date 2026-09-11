@@ -66,7 +66,6 @@ public partial class GameScreen : Control
     private Button _chatSendButton = null!;
     private RichTextLabel _chatLog = null!;
     private LineEdit _chatInput = null!;
-    private OptionButton? _chatTarget;
     private ConfirmationDialog _offerDialog = null!;
     private GameplayAudioPlayer _audio = null!;
     private InGameSettingsDialog _settingsDialog = null!;
@@ -411,13 +410,6 @@ public partial class GameScreen : Control
         };
         _chatInput.TextSubmitted += _ => SendChat();
         column.AddChild(_chatInput);
-        if (_transport is not null)
-        {
-            _chatTarget = new OptionButton();
-            _chatTarget.AddItem("发送给：房间所有人", 100);
-            _chatTarget.AddItem("仅发送给：对方", 1);
-            column.AddChild(_chatTarget);
-        }
         _chatSendButton = UiStyle.CreateButton("发送", true);
         _chatSendButton.CustomMinimumSize = new Vector2(0, 40);
         _chatSendButton.Pressed += SendChat;
@@ -730,10 +722,7 @@ public partial class GameScreen : Control
         }
         try
         {
-            var selectedTarget = _chatTarget is { Selected: >= 0 }
-                ? _chatTarget.GetItemId(_chatTarget.Selected) : 100;
-            var targetSeat = selectedTarget == 100 ? (int?)null : (int)_network!.LocalSide.Opponent();
-            var error = await _network!.SendChatAsync(text, targetSeat);
+            var error = await _network!.SendChatAsync(text);
             if (error is not null) throw new InvalidOperationException(error);
             _chatInput.Clear();
             _chatInput.GrabFocus();
@@ -762,8 +751,7 @@ public partial class GameScreen : Control
     {
         if (_network is null || !RoomChatManager.IsVisibleTo(entry, (int)_network.LocalSide)) return;
         var sender = entry.SenderSeat == (int)_network.LocalSide ? "我" : "对方";
-        var destination = entry.TargetSeat is null ? " → 房间" : " → 私聊";
-        AppendChat(sender + destination, entry.Text);
+        AppendChat(sender, entry.Text);
         if (_debugNetworkSmoke && entry.Text == "联机协商冒烟消息" && sender == "对方")
             GD.Print("[Xiangqi.Network.Smoke] Chat message received.");
     }

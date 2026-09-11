@@ -5,6 +5,7 @@ using Xiangqi.Presentation.Boards;
 using Xiangqi.Presentation.Records;
 using Xiangqi.Presentation.UI;
 using Xiangqi.Presentation.Profiles;
+using Xiangqi.Presentation.Networking;
 using Xiangqi.Core.Application;
 
 namespace Xiangqi.Presentation.Screens;
@@ -18,6 +19,7 @@ public partial class JunqiGameScreen : Control
     private readonly Button _save;
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
+    private readonly RawTwoPlayerRoomChat? _roomChat;
     private readonly Control? _privacyCurtain;
     private JunqiCell? _selected;
     private IReadOnlyList<JunqiCell> _legal = [];
@@ -31,8 +33,12 @@ public partial class JunqiGameScreen : Control
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _profiles = profiles;
-        if (networkDriver is ITwoPlayerPacketTransport packetTransport && profiles is not null)
-            _profileExchange = new RawMatchProfileExchange(packetTransport, profiles);
+        if (networkDriver is ITwoPlayerPacketTransport packetTransport)
+        {
+            if (profiles is not null) _profileExchange = new RawMatchProfileExchange(packetTransport, profiles);
+            _roomChat = new RawTwoPlayerRoomChat(packetTransport,
+                () => _controller.LocalSide is { } side ? (int)side : null);
+        }
         if (networkDriver is not null) AddChild(networkDriver);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(30, 18); AddChild(margin);
@@ -42,13 +48,19 @@ public partial class JunqiGameScreen : Control
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
         _save = UiStyle.CreateButton("保存棋局"); _save.Disabled = true; header.AddChild(_save);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
-        var center = new CenterContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; root.AddChild(center);
+        var body = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
+        body.AddThemeConstantOverride("separation", 10); root.AddChild(body);
+        var center = new CenterContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
+        body.AddChild(center);
         var stage = new Control { CustomMinimumSize = new Vector2(520, 700) }; center.AddChild(stage);
         _board.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect); stage.AddChild(_board);
         if (_controller.LocalSide is null)
         {
             _privacyCurtain = CreatePrivacyCurtain(); stage.AddChild(_privacyCurtain);
         }
+        if (_roomChat is not null)
+            body.AddChild(new TwoPlayerChatPanel(_roomChat,
+                () => _controller.LocalSide is { } side ? (int)side : null));
         var hint = new Label { Text = "铁路直行；工兵可沿铁路转弯。行营不可攻击，大本营内棋子不能移动。", HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
         _board.CellPressed += OnCellPressed; _controller.Changed += OnChanged; _controller.Message += OnMessage; _save.Pressed += Save;
@@ -137,7 +149,7 @@ public partial class JunqiGameScreen : Control
     public override void _ExitTree()
     {
         _board.CellPressed -= OnCellPressed; _controller.Changed -= OnChanged; _controller.Message -= OnMessage;
-        _profileExchange?.Dispose(); _profiles?.Dispose(); _ = _controller.DisposeAsync();
+        _profileExchange?.Dispose(); _roomChat?.Dispose(); _profiles?.Dispose(); _ = _controller.DisposeAsync();
     }
 }
 

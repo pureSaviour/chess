@@ -55,7 +55,7 @@ public partial class CueEffectLayer : Control
         foreach (var material in _themeMaterials.Values) material.Dispose();
         foreach (var lease in _themeLeases) lease.Dispose();
         _themeMaterials.Clear(); _themeDurations.Clear(); _themeLeases.Clear();
-        foreach (var slot in new[] { ThemeEffectSlot.Capture, ThemeEffectSlot.Check,
+        foreach (var slot in new[] { ThemeEffectSlot.Check,
                      ThemeEffectSlot.Victory, ThemeEffectSlot.Defeat })
         {
             if (!theme.Effects.TryGetValue(slot, out var effect)) continue;
@@ -79,7 +79,6 @@ public partial class CueEffectLayer : Control
 
         var slot = cue.Kind switch
         {
-            PresentationCueKind.Capture => ThemeEffectSlot.Capture,
             PresentationCueKind.Check or PresentationCueKind.Checkmate => ThemeEffectSlot.Check,
             _ => (ThemeEffectSlot?)null
         };
@@ -149,7 +148,7 @@ public partial class CueEffectLayer : Control
 
     private static EffectStyle ResolveStyle(PresentationCue cue) => cue.Kind switch
     {
-        PresentationCueKind.Capture => new("吃", new Color("#F0B55A"), new Color("#5C241A"), 0.12f, 14, 0.75f),
+        PresentationCueKind.Capture => default,
         PresentationCueKind.Check => new("将军", new Color("#FFCF73"), new Color("#8D1F27"), 0.20f, 20, 1.05f),
         PresentationCueKind.Checkmate => new("绝杀", new Color("#FFE29A"), new Color("#A6262E"), 0.28f, 28, 1.35f),
         PresentationCueKind.Stalemate => new("困毙", new Color("#E1C591"), new Color("#3D2C25"), 0.18f, 12, 1.1f),

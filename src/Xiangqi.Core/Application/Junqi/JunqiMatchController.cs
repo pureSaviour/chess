@@ -162,7 +162,7 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
     private void OnPacket(ReadOnlyMemory<byte> bytes)
     {
         if (MatchWireProtocol.TryDecode(bytes.ToArray(), out var shared) &&
-            shared.Type == MatchWireMessageType.PlayerProfile) return;
+            shared.Type is MatchWireMessageType.PlayerProfile or MatchWireMessageType.Chat) return;
         if (!JunqiWireProtocol.TryDecode(bytes.Span, out var packet, out var error))
         { Message?.Invoke(error ?? "收到无效军旗数据。"); return; }
         switch (packet!.Type)

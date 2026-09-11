@@ -135,10 +135,11 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
         await _transport.DisposeAsync();
     }
 
+    /// <summary>Sends directly to the sole opponent; two-player rooms do not expose recipient selection.</summary>
     public async ValueTask<string?> SendChatAsync(
-        string text, int? targetSeat = null, CancellationToken cancellationToken = default)
+        string text, CancellationToken cancellationToken = default)
     {
-        var error = Chat.Post((int)LocalSide, targetSeat, text, out var entry);
+        var error = Chat.PostToOpponent((int)LocalSide, text, out var entry);
         if (error is not null) return error;
         await _transport.SendChatAsync(new ChatCommand(entry!), cancellationToken);
         return null;

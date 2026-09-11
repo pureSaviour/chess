@@ -236,7 +236,7 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     private void OnPacket(ReadOnlyMemory<byte> bytes)
     {
         if (MatchWireProtocol.TryDecode(bytes.ToArray(), out var shared) &&
-            shared.Type == MatchWireMessageType.PlayerProfile) return;
+            shared.Type is MatchWireMessageType.PlayerProfile or MatchWireMessageType.Chat) return;
         if (!JieqiWireProtocol.TryDecode(bytes.Span, out var packet, out var error))
         { Message?.Invoke(error ?? "收到无效揭棋数据。"); return; }
         if (packet!.Type == "move") ReceiveMoveRequest(packet);

@@ -133,13 +133,13 @@ GameSession 是具体门面而非接口，其私有 ChessGame 防止 UI 直接�
 
 ## 7. 跨玩法房管消息板：RoomChatManager
 
-定义：[RoomChat.cs](../src/Xiangqi.Core/Application/RoomChat.cs)。RoomChatManager 是纯 C#、有界、进程内的消息板，经典 NetworkGameCoordinator 和三国 IThreeMatchController 都实际持有并向 UI 暴露同一契约。它不拥有 transport、文件、线程或 Godot 节点，也不负责平台认证、加密或决定谁是游戏权威。
+定义：[RoomChat.cs](../src/Xiangqi.Core/Application/RoomChat.cs)。RoomChatManager 是纯 C#、有界、进程内的消息板；经典 NetworkGameCoordinator、三国 IThreeMatchController，以及揭棋/军旗/五子棋的双人房适配器都实际使用同一契约。它不拥有 transport、文件、线程或 Godot 节点，也不负责平台认证、加密或决定谁是游戏权威。
 
-RoomChatEntry 使用稳定房间席位而非 Steam64/公钥指纹：SenderSeat 为零基发送席，TargetSeat=null 表示全房间，非空表示指定接收席。Post 验证发送/目标范围、禁止给自己定向、去除首尾空白、拒绝控制字符及超过 512 UTF-8 字节的正文，成功后生成 32 位十六进制消息 ID、先存储再同步触发 MessageAdded。失败返回用户可见错误且不触发事件。消息板默认最多保留 200 条，淘汰最旧项；Entries 是实时只读视图，不是历史快照。
+RoomChatEntry 使用稳定房间席位而非 Steam64/公钥指纹：SenderSeat 为零基发送席，TargetSeat=null 表示全房间，非空表示指定接收席。Post 验证发送/目标范围、禁止给自己定向、去除首尾空白、拒绝控制字符及超过 512 UTF-8 字节的正文，成功后生成 32 位十六进制消息 ID、先存储再同步触发 MessageAdded。双人房必须调用 `PostToOpponent`，由消息板根据发送席固定计算唯一对手；该入口拒绝三席及以上房间，避免 UI 或玩法控制器重新实现目标选择。失败返回用户可见错误且不触发事件。消息板默认最多保留 200 条，淘汰最旧项；Entries 是实时只读视图，不是历史快照。
 
 AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并传入 authenticatedSenderSeat；消息自述 SenderSeat 不匹配、结构非法或 ID 重复时返回 false。ImportTrustedHistory 只用于已认证房间同伴提供的有界历史页，逐条复验结构并去重，但不会替调用者建立信任。三国协议为保持房主迁移/断线恢复，把消息复制到可信房间副本；IsVisibleTo 只让全房间消息、发送者和目标席呈现定向消息。这是目标可见性，不是端到端加密。
 
-经典协调器通过 MatchWireProtocol v7 发送 RoomChatEntry，并按唯一对手的认证连接绑定远端席位；经典没有历史重连。三国聊天独立于游戏 ThreeCommand/哈希棋谱，SendChat 不要求三席满员、对局开始或当前房主在线；周期 hello 交换 chat-state 历史，后加入者和重连者可以补齐。所有事件在控制器 Poll/调用所在主线程同步发布；退出房间时 Screen 先解绑 MessageAdded，再由控制器释放 transport，Manager 本身无需 Dispose。
+经典协调器通过 MatchWireProtocol v7 发送 RoomChatEntry，并按唯一对手的认证连接绑定远端席位；揭棋、军旗、五子棋由 `RawTwoPlayerRoomChat` 在各自权威玩法包之外复用同一有界 Chat 帧。所有双人房 UI 使用 `TwoPlayerChatPanel`，不显示接收者下拉框且只发送给唯一对手。适配器只拥有包事件订阅，Screen 必须先释放它，再由控制器释放 transport。三国聊天独立于游戏 ThreeCommand/哈希棋谱，SendChat 不要求三席满员、对局开始或当前房主在线；周期 hello 交换 chat-state 历史，后加入者和重连者可以补齐。三人及以上房间才允许 UI 选择全房间或具体席位。所有事件在控制器 Poll/调用所在主线程同步发布；Manager 本身无需 Dispose。
 
 测试：[Program.cs](../tests/Xiangqi.Core.Tests/Program.cs) 覆盖正常/目标/越界/去重/伪造/协议畸形；[RoomChatNetworkTests.cs](../tests/Xiangqi.ThreeNetwork.Tests/RoomChatNetworkTests.cs) 覆盖两席发言、第三席历史、断线目标恢复和原房主离线后继续发言。常见误用包括用昵称鉴权、把 TargetSeat 当加密、把聊天塞回棋谱阻塞走子、让后台 I/O 直接更新控件。
 

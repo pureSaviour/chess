@@ -7,6 +7,7 @@ using Xiangqi.Presentation.Records;
 using Xiangqi.Presentation.Audio;
 using Xiangqi.Presentation.Settings;
 using Xiangqi.Presentation.Profiles;
+using Xiangqi.Presentation.Networking;
 using Xiangqi.Presentation.UI;
 
 namespace Xiangqi.Presentation.Screens;
@@ -18,16 +19,24 @@ public partial class JieqiGameScreen : Control
     private readonly Action _back;
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
+    private readonly RawTwoPlayerRoomChat? _roomChat;
     private readonly BoardView _board;
     private readonly Label _status = new();
     private readonly Button _save;
     private readonly GameplayAudioPlayer _audio = new();
-    private readonly Label _redClock = new();
-    private readonly Label _blackClock = new();
+    private readonly TwoPlayerProfileRow _topPlayer = new(false);
+    private readonly TwoPlayerProfileRow _bottomPlayer = new(true);
+    private readonly TwoPlayerChatPanel? _chatPanel;
     private BoardPosition? _selected;
     private IReadOnlyList<BoardPosition> _legal = [];
     private bool _recentSaved;
+    private bool _profileSideInitialized;
+    private PieceSide? _profileSide;
     private GameSnapshot _displayed;
+
+    internal bool HasClassicTwoPlayerRoomLayout => _topPlayer.GetParent() is not null &&
+        _bottomPlayer.GetParent() is not null;
+    internal bool HasNetworkChat => _chatPanel is not null;
 
     public JieqiGameScreen(AppSettings settings, IBoardThemeCatalog themes, ulong seed, TimeControl timeControl,
         Action back, MatchPlayerProfiles? profiles = null)
@@ -41,8 +50,16 @@ public partial class JieqiGameScreen : Control
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _back = back ?? throw new ArgumentNullException(nameof(back));
         _profiles = profiles;
-        if (networkDriver is ITwoPlayerPacketTransport packetTransport && profiles is not null)
-            _profileExchange = new RawMatchProfileExchange(packetTransport, profiles);
+        if (networkDriver is ITwoPlayerPacketTransport packetTransport)
+        {
+            if (profiles is not null)
+            {
+                _profileExchange = new RawMatchProfileExchange(packetTransport, profiles);
+                _profileExchange.OpponentChanged += ApplyPlayerProfiles;
+            }
+            _roomChat = new RawTwoPlayerRoomChat(packetTransport,
+                () => _controller.LocalSide is { } side ? (int)side : null);
+        }
         _displayed = controller.Snapshot;
         if (networkDriver is not null) AddChild(networkDriver);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
@@ -51,25 +68,49 @@ public partial class JieqiGameScreen : Control
         var header = new HBoxContainer(); root.AddChild(header);
         var title = UiStyle.CreateTitle($"揭棋 · {roomTitle}", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
-        _save = UiStyle.CreateButton("保存棋局"); _save.Disabled = true; header.AddChild(_save);
-        var resign = UiStyle.CreateButton("认输"); header.AddChild(resign);
+        _save = UiStyle.CreateButton("保存棋局"); _save.CustomMinimumSize = new Vector2(88, 41);
+        _save.Disabled = true; header.AddChild(_save);
+        var resign = UiStyle.CreateButton("认输"); resign.CustomMinimumSize = new Vector2(76, 41); header.AddChild(resign);
         var resignDialog = new ConfirmationDialog { Title = "认输", DialogText = "确定认输并结束本局？", OkButtonText = "确认认输" };
         AddChild(resignDialog); resign.Pressed += () => resignDialog.PopupCentered(); resignDialog.Confirmed += Resign;
-        var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += LeaveForGallery; header.AddChild(leave);
-        var clocks = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center }; root.AddChild(clocks);
-        _redClock.CustomMinimumSize = new Vector2(180, 0); _blackClock.CustomMinimumSize = new Vector2(180, 0);
-        _redClock.HorizontalAlignment = HorizontalAlignment.Center; _blackClock.HorizontalAlignment = HorizontalAlignment.Center;
-        clocks.AddChild(_redClock); clocks.AddChild(_blackClock);
-        var center = new CenterContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; root.AddChild(center);
-        _board = new BoardView(themes); _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
-        _board.SetCoveredIdentityHints(null, false); center.AddChild(_board);
+        var leave = UiStyle.CreateButton("返回画廊"); leave.CustomMinimumSize = new Vector2(110, 41);
+        leave.Pressed += LeaveForGallery; header.AddChild(leave);
+
+        var matchBody = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
+        matchBody.AddThemeConstantOverride("separation", 10); root.AddChild(matchBody);
+        var matchColumn = new VBoxContainer
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            Alignment = BoxContainer.AlignmentMode.Center
+        };
+        matchColumn.AddThemeConstantOverride("separation", 3); matchBody.AddChild(matchColumn);
+        matchColumn.AddChild(_topPlayer);
+        var boardPanel = UiStyle.CreatePanel(); boardPanel.CustomMinimumSize = new Vector2(560, 560);
+        boardPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill; boardPanel.SizeFlagsVertical = SizeFlags.ExpandFill;
+        matchColumn.AddChild(boardPanel);
+        _board = new BoardView(themes)
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(540, 540)
+        };
+        _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
+        _board.SetCoveredIdentityHints(null, false); boardPanel.AddChild(_board);
+        matchColumn.AddChild(_bottomPlayer);
+        if (_roomChat is not null)
+        {
+            _chatPanel = new TwoPlayerChatPanel(_roomChat,
+                () => _controller.LocalSide is { } side ? (int)side : null);
+            matchBody.AddChild(_chatPanel);
+        }
         AddChild(_audio);
         var hint = new Label { Text = "暗子首步按所在槽位走法；联机对局只由房主保管秘密排列。", HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
         _board.SquarePressed += OnSquarePressed;
         _board.MoveAnimationFinished += OnMoveAnimationFinished;
         _controller.Changed += OnChanged; _controller.Message += OnMessage;
-        _save.Pressed += Save; Render(controller.Snapshot);
+        _save.Pressed += Save; ApplyPlayerProfiles(); Render(controller.Snapshot);
     }
 
     public override void _Process(double delta)
@@ -97,6 +138,7 @@ public partial class JieqiGameScreen : Control
     private void OnChanged()
     {
         var next = _controller.Snapshot;
+        if (!_profileSideInitialized || _profileSide != _controller.LocalSide) ApplyPlayerProfiles();
         if (next.PlyNumber == _displayed.PlyNumber + 1 && TryFindMove(_displayed, next, out var move))
             _board.AnimateMove(_displayed, next, move, next.Pieces.Count < _displayed.Pieces.Count);
         _displayed = next; Render(next);
@@ -135,9 +177,26 @@ public partial class JieqiGameScreen : Control
     private void UpdateClocks()
     {
         var clock = _controller.Clock; var control = _controller.TimeControl;
-        _redClock.Text = $"红方  {ClockText(clock.RedGameSeconds, control.GameSeconds)} · 步时 {ClockText(clock.MoveSeconds, control.MoveSeconds, clock.SideToMove == PieceSide.Red)}";
-        _blackClock.Text = $"黑方  {ClockText(clock.BlackGameSeconds, control.GameSeconds)} · 步时 {ClockText(clock.MoveSeconds, control.MoveSeconds, clock.SideToMove == PieceSide.Black)}";
+        var red = $"红方  {ClockText(clock.RedGameSeconds, control.GameSeconds)} · 步时 {ClockText(clock.MoveSeconds, control.MoveSeconds, clock.SideToMove == PieceSide.Red)}";
+        var black = $"黑方  {ClockText(clock.BlackGameSeconds, control.GameSeconds)} · 步时 {ClockText(clock.MoveSeconds, control.MoveSeconds, clock.SideToMove == PieceSide.Black)}";
+        var bottom = _controller.LocalSide ?? PieceSide.Red;
+        _bottomPlayer.SetTrailing(bottom == PieceSide.Red ? red : black);
+        _topPlayer.SetTrailing(bottom == PieceSide.Red ? black : red);
     }
+
+    private void ApplyPlayerProfiles()
+    {
+        var bottom = _controller.LocalSide ?? PieceSide.Red;
+        var top = bottom.Opponent();
+        var localDetail = _controller.LocalSide is null ? "本地双人" : $"你是{SideName(bottom)}";
+        var opponentDetail = _controller.LocalSide is null ? "本地双人" : $"对方是{SideName(top)}";
+        _bottomPlayer.Apply(_profiles?.Local, SideName(bottom), localDetail, string.Empty);
+        _topPlayer.Apply(_profiles?.Opponent, SideName(top), opponentDetail, string.Empty);
+        _profileSide = _controller.LocalSide; _profileSideInitialized = true;
+        UpdateClocks();
+    }
+
+    private static string SideName(PieceSide side) => side == PieceSide.Red ? "红方" : "黑方";
     private static string ClockText(double value, int limit, bool active = true) => limit == 0 ? "不限" : active ? $"{(int)Math.Ceiling(value) / 60:00}:{(int)Math.Ceiling(value) % 60:00}" : "--:--";
     private PieceSide ResigningSide => _controller.LocalSide ?? _controller.Snapshot.SideToMove;
     private async void Resign() { try { await _controller.SubmitResignationAsync(ResigningSide); } catch (Exception error) { OnMessage(error.Message); } }
@@ -187,6 +246,8 @@ public partial class JieqiGameScreen : Control
     {
         _board.SquarePressed -= OnSquarePressed; _controller.Changed -= OnChanged; _controller.Message -= OnMessage;
         _board.MoveAnimationFinished -= OnMoveAnimationFinished;
+        if (_profileExchange is not null) _profileExchange.OpponentChanged -= ApplyPlayerProfiles;
+        _roomChat?.Dispose();
         _profileExchange?.Dispose();
         _profiles?.Dispose();
         _ = _controller.DisposeAsync();
@@ -221,6 +282,7 @@ public partial class JieqiReplayScreen : Control
     private readonly HSlider _timeline;
     private readonly Label _ply = new();
     private readonly CheckButton _reveal = new() { Text = "隐约显示暗子身份" };
+    private readonly HBoxContainer _controls = new() { Alignment = BoxContainer.AlignmentMode.Center };
     private int _index;
 
     public JieqiReplayScreen(AppSettings settings, IBoardThemeCatalog themes, JieqiGameRecord record, Action back)
@@ -230,11 +292,18 @@ public partial class JieqiReplayScreen : Control
         var header = new HBoxContainer(); root.AddChild(header); var title = UiStyle.CreateTitle("揭棋复盘", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title); header.AddChild(_reveal); header.AddChild(_ply);
         var leave = UiStyle.CreateButton("返回记录"); leave.Pressed += back; header.AddChild(leave);
         var center = new CenterContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; root.AddChild(center);
-        _board = new BoardView(themes) { MouseFilter = MouseFilterEnum.Ignore }; _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates); center.AddChild(_board);
+        _board = new BoardView(themes)
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(460, 500)
+        };
+        _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates); center.AddChild(_board);
         _timeline = new HSlider { MinValue = 0, MaxValue = Math.Max(0, _positions.Count - 1), Step = 1,
             TickCount = Math.Clamp(_positions.Count, 2, 31), TicksOnBorders = true, CustomMinimumSize = new Vector2(0, 42) }; root.AddChild(_timeline);
-        var controls = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center }; root.AddChild(controls);
-        var previous = UiStyle.CreateButton("◀ 上一步"); var next = UiStyle.CreateButton("下一步 ▶"); controls.AddChild(previous); controls.AddChild(next);
+        root.AddChild(_controls);
+        var previous = UiStyle.CreateButton("◀ 上一步"); var next = UiStyle.CreateButton("下一步 ▶"); _controls.AddChild(previous); _controls.AddChild(next);
         void Render()
         {
             var position = _positions[_index]; _board.SetCoveredIdentityHints(position.HiddenIdentityHints(), _reveal.ButtonPressed);
@@ -244,5 +313,16 @@ public partial class JieqiReplayScreen : Control
         previous.Pressed += () => { if (_index > 0) _index--; Render(); }; next.Pressed += () => { if (_index + 1 < _positions.Count) _index++; Render(); };
         _timeline.ValueChanged += value => { _index = Math.Clamp((int)Math.Round(value), 0, _positions.Count - 1); Render(); };
         _reveal.Toggled += _ => Render(); Render();
+    }
+
+    internal bool AreBottomControlsFullyVisible
+    {
+        get
+        {
+            var viewport = GetViewportRect();
+            var controls = _controls.GetGlobalRect();
+            return controls.Position.Y >= viewport.Position.Y && controls.End.Y <= viewport.End.Y &&
+                   controls.Position.X >= viewport.Position.X && controls.End.X <= viewport.End.X;
+        }
     }
 }

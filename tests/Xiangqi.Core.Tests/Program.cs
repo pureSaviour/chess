@@ -275,6 +275,7 @@ static void NetworkChat()
     var coordinator = new NetworkGameCoordinator(session, transport, PieceSide.Red);
     coordinator.SendChatAsync("你好").AsTask().GetAwaiter().GetResult();
     Equal("你好", transport.LastChat?.Entry.Text);
+    Equal(1, transport.LastChat?.Entry.TargetSeat);
     RoomChatEntry? received = null;
     coordinator.Chat.MessageAdded += message => received = message;
     transport.Receive(new ChatCommand(new RoomChatEntry(Guid.NewGuid().ToString("N"), 1, 0, "轮到你了")));
@@ -297,6 +298,12 @@ static void RoomChatManagement()
     Equal(1, peer.ImportTrustedHistory(room.Entries));
     Equal(0, peer.ImportTrustedHistory(room.Entries));
     False(peer.AcceptLive(new RoomChatEntry(Guid.NewGuid().ToString("N"), 1, null, "伪造"), 2));
+
+    var pair = new RoomChatManager(2);
+    Equal<string?>(null, pair.PostToOpponent(0, "只发给对方", out var opponentOnly));
+    Equal(1, opponentOnly?.TargetSeat);
+    Equal("仅双人房间可以直接发送给唯一对手。",
+        room.PostToOpponent(0, "三人房不适用", out _));
 }
 
 static void NetworkUndoOffer()
