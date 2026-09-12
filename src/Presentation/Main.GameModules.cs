@@ -25,7 +25,7 @@ public partial class Main
             GameModuleCapabilities.PositionImport | GameModuleCapabilities.ComputerPlay |
             GameModuleCapabilities.ComputerSettings;
         var classic = new GameModuleRegistration(new(
-            new("games.xiangqi.classic"), new Version(1, 0), "经典象棋", "楚河汉界 · 红黑争锋",
+            new("xiangqi.classic"), new Version(1, 0), "经典象棋", "楚河汉界 · 红黑争锋",
             "res://assets/gallery/classic-xiangqi-card.png", classicCapabilities, 0),
         [
             Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => ShowClassicGallery(ClassicGalleryEntry.Local)),
@@ -40,7 +40,7 @@ public partial class Main
         ]);
 
         var three = new GameModuleRegistration(new(
-            new("games.xiangqi.three-kingdoms"), new Version(1, 0), "三国象棋", "魏 · 吴 · 蜀 · 合纵连横",
+            new("xiangqi.three-kingdoms"), new Version(1, 0), "三国象棋", "魏 · 吴 · 蜀 · 合纵连横",
             "res://assets/gallery/three-kingdoms-card.png", common, 100),
         [
             Entry(Route("local", "联机模式", "本地三人对决", GameModuleCapabilities.LocalPlay, 0), () => ShowThreeGallery(ThreeGalleryEntry.Local)),
@@ -51,7 +51,7 @@ public partial class Main
         ]);
 
         var jieqi = new GameModuleRegistration(new(
-            new("games.xiangqi.jieqi"), new Version(1, 0), "揭棋", "暗子初行 · 揭开玄机",
+            new("xiangqi.jieqi"), new Version(1, 0), "揭棋", "暗子初行 · 揭开玄机",
             "res://assets/gallery/jieqi-card.png", common, 200),
         [
             Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => StartJieqiLocal(TimeControl.Unlimited)),
@@ -62,7 +62,7 @@ public partial class Main
         ]);
 
         var junqi = new GameModuleRegistration(new(
-            new("games.junqi"), new Version(1, 0), "军旗", "铁路纵横 · 夺旗制胜",
+            new("junqi.standard"), new Version(1, 0), "军旗", "铁路纵横 · 夺旗制胜",
             "res://assets/gallery/junqi-card.svg", common, 300),
         [
             Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), StartJunqiLocal),
@@ -76,7 +76,7 @@ public partial class Main
             GameModuleCapabilities.PositionImport | GameModuleCapabilities.ComputerPlay |
             GameModuleCapabilities.ComputerSettings;
         var gomoku = new GameModuleRegistration(new(
-            new("games.gomoku"), new Version(1, 0), "五子棋", "纵横十九路 · 黑白连珠",
+            new("gomoku.standard"), new Version(1, 0), "五子棋", "纵横十九路 · 黑白连珠",
             "res://assets/gallery/gomoku-card.svg", gomokuCapabilities, 400),
         [
             Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => ShowGomokuGallery(ClassicGalleryEntry.Local)),

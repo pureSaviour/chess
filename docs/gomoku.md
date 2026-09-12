@@ -31,7 +31,7 @@
 
 ## 棋谱、UI 与限制
 
-`GomokuSgfCodec` 读写 SGF FF[4]/GM[4]，使用 `SZ/RU/AB/AW/PL/B/W` 主线。解析最多 1,000,000 字符，未知属性/变例不进入主线，返回前必须通过领域重放。`GomokuRecordStore` 拥有 `user://records/gomoku`，recent 保留十局，saved 不自动清理。当前小文件 I/O 同步发生在主线程。
+`GomokuSgfCodec` 读写 SGF FF[4]/GM[4]，使用 `SZ/RU/AB/AW/PL/B/W` 主线。解析最多 1,000,000 字符，未知属性/变例不进入主线，返回前必须通过领域重放。`GomokuRecordStore` 通过共享作用域存储拥有 `user://games/gomoku.standard/records`，recent 保留十局，saved 不自动清理；首次访问只复制并保留旧目录记录。当前小文件 I/O 同步发生在主线程。
 
 画廊提供与经典象棋同构的 9 个叶子：本地/LAN/Steam，最近/保存，SGF/局面导入，人机对决/设置。九个入口均已接通；AI 设置页选择用户持有的 Rapfi/Piskvork 可执行文件。
 

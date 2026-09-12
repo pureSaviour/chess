@@ -7,7 +7,9 @@ internal static class GameModuleCatalogTests
         ("玩法目录按默认顺序发布模块", DefaultOrder),
         ("玩法目录规范化陈旧与重复的用户顺序", NormalizePreferredOrder),
         ("玩法目录可前后移动模块且限制边界", MoveModule),
-        ("玩法目录拒绝重复模块和未声明能力", RejectInvalidModules)
+        ("玩法目录拒绝重复模块和未声明能力", RejectInvalidModules),
+        ("玩法记录存储隔离路径并原子写入和淘汰", RecordStorageIsolation),
+        ("玩法记录存储无损且幂等导入旧目录", LegacyRecordImport)
     ];
 
     private static void DefaultOrder()
@@ -45,6 +47,49 @@ internal static class GameModuleCatalogTests
         Throws<ArgumentException>(() => new GameModuleCatalog([invalid]));
     }
 
+    private static void RecordStorageIsolation()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            var storage = new GameRecordStorage(Path.Combine(root, "games"), new("games.first"), ".pgn", "first");
+            var stamp = new DateTimeOffset(2026, 9, 12, 10, 11, 12, TimeSpan.Zero);
+            var first = storage.CreatePath(false, stamp); storage.WriteAtomic(first, "one"u8);
+            var second = storage.CreatePath(false, stamp); storage.WriteAtomic(second, "two"u8);
+            var third = storage.CreatePath(false, stamp); storage.WriteAtomic(third, "three"u8);
+            Equal(3, storage.List(false).Count);
+            storage.PruneRecent(2);
+            Equal(2, storage.List(false).Count);
+
+            var outside = Path.Combine(root, "games", "games.second", "records", "recent", "other.pgn");
+            Directory.CreateDirectory(Path.GetDirectoryName(outside)!); File.WriteAllText(outside, "other");
+            Throws<UnauthorizedAccessException>(() => storage.ValidatePath(outside));
+            Throws<UnauthorizedAccessException>(() => storage.ValidatePath(Path.Combine(Path.GetDirectoryName(first)!, "nested", "bad.pgn")));
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void LegacyRecordImport()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            var legacy = Path.Combine(root, "legacy");
+            var sourceDirectory = Path.Combine(legacy, "recent"); Directory.CreateDirectory(sourceDirectory);
+            var source = Path.Combine(sourceDirectory, "old.pgn"); File.WriteAllText(source, "legacy-record");
+            File.WriteAllText(source + ".meta.json", "legacy-sidecar");
+
+            var storage = new GameRecordStorage(Path.Combine(root, "games"), new("games.first"), ".pgn", "first", legacy);
+            var imported = storage.List(false);
+            Equal(1, imported.Count);
+            Equal("legacy-record", File.ReadAllText(imported[0]));
+            Equal("legacy-sidecar", File.ReadAllText(imported[0] + ".meta.json"));
+            Equal(true, File.Exists(source));
+            Equal(1, new GameRecordStorage(Path.Combine(root, "games"), new("games.first"), ".pgn", "first", legacy).List(false).Count);
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
     private static IGameModule Module(string id, int order)
     {
         var capability = GameModuleCapabilities.LocalPlay;
@@ -54,6 +99,18 @@ internal static class GameModuleCatalogTests
 
     private static string Join(IEnumerable<IGameModule> modules) =>
         string.Join(',', modules.Select(module => module.Manifest.Id.Value));
+
+    private static string NewTemporaryRoot() =>
+        Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "xiangqi-game-host-tests", Guid.NewGuid().ToString("N"))).FullName;
+
+    private static void DeleteTemporaryRoot(string root)
+    {
+        var expectedParent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "xiangqi-game-host-tests"));
+        var full = Path.GetFullPath(root);
+        if (!string.Equals(Path.GetDirectoryName(full), expectedParent, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Refusing to delete an unexpected test directory.");
+        if (Directory.Exists(full)) Directory.Delete(full, true);
+    }
 
     private static void Equal<T>(T expected, T actual)
     {

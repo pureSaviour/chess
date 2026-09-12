@@ -1,25 +1,25 @@
 using Godot;
 using Xiangqi.Core.Application.Jieqi;
+using Xiangqi.GameHost;
 
 namespace Xiangqi.Presentation.Records;
 
 /// <summary>Owns Jieqi PGN files; recent records are capped at ten and saved records are never evicted.</summary>
 public static class JieqiRecordStore
 {
+    private static readonly GameRecordStorage Storage = new(
+        ProjectSettings.GlobalizePath("user://games"), new("xiangqi.jieqi"), ".pgn", "jieqi",
+        ProjectSettings.GlobalizePath("user://records/jieqi"));
     public sealed record Entry(string RecordPath, MatchRecordPresentation Presentation);
     public static string SaveRecent(JieqiGameRecord record, MatchRecordPresentation? presentation = null) => Save(record, false, presentation);
     public static string SavePermanent(JieqiGameRecord record, MatchRecordPresentation? presentation = null) => Save(record, true, presentation);
     public static IReadOnlyList<string> List(bool saved)
     {
-        var directory = DirectoryPath(saved);
-        return Directory.Exists(directory) ? Directory.GetFiles(directory, "*.pgn").OrderByDescending(File.GetLastWriteTimeUtc).ToArray() : [];
+        return Storage.List(saved);
     }
     public static JieqiGameRecord Load(string path)
     {
-        var full = Path.GetFullPath(path);
-        var recent = Path.GetFullPath(DirectoryPath(false)); var saved = Path.GetFullPath(DirectoryPath(true));
-        if (!IsUnder(full, recent) && !IsUnder(full, saved))
-            throw new UnauthorizedAccessException("棋谱不在揭棋记录目录中。");
+        var full = Storage.ValidatePath(path);
         if (!JieqiPgnCodec.TryParse(File.ReadAllText(full), out var record, out var error)) throw new InvalidDataException(error);
         return record!;
     }
@@ -33,19 +33,10 @@ public static class JieqiRecordStore
     }).ToArray();
     private static string Save(JieqiGameRecord record, bool permanent, MatchRecordPresentation? presentation)
     {
-        var directory = DirectoryPath(permanent); Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"jieqi-{DateTimeOffset.Now:yyyyMMdd-HHmmss-fff}.pgn");
-        var temporary = path + ".tmp"; File.WriteAllText(temporary, JieqiPgnCodec.Serialize(record)); File.Move(temporary, path);
+        var path = Storage.CreatePath(permanent);
+        Storage.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(JieqiPgnCodec.Serialize(record)));
         if (presentation is not null) MatchRecordPresentationStore.Save(path, presentation);
-        if (!permanent) foreach (var stale in List(false).Skip(10))
-        { File.Delete(stale); MatchRecordPresentationStore.DeleteSidecar(stale); }
+        if (!permanent) Storage.PruneRecent(10, MatchRecordPresentationStore.DeleteSidecar);
         return path;
-    }
-    private static string DirectoryPath(bool saved) => ProjectSettings.GlobalizePath($"user://records/jieqi/{(saved ? "saved" : "recent")}");
-    private static bool IsUnder(string file, string directory)
-    {
-        var relative = Path.GetRelativePath(directory, file);
-        return !Path.IsPathRooted(relative) && relative != ".." &&
-               !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 }

@@ -1,6 +1,7 @@
 using Godot;
 using System.Text.Json;
 using Xiangqi.Core.Application;
+using Xiangqi.GameHost;
 
 namespace Xiangqi.Presentation.Records;
 
@@ -11,6 +12,9 @@ namespace Xiangqi.Presentation.Records;
 public static class ClassicRecordStore
 {
     private const int RecentLimit = 10;
+    private static readonly GameRecordStorage Storage = new(
+        ProjectSettings.GlobalizePath("user://games"), new("xiangqi.classic"), ".pgn", "xiangqi",
+        ProjectSettings.GlobalizePath("user://records/classic"));
     public sealed record Player(string Name, bool IsLocal, int AvatarWidth = 0, int AvatarHeight = 0, byte[]? AvatarRgba = null);
     public sealed record Presentation(DateTimeOffset PlayedAt, string Mode, Player Red, Player Black, string Result);
     public sealed record Entry(string PgnPath, Presentation Presentation);
@@ -20,9 +24,7 @@ public static class ClassicRecordStore
 
     public static IReadOnlyList<string> List(bool saved)
     {
-        var directory = DirectoryPath(saved);
-        if (!Directory.Exists(directory)) return [];
-        return Directory.GetFiles(directory, "*.pgn").OrderByDescending(File.GetLastWriteTimeUtc).ToArray();
+        return Storage.List(saved);
     }
 
     public static IReadOnlyList<Entry> ListEntries(bool saved) => List(saved)
@@ -30,9 +32,7 @@ public static class ClassicRecordStore
 
     public static ClassicGameRecord Load(string path)
     {
-        var full = Path.GetFullPath(path);
-        var root = Path.GetFullPath(DirectoryPath(full.Contains($"{Path.DirectorySeparatorChar}saved{Path.DirectorySeparatorChar}")));
-        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("棋谱不在记录目录中。");
+        var full = Storage.ValidatePath(path);
         var text = File.ReadAllText(full);
         if (!XiangqiPgnCodec.TryParse(text, out var record, out var error)) throw new InvalidDataException(error);
         return record!;
@@ -40,20 +40,14 @@ public static class ClassicRecordStore
 
     private static string Save(ClassicGameRecord record, bool permanent, Presentation? presentation)
     {
-        var directory = DirectoryPath(permanent); Directory.CreateDirectory(directory);
-        var stamp = DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss-fff");
-        var path = Path.Combine(directory, $"xiangqi-{stamp}.pgn");
-        var temporary = path + ".tmp";
-        File.WriteAllText(temporary, XiangqiPgnCodec.Serialize(record));
-        File.Move(temporary, path);
+        var path = Storage.CreatePath(permanent);
+        Storage.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(XiangqiPgnCodec.Serialize(record)));
         if (presentation is not null)
             File.WriteAllText(MetadataPath(path), JsonSerializer.Serialize(Validate(presentation)));
-        if (!permanent)
-            foreach (var stale in List(false).Skip(RecentLimit))
-            {
-                File.Delete(stale);
-                var metadata = MetadataPath(stale); if (File.Exists(metadata)) File.Delete(metadata);
-            }
+        if (!permanent) Storage.PruneRecent(RecentLimit, stale =>
+        {
+            var metadata = MetadataPath(stale); if (File.Exists(metadata)) File.Delete(metadata);
+        });
         return path;
     }
 
@@ -89,5 +83,4 @@ public static class ClassicRecordStore
     }
     private static string MetadataPath(string pgnPath) => pgnPath + ".meta.json";
 
-    private static string DirectoryPath(bool saved) => ProjectSettings.GlobalizePath($"user://records/classic/{(saved ? "saved" : "recent")}");
 }

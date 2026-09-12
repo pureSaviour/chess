@@ -15,7 +15,7 @@
 
 洗牌固定为 `splitmix64-fy-v1`：SplitMix64 产生 64 位序列，Fisher–Yates 对每方十五枚棋种独立洗牌。算法名称和 64 位十六进制 Seed 与 ICCS 着法一起写入 PGN 扩展：`Variant=Jieqi`、`Format=ICCS`、`Shuffle=splitmix64-fy-v1`。选择 PGN/ICCS 是为了和经典记录容器、元数据及外部坐标工具兼容；Seed/Shuffle 是揭棋专有扩展，不宣称普通象棋软件能重建暗子。
 
-`JieqiPgnCodec.TryParse` 限制输入为 4 MiB，验证变体、算法、种子和坐标，并通过 `JieqiGame` 逐手重放。未知算法拒绝导入，避免同一种子在未来悄然产生另一盘棋。`JieqiRecordStore` 原子写入 `user://records/jieqi`，recent 最多十局，saved 不淘汰。
+`JieqiPgnCodec.TryParse` 限制输入为 4 MiB，验证变体、算法、种子和坐标，并通过 `JieqiGame` 逐手重放。未知算法拒绝导入，避免同一种子在未来悄然产生另一盘棋。`JieqiRecordStore` 通过共享作用域存储原子写入 `user://games/xiangqi.jieqi/records`，recent 最多十局，saved 不淘汰；首次访问只复制并保留旧目录记录。
 
 ## 表现与所有权
 

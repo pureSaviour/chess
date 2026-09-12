@@ -220,7 +220,7 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 经典 PGN 写出固定 `Game=Chinese Chess`、`Variant=Xiangqi`、`Format=ICCS`，非标准开局增加 `SetUp=1` 与 `FEN`。导入支持 PGN 主线、标签、花括号/分号注释、NAG 与跳过 RAV，但只接受 ICCS；不得看到 `.pgn` 后跳过 `Replay()` 校验。三国扩展固定 `Variant=Xiangqi-ThreeKingdoms`，`TKFEN` 是 UTF-8 JSON 的 Base64 表示，保存存活、国土控制、出生国、当前控制者和兵出境状态；这只是本项目的版本 1 扩展，不是 WXF 标准。
 
-`ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` / `JunqiRecordStore` / `GomokuRecordStore` 是 Godot 表现层的本地文件所有者：调用者传入已经可重放的记录，store 在 `user://records/<mode>` 写文本。recent 的容量策略为每玩法十局，saved 永久保留；删除只针对解析后的固定目录枚举结果。经典/三国/揭棋为 UTF-8 PGN 扩展，军旗按 AC2 规范使用 GB2312 `.ac2`，五子棋使用 SGF。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
+`ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` / `JunqiRecordStore` / `GomokuRecordStore` 是玩法 codec 与落盘时机的所有者；共享 `GameRecordStorage` 把文件限制在 `user://games/<game-id>/records/recent|saved`，负责原子写、唯一命名、路径/重解析点检查和 recent 淘汰。首次访问会把旧 `user://records/<mode>` 的记录与 sidecar 幂等复制到新根且保留源文件。recent 的容量策略为每玩法十局，saved 永久保留。经典/三国/揭棋为 UTF-8 PGN 扩展，军旗按 AC2 规范使用 GB2312 `.ac2`，五子棋使用 SGF。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
 
 揭棋使用 `Variant=Jieqi`、`Format=ICCS`、十六进制 `Seed` 与 `Shuffle=splitmix64-fy-v1`。`JieqiSnapshot.ToPublicPosition` 是直播脱敏边界；`HiddenIdentityHints` 只允许赛后复盘。未知随机算法必须拒绝，联机中不得把 Seed 或 hints 发给非权威端。详细契约见 [揭棋玩法](jieqi.md)。
 
