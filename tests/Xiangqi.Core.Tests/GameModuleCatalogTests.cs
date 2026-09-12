@@ -1,5 +1,7 @@
 using Xiangqi.GameHost;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -16,7 +18,10 @@ internal static class GameModuleCatalogTests
         ("混合信任策略区分沙箱与完全信任代码", PackageTrustPolicy),
         ("玩法包严格扫描并原子安装已确认内容", PackageInspectionAndInstall),
         ("玩法包验证发布者签名并绑定信任证据", SignedPackageInspection),
-        ("玩法包拒绝篡改内容和越目录路径", RejectUnsafePackages)
+        ("玩法包拒绝篡改内容和越目录路径", RejectUnsafePackages),
+        ("签名更新索引严格解析并筛选新版本", SignedUpdateFeed),
+        ("玩法更新支持断点续传并复验下载包", ResumableModuleUpdate),
+        ("玩法版本仅在启动边界启用并支持回滚", ModuleVersionSwitching)
     ];
 
     private static void DefaultOrder()
@@ -213,10 +218,115 @@ internal static class GameModuleCatalogTests
         finally { DeleteTemporaryRoot(root); }
     }
 
+    private static void SignedUpdateFeed()
+    {
+        using var feedKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var entry = new
+        {
+            id = "thirdparty.example", version = "2.0.0", minimumHostApi = "1.0",
+            packageUrl = "https://updates.example/modules/example-2.0.0.xqgame",
+            packageBytes = 4096,
+            packageSha256 = new string('A', 64),
+            publisherKeyFingerprint = new string('B', 64), official = false
+        };
+        var json = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1, generatedAt = "2026-09-12T10:00:00Z", modules = new[] { entry }
+        });
+        var signature = feedKey.SignData(json, HashAlgorithmName.SHA256,
+            DSASignatureFormat.Rfc3279DerSequence);
+        var publicKey = Convert.ToBase64String(feedKey.ExportSubjectPublicKeyInfo());
+        var index = new GameUpdateFeedReader(new Version(1, 0)).Read(json, signature, publicKey);
+        Equal(1, index.Modules.Count);
+        Equal("thirdparty.example", index.Modules[0].ModuleId.Value);
+        Equal(1, GameModuleUpdateClient.FindUpdates(index,
+            new Dictionary<GameModuleId, Version> { [new("thirdparty.example")] = new(1, 5) }).Count);
+        Equal(0, GameModuleUpdateClient.FindUpdates(index,
+            new Dictionary<GameModuleId, Version> { [new("thirdparty.example")] = new(2, 0) }).Count);
+        Equal(GameModuleUpdateDisposition.RequireThirdPartyConfirmation,
+            GameModuleUpdatePolicy.Evaluate(index.Modules[0], new HashSet<string>()));
+        var official = index.Modules[0] with { Official = true };
+        Equal(GameModuleUpdateDisposition.Reject,
+            GameModuleUpdatePolicy.Evaluate(official, new HashSet<string>()));
+        Equal(GameModuleUpdateDisposition.AutomaticOfficialDownload,
+            GameModuleUpdatePolicy.Evaluate(official,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { official.PublisherKeyFingerprint }));
+
+        json[^1] ^= 1;
+        Throws<InvalidDataException>(() => new GameUpdateFeedReader(new Version(1, 0))
+            .Read(json, signature, publicKey));
+    }
+
+    private static void ResumableModuleUpdate()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            using var publisherKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var packagePath = CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                publisherKey: publisherKey, fileName: "update.xqgame");
+            var packageBytes = File.ReadAllBytes(packagePath);
+            var inspection = new GamePackageReader(new Version(1, 0)).Inspect(packagePath);
+            var entry = new GameModuleUpdateEntry(new("thirdparty.example"), new Version(1, 0),
+                new Version(1, 0), new Uri("https://updates.example/update.xqgame"), packageBytes.LongLength,
+                inspection.PackageSha256, inspection.PublisherKeyFingerprint!, false);
+            var downloadRoot = Path.Combine(root, "downloads");
+            Directory.CreateDirectory(downloadRoot);
+            var partial = Path.Combine(downloadRoot,
+                $"thirdparty.example-1.0-{inspection.PackageSha256[..16]}.partial");
+            var offset = packageBytes.Length / 3;
+            File.WriteAllBytes(partial, packageBytes[..offset]);
+            var handler = new RangeHandler(packageBytes);
+            using var http = new HttpClient(handler);
+            var update = new GameModuleUpdateClient(http, new Version(1, 0), downloadRoot)
+                .DownloadAsync(entry).GetAwaiter().GetResult();
+            Equal(offset, handler.RequestedOffset);
+            Equal(true, File.Exists(update.PackagePath));
+            Equal(inspection.PackageSha256, update.Inspection.PackageSha256);
+            Equal(true, File.ReadAllBytes(update.PackagePath).SequenceEqual(packageBytes));
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void ModuleVersionSwitching()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            using var publisherKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var reader = new GamePackageReader(new Version(1, 0));
+            var first = reader.Inspect(CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                publisherKey: publisherKey, fileName: "version-1.xqgame", packageVersion: "1.0.0"));
+            var store = new GameModuleVersionStore(Path.Combine(root, "modules"));
+            store.Stage(first);
+            Equal<InstalledGameModuleVersion?>(null, store.Snapshot.Single().Active);
+            Equal(new Version(1, 0, 0), store.Snapshot.Single().Pending?.Version);
+            Equal(1, store.ApplyPendingAtStartup().Count);
+            Equal(new Version(1, 0, 0), store.Snapshot.Single().Active?.Version);
+
+            var second = reader.Inspect(CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                publisherKey: publisherKey, fileName: "version-2.xqgame", packageVersion: "2.0.0"));
+            store.Stage(second);
+            Equal(new Version(1, 0, 0), store.Snapshot.Single().Active?.Version);
+            Equal(new Version(2, 0, 0), store.Snapshot.Single().Pending?.Version);
+            store.ApplyPendingAtStartup();
+            Equal(new Version(2, 0, 0), store.Snapshot.Single().Active?.Version);
+            Equal(new Version(1, 0, 0), store.Snapshot.Single().Rollback?.Version);
+            store.RequestRollback(new("thirdparty.example"));
+            store.ApplyPendingAtStartup();
+            Equal(new Version(1, 0, 0), store.Snapshot.Single().Active?.Version);
+            Equal(new Version(2, 0, 0), store.Snapshot.Single().Rollback?.Version);
+
+            var reloaded = new GameModuleVersionStore(Path.Combine(root, "modules"));
+            Equal(new Version(1, 0, 0), reloaded.Snapshot.Single().Active?.Version);
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
     private static string CreatePackage(string root, GamePackageExecutionMode mode,
         ECDsa? publisherKey = null, bool damageSignature = false, string? declaredHash = null,
         string payloadPath = "content/card.png", string fileName = "module.xqgame",
-        bool duplicateSchema = false)
+        bool duplicateSchema = false, string packageVersion = "1.0.0")
     {
         var payload = "card"u8.ToArray();
         var payloadHash = declaredHash ?? Convert.ToHexString(SHA256.HashData(payload));
@@ -226,7 +336,7 @@ internal static class GameModuleCatalogTests
         {
             schemaVersion = 1,
             id = "thirdparty.example",
-            version = "1.0.0",
+            version = packageVersion,
             displayName = "第三方玩法",
             summary = "用于验证安全安装流程",
             cardAsset = payloadPath,
@@ -312,4 +422,26 @@ internal static class GameModuleCatalogTests
 
     private sealed record FakeModule(GameModuleManifest Manifest,
         IReadOnlyList<GameModuleRoute> Routes) : IGameModule;
+
+    private sealed class RangeHandler(byte[] content) : HttpMessageHandler
+    {
+        public long RequestedOffset { get; private set; } = -1;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestedOffset = request.Headers.Range?.Ranges.Single().From ?? 0;
+            var offset = checked((int)RequestedOffset);
+            var response = new HttpResponseMessage(offset > 0
+                ? HttpStatusCode.PartialContent : HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(content[offset..])
+            };
+            response.Content.Headers.ContentLength = content.Length - offset;
+            if (offset > 0)
+                response.Content.Headers.ContentRange = new ContentRangeHeaderValue(offset,
+                    content.Length - 1, content.Length);
+            return Task.FromResult(response);
+        }
+    }
 }

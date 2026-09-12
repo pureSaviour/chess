@@ -17,11 +17,13 @@ public partial class ModeGalleryScreen : Control
     internal bool HasPackageInstaller { get; private set; }
 
     public ModeGalleryScreen(Action back, IReadOnlyList<GameModuleRegistration> modules,
-        Action<GameModuleId, int> moveModule, GamePackageInstallDriver packageDriver)
+        Action<GameModuleId, int> moveModule, GamePackageInstallDriver packageDriver,
+        Action checkUpdates)
     {
         ArgumentNullException.ThrowIfNull(modules);
         ArgumentNullException.ThrowIfNull(moveModule);
         ArgumentNullException.ThrowIfNull(packageDriver);
+        ArgumentNullException.ThrowIfNull(checkUpdates);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(46, 28);
         AddChild(margin);
@@ -40,6 +42,10 @@ public partial class ModeGalleryScreen : Control
         var install = UiStyle.CreateButton("安装玩法包…");
         install.CustomMinimumSize = new Vector2(148, 44);
         heading.AddChild(install);
+        var updates = UiStyle.CreateButton("检查更新");
+        updates.CustomMinimumSize = new Vector2(124, 44);
+        updates.Pressed += checkUpdates;
+        heading.AddChild(updates);
         var exit = UiStyle.CreateButton("返回");
         exit.CustomMinimumSize = new Vector2(112, 44);
         exit.Pressed += back;

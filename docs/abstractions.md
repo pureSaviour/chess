@@ -16,7 +16,7 @@
 
 抽象是否有效，要看消费者是否依赖契约、组合根能否注入替代实现、测试能否不用真实平台运行，不以接口数量判断。领域聚合、值对象、工厂和不可变快照也是抽象，不必为每个类建立同名接口。
 
-画廊的跨玩法发现使用 `IGameModule` / `GameModuleCatalog`，只统一稳定身份、Manifest、能力、入口和顺序，不统一棋局快照或控制器。`GamePackageReader` 只验证 `.xqgame` 元数据、路径、大小、载荷哈希和发布者签名，不加载内容；`GamePackageInstaller` 在确认后的完整包哈希上复验并以同盘目录移动原子发布，但不会自动启用或执行模块。具体生命周期、错误和第三方信任边界见[玩法模块与 DLC](game-modules.md)。
+画廊的跨玩法发现使用 `IGameModule` / `GameModuleCatalog`，只统一稳定身份、Manifest、能力、入口和顺序，不统一棋局快照或控制器。`GamePackageReader` 只验证 `.xqgame` 元数据、路径、大小、载荷哈希和发布者签名，不加载内容；`GamePackageInstaller` 在确认后的完整包哈希上复验并以同盘目录移动原子发布，但不会执行模块。`GameUpdateFeedReader` 是无网络纯解析边界：输入索引原始字节、DER 签名和固定 ECDSA 公钥，输出兼容宿主 API 的不可变版本快照，未知字段、重复模块、非 HTTPS 地址或错误签名均失败。`GameModuleUpdateClient` 拥有一次请求/下载操作但不拥有注入的 `HttpClient`；它支持 Range 续传，并在发布临时文件前核对长度、完整包哈希、Manifest 身份/版本和发布者指纹。`GameModuleVersionStore` 独占 `versions.json`，安装后只写 pending，启动时才原子提升为 active，并保留一个 rollback；它不删除包，也不碰各玩法记录。Godot `GameModuleUpdateDriver` 拥有 HttpClient/取消源，在后台执行网络和安装，事件经 `_Process` 回到主线程。当前 active 状态尚未接入动态运行时，因此不能据此执行第三方内容。具体格式、事件顺序、配置和信任边界见[玩法模块与 DLC](game-modules.md)。
 
 ## 2. 经典棋种：IReadOnlyBoard / IPieceRule
 

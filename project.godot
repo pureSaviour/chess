@@ -31,6 +31,14 @@ window/stretch/aspect="expand"
 
 project/assembly_name="Xiangqi"
 
+[game_modules]
+
+; Production deployments set an HTTPS schema-1 index, its Base64 SubjectPublicKeyInfo
+; ECDSA P-256 public key, and comma-separated SHA-256 fingerprints of official publishers.
+update_index_url=""
+update_feed_public_key=""
+official_publisher_fingerprints=""
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"

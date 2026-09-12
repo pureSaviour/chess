@@ -45,6 +45,7 @@ public partial class Main : Control
         _themes = ThemePackageCatalog.CreateDefault();
         _engineInstaller = new EnginePackageInstaller(ProjectSettings.GlobalizePath("user://engines"));
         _settings.Apply();
+        InitializeGameModuleUpdates();
         // Steam Overlay and its client APIs require an interactive display. Keeping headless
         // smoke/tests out of the native initialization path also makes server-side CI deterministic.
         if (!string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase) &&
@@ -66,7 +67,8 @@ public partial class Main : Control
         var ordered = catalog.Order(_settings.GameModuleOrder).Cast<GameModuleRegistration>().ToArray();
         var packageDriver = new GamePackageInstallDriver(new Version(1, 0),
             ProjectSettings.GlobalizePath("user://modules"));
-        SwitchTo(new ModeGalleryScreen(ReturnFromGallery, ordered, MoveGameModule, packageDriver));
+        SwitchTo(new ModeGalleryScreen(ReturnFromGallery, ordered, MoveGameModule, packageDriver,
+            CheckGameModuleUpdates));
     }
 
     private void MoveGameModule(GameModuleId id, int offset)

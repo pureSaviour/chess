@@ -316,7 +316,8 @@ public sealed class GamePackageReader
         return directory ? trimmed + "/" : trimmed;
     }
 
-    internal static string NormalizeSha256(string value)
+    /// <summary>Validates and normalizes an external SHA-256 hex value for identity comparisons.</summary>
+    public static string NormalizeSha256(string value)
     {
         if (value.Length != 64 || value.Any(character => !char.IsAsciiHexDigit(character)))
             throw new InvalidDataException("SHA-256 值无效。");
