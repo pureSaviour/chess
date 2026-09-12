@@ -52,6 +52,16 @@ public sealed record GamePackageInspection(
 }
 
 /// <summary>
+/// Revalidated view of an extracted package directory. PackageSha256 is intentionally absent:
+/// ZIP container identity cannot be reconstructed from extracted files, while every payload byte
+/// remains bound by the signed manifest.
+/// </summary>
+public sealed record InstalledGamePackageInspection(
+    GamePackageManifest Manifest,
+    string? PublisherKeyFingerprint,
+    bool SignatureValid);
+
+/// <summary>
 /// Reads and validates .xqgame ZIP archives without extracting or executing their payload. The
 /// reader is synchronous, owns no retained handles, and is safe to call from a background thread.
 /// All archive and JSON input is untrusted and failures are reported as InvalidDataException.
@@ -104,6 +114,37 @@ public sealed class GamePackageReader
         }
     }
 
+    /// <summary>
+    /// Revalidates an installed directory without executing or importing any content. The root,
+    /// every descendant directory and every file must not be a reparse point; unknown files,
+    /// missing files, changed lengths/hashes and invalid publisher signatures are rejected.
+    /// </summary>
+    public InstalledGamePackageInspection InspectInstalledDirectory(string installationDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(installationDirectory);
+        try
+        {
+            var root = Path.GetFullPath(installationDirectory);
+            if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("玩法安装目录不存在或是重解析点。");
+            var manifestBytes = ReadInstalledFile(root, ManifestPath, _limits.MaximumManifestBytes,
+                required: true, cancellationToken)!;
+            var signature = ReadInstalledFile(root, SignaturePath, _limits.MaximumSignatureBytes,
+                required: false, cancellationToken);
+            var manifest = ParseManifest(manifestBytes);
+            ValidateInstalledPayload(root, manifest, cancellationToken);
+            var (fingerprint, valid) = VerifySignature(manifest, manifestBytes, signature);
+            return new(manifest, fingerprint, valid);
+        }
+        catch (InvalidDataException) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or
+                                      CryptographicException or ArgumentException or NotSupportedException)
+        {
+            throw new InvalidDataException("已安装玩法无效或无法安全读取。", error);
+        }
+    }
+
     internal FileStream OpenPackage(string packagePath)
     {
         var stream = new FileStream(packagePath, FileMode.Open, FileAccess.Read, FileShare.Read,
@@ -133,6 +174,79 @@ public sealed class GamePackageReader
             if (!IsDirectory(entry)) ValidateEntrySize(entry);
         }
         return entries;
+    }
+
+    private void ValidateInstalledPayload(string root, GamePackageManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        var expected = manifest.Files.ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<string>();
+        pending.Push(root);
+        var entries = 0;
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (++entries > _limits.MaximumFiles + 32)
+                    throw new InvalidDataException("玩法安装目录文件数量超出限制。");
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("玩法安装目录包含重解析点。");
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    pending.Push(path);
+                    continue;
+                }
+                var relative = NormalizePackagePath(Path.GetRelativePath(root, path).Replace('\\', '/'));
+                if (!allFiles.Add(relative))
+                    throw new InvalidDataException($"玩法安装目录包含重复路径：{relative}。");
+                if (relative.Equals(ManifestPath, StringComparison.OrdinalIgnoreCase) ||
+                    relative.Equals(SignaturePath, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!expected.TryGetValue(relative, out var file) || !seen.Add(relative))
+                    throw new InvalidDataException($"玩法安装目录包含未声明或重复文件：{relative}。");
+                var info = new FileInfo(path);
+                if (info.Length != file.Length) throw new InvalidDataException($"文件大小与清单不符：{relative}。");
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    64 * 1024, FileOptions.SequentialScan);
+                if (!string.Equals(HashStream(stream, cancellationToken), file.Sha256,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"文件哈希与清单不符：{relative}。");
+            }
+        }
+        if (seen.Count != expected.Count)
+            throw new InvalidDataException("玩法安装目录缺少清单声明文件。");
+    }
+
+    private static byte[]? ReadInstalledFile(string root, string relative, int maximumBytes,
+        bool required, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(root, relative);
+        if (!File.Exists(path))
+        {
+            if (required) throw new InvalidDataException($"玩法安装目录缺少 {relative}。");
+            return null;
+        }
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"{relative} 不得是重解析点。");
+        var info = new FileInfo(path);
+        if (info.Length < 0 || info.Length > maximumBytes)
+            throw new InvalidDataException($"{relative} 大小无效。");
+        var result = new byte[checked((int)info.Length)];
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            16 * 1024, FileOptions.SequentialScan);
+        var offset = 0;
+        while (offset < result.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = stream.Read(result, offset, result.Length - offset);
+            if (count == 0) throw new EndOfStreamException();
+            offset += count;
+        }
+        return result;
     }
 
     private GamePackageManifest ParseManifest(byte[] bytes)

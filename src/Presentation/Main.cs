@@ -53,6 +53,7 @@ public partial class Main : Control
             InitializeSteam();
         if (TryStartDebugSmokeMode()) return;
         ShowMainMenu();
+        ShowGameModuleActivationWarnings();
     }
 
     private void ShowMainMenu() => SwitchTo(new MainMenuScreen(
@@ -62,7 +63,7 @@ public partial class Main : Control
 
     private void ShowGallery()
     {
-        var registrations = CreateBuiltInGameModules();
+        var registrations = CreateAvailableGameModules();
         var catalog = new GameModuleCatalog(registrations);
         var ordered = catalog.Order(_settings.GameModuleOrder).Cast<GameModuleRegistration>().ToArray();
         var packageDriver = new GamePackageInstallDriver(new Version(1, 0),
@@ -73,7 +74,7 @@ public partial class Main : Control
 
     private void MoveGameModule(GameModuleId id, int offset)
     {
-        var catalog = new GameModuleCatalog(CreateBuiltInGameModules());
+        var catalog = new GameModuleCatalog(CreateAvailableGameModules());
         _settings.GameModuleOrder = [.. catalog.Move(_settings.GameModuleOrder, id, offset)];
         _settings.SaveAndApply();
         ShowGallery();
@@ -584,8 +585,29 @@ public partial class Main : Control
         {
             ShowGallery();
             await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not ModeGalleryScreen { CardCount: 5, OptionCount: 33, HasPackageInstaller: true })
-                throw new InvalidOperationException("Gallery must expose five horizontal mode cards, thirty-three leaf routes and package installation.");
+            var smokeModules = CreateAvailableGameModules();
+            if (_currentScreen is not ModeGalleryScreen gallery || !gallery.HasPackageInstaller ||
+                gallery.CardCount != smokeModules.Count ||
+                gallery.OptionCount != smokeModules.Sum(module => module.Routes.Count))
+                throw new InvalidOperationException("Gallery module cards/routes do not match the validated module catalog.");
+            var declarative = CreateDeclarativeUiSmokeModule();
+            var declarativeRegistration = new GameModuleRegistration(declarative.PackageManifest.Module,
+                declarative.PackageManifest.Routes.Select(route =>
+                    (route, (Action)(() => ShowDeclarativeGame(declarative)))),
+                declarative.CardImage, declarative.CardImageExtension);
+            var extended = smokeModules.Append(declarativeRegistration).ToArray();
+            SwitchTo(new ModeGalleryScreen(ShowMainMenu, extended, (_, _) => { },
+                new GamePackageInstallDriver(new Version(1, 0),
+                    ProjectSettings.GlobalizePath("user://modules")), () => { }));
+            await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not ModeGalleryScreen
+                { CardCount: var cardCount, OptionCount: var optionCount } ||
+                cardCount != extended.Length || optionCount != extended.Sum(module => module.Routes.Count))
+                throw new InvalidOperationException("Declarative module card failed to materialize.");
+            ShowDeclarativeGame(declarative);
+            await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not DeclarativeLineGameScreen)
+                throw new InvalidOperationException("Declarative line-placement screen failed to instantiate.");
             if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
             {
                 await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
@@ -643,7 +665,7 @@ public partial class Main : Control
             smokeSettings.ShowBoardCoordinates = true;
             SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
-            GD.Print("[Xiangqi.UI.Smoke] Five gallery cards, thirty-three routes, Junqi, Gomoku, settings and spring-board local match instantiated.");
+            GD.Print("[Xiangqi.UI.Smoke] Validated module catalog, Junqi, Gomoku, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }
         catch (Exception error)

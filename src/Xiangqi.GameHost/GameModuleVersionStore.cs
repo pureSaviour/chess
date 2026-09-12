@@ -15,13 +15,15 @@ public sealed record GameModuleVersionState(
     GameModuleId ModuleId,
     InstalledGameModuleVersion? Active,
     InstalledGameModuleVersion? Pending,
-    InstalledGameModuleVersion? Rollback);
+    InstalledGameModuleVersion? Rollback,
+    InstalledGameModuleVersion? Failed = null);
 
 /// <summary>
 /// Host-owned version switch journal. Stage never changes Active; ApplyPendingAtStartup atomically
 /// promotes pending versions and retains the former active version for rollback. It does not load,
 /// delete or inspect package files and never touches module records. Public methods are serialized
-/// by a lock; returned records are immutable snapshots.
+/// by a lock; returned records are immutable snapshots. Activation failures are quarantined in the
+/// Failed slot and never automatically selected again.
 /// </summary>
 public sealed class GameModuleVersionStore
 {
@@ -50,7 +52,8 @@ public sealed class GameModuleVersionStore
     {
         lock (_gate)
         {
-            return _states.Values.Select(state => (state.ModuleId, Version: Newer(state.Active, state.Pending)?.Version))
+            return _states.Values.Select(state => (state.ModuleId,
+                    Version: Newer(Newer(state.Active, state.Pending), state.Failed)?.Version))
                 .Where(item => item.Version is not null)
                 .ToDictionary(item => item.ModuleId, item => item.Version!);
         }
@@ -67,9 +70,11 @@ public sealed class GameModuleVersionStore
         lock (_gate)
         {
             _states.TryGetValue(manifest.Module.Id, out var current);
-            if (current?.Active is { } active && Compare(installed.Version, active.Version) <= 0)
-                throw new InvalidOperationException("更新版本必须高于当前启用版本；降级只能通过回滚入口。");
-            _states[manifest.Module.Id] = new(manifest.Module.Id, current?.Active, installed, current?.Rollback);
+            var latest = current is null ? null : Newer(Newer(current.Active, current.Pending), current.Failed);
+            if (latest is not null && Compare(installed.Version, latest.Version) <= 0)
+                throw new InvalidOperationException("更新版本必须高于当前已知版本；降级只能通过回滚入口。");
+            _states[manifest.Module.Id] = new(manifest.Module.Id, current?.Active, installed,
+                current?.Rollback, current?.Failed);
             Save();
         }
     }
@@ -102,10 +107,36 @@ public sealed class GameModuleVersionStore
         }
     }
 
+    /// <summary>
+    /// Quarantines the exact active version that failed revalidation or runtime construction.
+    /// It immediately removes that version from discovery and schedules the last known-good slot
+    /// for the next startup. A stale failure report is ignored. Package directories and records are
+    /// retained; callers must not retry Failed automatically.
+    /// </summary>
+    public bool ReportActivationFailure(GameModuleId moduleId, Version failedVersion)
+    {
+        ArgumentNullException.ThrowIfNull(failedVersion);
+        lock (_gate)
+        {
+            if (!_states.TryGetValue(moduleId, out var state) || state.Active is null ||
+                Compare(state.Active.Version, failedVersion) != 0) return false;
+            _states[moduleId] = state with
+            {
+                Active = null,
+                Pending = state.Rollback,
+                Rollback = null,
+                Failed = state.Active
+            };
+            Save();
+            return true;
+        }
+    }
+
     private void Save()
     {
-        var model = new StateFile(1, _states.Values.Select(state => new StateEntry(
-            state.ModuleId.Value, ToData(state.Active), ToData(state.Pending), ToData(state.Rollback))).ToArray());
+        var model = new StateFile(2, _states.Values.Select(state => new StateEntry(
+            state.ModuleId.Value, ToData(state.Active), ToData(state.Pending), ToData(state.Rollback),
+            ToData(state.Failed))).ToArray());
         var bytes = JsonSerializer.SerializeToUtf8Bytes(model, JsonOptions);
         if (bytes.Length > MaximumStateBytes) throw new InvalidOperationException("玩法版本状态超过大小限制。");
         var temporary = _statePath + ".tmp-" + Guid.NewGuid().ToString("N");
@@ -130,13 +161,14 @@ public sealed class GameModuleVersionStore
         try { model = JsonSerializer.Deserialize<StateFile>(File.ReadAllBytes(path), JsonOptions) ?? throw new InvalidDataException(); }
         catch (Exception error) when (error is JsonException or NotSupportedException)
         { throw new InvalidDataException("玩法版本状态格式无效。", error); }
-        if (model.SchemaVersion != 1 || model.Modules is null || model.Modules.Length > 256)
+        if (model.SchemaVersion is not (1 or 2) || model.Modules is null || model.Modules.Length > 256)
             throw new InvalidDataException("玩法版本状态版本或数量无效。");
         var result = new Dictionary<GameModuleId, GameModuleVersionState>();
         foreach (var entry in model.Modules)
         {
             var id = new GameModuleId(entry.Id);
-            if (!result.TryAdd(id, new(id, FromData(entry.Active), FromData(entry.Pending), FromData(entry.Rollback))))
+            if (!result.TryAdd(id, new(id, FromData(entry.Active), FromData(entry.Pending),
+                    FromData(entry.Rollback), FromData(entry.Failed))))
                 throw new InvalidDataException($"玩法版本状态包含重复 ID：{id}。");
         }
         return result;
@@ -182,7 +214,8 @@ public sealed class GameModuleVersionStore
     };
 
     private sealed record StateFile(int SchemaVersion, StateEntry[] Modules);
-    private sealed record StateEntry(string Id, VersionData? Active, VersionData? Pending, VersionData? Rollback);
+    private sealed record StateEntry(string Id, VersionData? Active, VersionData? Pending,
+        VersionData? Rollback, VersionData? Failed = null);
     private sealed record VersionData(string Version, string PackageSha256, string PublisherKeyFingerprint,
         GamePackageExecutionMode ExecutionMode, GamePackagePermissions Permissions);
 }

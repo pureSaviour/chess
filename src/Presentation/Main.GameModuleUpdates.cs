@@ -1,6 +1,7 @@
 using Godot;
 using Xiangqi.GameHost;
 using Xiangqi.Presentation.GameModules;
+using Xiangqi.Presentation.Screens;
 
 namespace Xiangqi.Presentation;
 
@@ -12,13 +13,21 @@ public partial class Main
     private readonly Queue<GameModuleUpdateEntry> _thirdPartyUpdateQueue = new();
     private DownloadedGameModuleUpdate? _pendingThirdPartyInstall;
     private bool _manualModuleUpdateCheck;
+    private IReadOnlyList<GameModuleRegistration> _downloadedGameModules = [];
+    private readonly List<string> _moduleActivationWarnings = [];
 
     private void InitializeGameModuleUpdates()
     {
         var moduleRoot = ProjectSettings.GlobalizePath("user://modules");
-        // Activation is a startup-only journal transition. The current host does not load code
-        // from these directories yet; this preserves a safe boundary for the first updater release.
-        try { new GameModuleVersionStore(moduleRoot).ApplyPendingAtStartup(); }
+        // Activation is a startup-only journal transition. Discovery below materializes only the
+        // host-defined declarative ABI and never loads package-supplied code.
+        GameModuleVersionStore versions;
+        try
+        {
+            versions = new(moduleRoot);
+            versions.ApplyPendingAtStartup();
+            _downloadedGameModules = DiscoverDownloadedGameModules(moduleRoot, versions);
+        }
         catch (Exception error)
         {
             GD.PushWarning($"玩法版本状态不可用，在线更新已禁用：{error.Message}");
@@ -52,7 +61,7 @@ public partial class Main
         _gameModuleUpdates.Staged += OnGameModuleUpdateStaged;
         _gameModuleUpdates.Failed += OnGameModuleUpdateFailed;
         CreateGameModuleUpdateDialogs();
-        _gameModuleUpdates.Check(BuiltInGameModuleVersions());
+        _gameModuleUpdates.Check(CurrentGameModuleVersions());
     }
 
     private void CheckGameModuleUpdates()
@@ -69,12 +78,87 @@ public partial class Main
         }
         _manualModuleUpdateCheck = true;
         _thirdPartyUpdateQueue.Clear();
-        _gameModuleUpdates.Check(BuiltInGameModuleVersions());
+        _gameModuleUpdates.Check(CurrentGameModuleVersions());
     }
 
-    private IReadOnlyDictionary<GameModuleId, Version> BuiltInGameModuleVersions() =>
-        CreateBuiltInGameModules().ToDictionary(module => module.Manifest.Id,
+    private IReadOnlyDictionary<GameModuleId, Version> CurrentGameModuleVersions() =>
+        CreateAvailableGameModules().ToDictionary(module => module.Manifest.Id,
             module => module.Manifest.Version);
+
+    private IReadOnlyList<GameModuleRegistration> CreateAvailableGameModules() =>
+        CreateBuiltInGameModules().Concat(_downloadedGameModules).ToArray();
+
+    private IReadOnlyList<GameModuleRegistration> DiscoverDownloadedGameModules(string moduleRoot,
+        GameModuleVersionStore versions)
+    {
+        var builtInIds = CreateBuiltInGameModules().Select(module => module.Manifest.Id).ToHashSet();
+        var loader = new DeclarativeGameModuleLoader(new Version(1, 0));
+        var registrations = new List<GameModuleRegistration>();
+        foreach (var state in versions.Snapshot)
+        {
+            if (state.Active is not { } active) continue;
+            try
+            {
+                if (builtInIds.Contains(state.ModuleId))
+                    throw new InvalidDataException("下载模块不能覆盖编译进宿主的同名玩法。");
+                var root = Path.Combine(moduleRoot, state.ModuleId.Value, active.Version.ToString());
+                var loaded = loader.Load(root, active);
+                ValidateDeclarativeCard(loaded);
+                var routes = loaded.PackageManifest.Routes.Select(route =>
+                    (route, (Action)(() => ShowDeclarativeGame(loaded))));
+                registrations.Add(new(loaded.PackageManifest.Module, routes,
+                    loaded.CardImage, loaded.CardImageExtension));
+            }
+            catch (Exception error)
+            {
+                versions.ReportActivationFailure(state.ModuleId, active.Version);
+                GD.PushWarning($"玩法 {state.ModuleId} {active.Version} 已隔离：{error.Message}");
+                _moduleActivationWarnings.Add($"{state.ModuleId} {active.Version}：{error.Message}");
+            }
+        }
+        return registrations;
+    }
+
+    private static void ValidateDeclarativeCard(LoadedDeclarativeGameModule module)
+    {
+        using var image = new Image();
+        var data = module.CardImage.ToArray();
+        var error = module.CardImageExtension switch
+        {
+            ".png" => image.LoadPngFromBuffer(data),
+            ".jpg" or ".jpeg" => image.LoadJpgFromBuffer(data),
+            ".webp" => image.LoadWebpFromBuffer(data),
+            _ => Error.FileUnrecognized
+        };
+        if (error != Error.Ok || image.GetWidth() is <= 0 or > 4096 || image.GetHeight() is <= 0 or > 4096)
+            throw new InvalidDataException($"玩法卡片图像无法安全解码：{error}。");
+    }
+
+    private void ShowGameModuleActivationWarnings()
+    {
+        if (_moduleActivationWarnings.Count == 0) return;
+        ShowError("以下下载玩法未能安全启用，失败版本已隔离；如有上一个正常版本，将在下次启动自动回滚：\n\n" +
+                  string.Join("\n", _moduleActivationWarnings));
+    }
+
+    private void ShowDeclarativeGame(LoadedDeclarativeGameModule module) =>
+        SwitchTo(new DeclarativeLineGameScreen(module,
+            ProjectSettings.GlobalizePath("user://games"), ShowGallery));
+
+    private LoadedDeclarativeGameModule CreateDeclarativeUiSmokeModule()
+    {
+        var id = new GameModuleId("smoke.line-placement");
+        var capability = GameModuleCapabilities.LocalPlay;
+        var module = new GameModuleManifest(id, new Version(1, 0), "声明式测试玩法",
+            "受限运行时 UI smoke", "content/card.png", capability, 999);
+        var route = new GameModuleRoute("local", "开始游戏", "本地对局", capability);
+        var package = new GamePackageManifest(1, module, [route], new Version(1, 0),
+            GamePackageExecutionMode.Sandboxed, GamePackagePermissions.None, "内置 smoke",
+            null, []);
+        var image = File.ReadAllBytes(ProjectSettings.GlobalizePath(
+            "res://assets/gallery/classic-xiangqi-card.png"));
+        return new(package, new(9, 9, 5, "黑方", "白方", 0), image, ".png");
+    }
 
     private void OnGameModuleUpdatesChecked(IReadOnlyList<GameModuleUpdateEntry> thirdParty)
     {

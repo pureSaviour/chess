@@ -12,6 +12,7 @@ namespace Xiangqi.Presentation.Screens;
 /// </summary>
 public partial class ModeGalleryScreen : Control
 {
+    private readonly List<ImageTexture> _ownedCardTextures = [];
     internal int CardCount { get; private set; }
     internal int OptionCount { get; private set; }
     internal bool HasPackageInstaller { get; private set; }
@@ -139,7 +140,8 @@ public partial class ModeGalleryScreen : Control
             install.Disabled = false;
             install.Text = "安装玩法包…";
             ShowPackageResult(result, "玩法包安装完成",
-                $"已验证并安装到：\n{path}\n\n当前版本不会自动加载下载内容；启用目录与受限运行时完成后才会加入画廊。");
+                $"已验证并安装到：\n{path}\n\n有效签名的 line-placement-v1 受限玩法将在下次启动加入画廊；" +
+                "纯资源包及当前未支持的运行模式只会安装，不会执行。");
         };
         driver.Failed += error =>
         {
@@ -203,6 +205,7 @@ public partial class ModeGalleryScreen : Control
     {
         var manifest = module.Manifest;
         var panel = CreateCardShell(manifest.DisplayName, manifest.Summary, manifest.CardAssetPath,
+            module.CardImage, module.CardImageExtension,
             out var content, out var title);
         var order = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ShrinkEnd };
         var earlier = UiStyle.CreateButton("←");
@@ -264,13 +267,14 @@ public partial class ModeGalleryScreen : Control
         header.Pressed += () => { var next = !expanded; if (next) foreach (var close in collapseSiblings) close(); SetExpanded(next); };
     }
 
-    private static Control CreateCardShell(string title, string subtitle, string texturePath,
+    private Control CreateCardShell(string title, string subtitle, string texturePath,
+        ReadOnlyMemory<byte>? imageBytes, string? imageExtension,
         out VBoxContainer content, out HBoxContainer titleRow)
     {
         var panel = UiStyle.CreatePanel(new Color(0.06f, 0.045f, 0.035f, 1), 16);
         panel.ClipContents = true; panel.CustomMinimumSize = new Vector2(370, 520);
         panel.SizeFlagsHorizontal = SizeFlags.ExpandFill; panel.SizeFlagsVertical = SizeFlags.ExpandFill;
-        panel.AddChild(new TextureRect { Texture = GD.Load<Texture2D>(texturePath), ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+        panel.AddChild(new TextureRect { Texture = LoadCardTexture(texturePath, imageBytes, imageExtension), ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
             StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered, MouseFilter = MouseFilterEnum.Ignore });
         panel.AddChild(new ColorRect { Color = new Color(0.025f, 0.018f, 0.014f, 0.48f), MouseFilter = MouseFilterEnum.Ignore });
         var inset = new MarginContainer(); inset.AddThemeConstantOverride("margin_left", 26); inset.AddThemeConstantOverride("margin_right", 26);
@@ -283,6 +287,34 @@ public partial class ModeGalleryScreen : Control
         var description = new Label { Text = subtitle }; description.AddThemeColorOverride("font_color", Colors.White); description.AddThemeFontSizeOverride("font_size", 15); content.AddChild(description);
         content.AddChild(new Control { CustomMinimumSize = new Vector2(0, 20) });
         return panel;
+    }
+
+    private Texture2D? LoadCardTexture(string builtInPath, ReadOnlyMemory<byte>? bytes, string? extension)
+    {
+        if (bytes is null) return GD.Load<Texture2D>(builtInPath);
+        using var image = new Image();
+        var data = bytes.Value.ToArray();
+        var error = extension?.ToLowerInvariant() switch
+        {
+            ".png" => image.LoadPngFromBuffer(data),
+            ".jpg" or ".jpeg" => image.LoadJpgFromBuffer(data),
+            ".webp" => image.LoadWebpFromBuffer(data),
+            _ => Error.FileUnrecognized
+        };
+        if (error != Error.Ok || image.GetWidth() is <= 0 or > 4096 || image.GetHeight() is <= 0 or > 4096)
+        {
+            GD.PushWarning($"玩法卡片图像无法安全加载：{error}");
+            return null;
+        }
+        var texture = ImageTexture.CreateFromImage(image);
+        _ownedCardTextures.Add(texture);
+        return texture;
+    }
+
+    public override void _ExitTree()
+    {
+        foreach (var texture in _ownedCardTextures) texture.Dispose();
+        _ownedCardTextures.Clear();
     }
 
     private static Button CreateLeafButton(string text)

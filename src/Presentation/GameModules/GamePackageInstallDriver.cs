@@ -7,13 +7,15 @@ namespace Xiangqi.Presentation.GameModules;
 /// <summary>
 /// Main-thread bridge for package inspection and installation. Blocking ZIP and hashing work runs
 /// on a worker; immutable results are raised from _Process. The node owns cancellation and never
-/// loads package content into Godot or the CLR.
+/// loads package-supplied code. Signed sandboxed packages are also validated against the host's
+/// declarative ABI and staged for the next startup.
 /// </summary>
 public partial class GamePackageInstallDriver : Node
 {
     private readonly GamePackageReader _reader;
     private readonly GamePackageInstaller _installer;
     private readonly string _installRoot;
+    private readonly Version _hostApiVersion;
     private readonly ConcurrentQueue<DriverNotification> _notifications = new();
     private CancellationTokenSource? _operation;
     private string? _packagePath;
@@ -24,6 +26,7 @@ public partial class GamePackageInstallDriver : Node
         _reader = new GamePackageReader(hostApiVersion);
         _installer = new GamePackageInstaller(_reader);
         _installRoot = Path.GetFullPath(installRoot);
+        _hostApiVersion = hostApiVersion;
     }
 
     public event Action<GamePackageInspection>? Inspected;
@@ -91,9 +94,23 @@ public partial class GamePackageInstallDriver : Node
     {
         try
         {
+            var inspection = _inspection ?? throw new InvalidOperationException("安装扫描状态已丢失。");
             var result = await Task.Run(() =>
-                _installer.InstallConfirmed(path, _installRoot, expectedSha256, developerMode, cancellationToken),
-                cancellationToken);
+            {
+                var installed = _installer.InstallConfirmed(path, _installRoot, expectedSha256,
+                    developerMode, cancellationToken);
+                if (inspection.SignatureValid && inspection.PublisherKeyFingerprint is { } fingerprint &&
+                    inspection.Manifest.ExecutionMode == GamePackageExecutionMode.Sandboxed)
+                {
+                    var evidence = new InstalledGameModuleVersion(inspection.Manifest.Module.Version,
+                        inspection.PackageSha256, fingerprint, inspection.Manifest.ExecutionMode,
+                        inspection.Manifest.Permissions);
+                    _ = new DeclarativeGameModuleLoader(_hostApiVersion).Load(installed, evidence,
+                        cancellationToken);
+                    new GameModuleVersionStore(_installRoot).Stage(inspection);
+                }
+                return installed;
+            }, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             _notifications.Enqueue(new(null, result, null));
         }

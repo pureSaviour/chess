@@ -21,6 +21,7 @@ public partial class GameModuleUpdateDriver : Node
     private readonly string _feedPublicKey;
     private readonly IReadOnlySet<string> _officialPublisherFingerprints;
     private readonly string _moduleRoot;
+    private readonly Version _hostApiVersion;
     private readonly ConcurrentQueue<UpdateNotification> _notifications = new();
     private CancellationTokenSource? _operation;
 
@@ -32,6 +33,7 @@ public partial class GameModuleUpdateDriver : Node
         _officialPublisherFingerprints = officialPublisherFingerprints
             .Select(GamePackageReader.NormalizeSha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _moduleRoot = Path.GetFullPath(moduleRoot);
+        _hostApiVersion = hostApiVersion;
         _client = new(_http, hostApiVersion, Path.Combine(_moduleRoot, ".downloads"));
         _installer = new(new(hostApiVersion));
         _versions = new(_moduleRoot);
@@ -162,8 +164,14 @@ public partial class GameModuleUpdateDriver : Node
 
     private void InstallAndStage(DownloadedGameModuleUpdate update, CancellationToken cancellationToken)
     {
-        _installer.InstallConfirmed(update.PackagePath, _moduleRoot, update.Inspection.PackageSha256,
+        var installedRoot = _installer.InstallConfirmed(update.PackagePath, _moduleRoot,
+            update.Inspection.PackageSha256,
             cancellationToken: cancellationToken);
+        var evidence = new InstalledGameModuleVersion(update.Entry.Version,
+            update.Inspection.PackageSha256, update.Entry.PublisherKeyFingerprint,
+            update.Inspection.Manifest.ExecutionMode, update.Inspection.Manifest.Permissions);
+        _ = new DeclarativeGameModuleLoader(_hostApiVersion).Load(installedRoot, evidence,
+            cancellationToken);
         _versions.Stage(update.Inspection);
     }
 

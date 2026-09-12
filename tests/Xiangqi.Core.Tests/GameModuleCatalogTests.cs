@@ -21,7 +21,8 @@ internal static class GameModuleCatalogTests
         ("玩法包拒绝篡改内容和越目录路径", RejectUnsafePackages),
         ("签名更新索引严格解析并筛选新版本", SignedUpdateFeed),
         ("玩法更新支持断点续传并复验下载包", ResumableModuleUpdate),
-        ("玩法版本仅在启动边界启用并支持回滚", ModuleVersionSwitching)
+        ("玩法版本仅在启动边界启用并支持回滚", ModuleVersionSwitching),
+        ("声明式玩法从活动目录复验加载并隔离失败版本", DeclarativeRuntimeActivation)
     ];
 
     private static void DefaultOrder()
@@ -321,6 +322,106 @@ internal static class GameModuleCatalogTests
             Equal(new Version(1, 0, 0), reloaded.Snapshot.Single().Active?.Version);
         }
         finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void DeclarativeRuntimeActivation()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            using var publisherKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var moduleRoot = Path.Combine(root, "modules");
+            var reader = new GamePackageReader(new Version(1, 0));
+            var installer = new GamePackageInstaller(reader);
+            var versions = new GameModuleVersionStore(moduleRoot);
+            var firstPackage = CreateDeclarativePackage(root, publisherKey, "1.0.0", "runtime-1.xqgame");
+            var first = reader.Inspect(firstPackage);
+            var firstRoot = installer.InstallConfirmed(firstPackage, moduleRoot, first.PackageSha256);
+            versions.Stage(first);
+            versions.ApplyPendingAtStartup();
+            var loader = new DeclarativeGameModuleLoader(new Version(1, 0));
+            var loaded = loader.Load(firstRoot, versions.Snapshot.Single().Active!);
+            Equal(9, loaded.Definition.BoardWidth);
+            Equal(5, loaded.Definition.WinLength);
+            var game = new LinePlacementGame(loaded.Definition);
+            Equal(true, game.TryPlace(0, 0));
+            Equal(false, game.TryPlace(0, 0));
+            Equal(true, game.TryPlace(1, 0));
+            Throws<ArgumentOutOfRangeException>(() => game.TryPlace(-1, 0));
+            for (var column = 1; column < 4; column++)
+            {
+                Equal(true, game.TryPlace(0, column));
+                Equal(true, game.TryPlace(1, column));
+            }
+            Equal(true, game.TryPlace(0, 4));
+            Equal(true, game.Finished);
+            Equal<int?>(0, game.Winner);
+            Throws<InvalidOperationException>(() => game.TryPlace(2, 2));
+
+            var secondPackage = CreateDeclarativePackage(root, publisherKey, "2.0.0", "runtime-2.xqgame");
+            var second = reader.Inspect(secondPackage);
+            var secondRoot = installer.InstallConfirmed(secondPackage, moduleRoot, second.PackageSha256);
+            versions.Stage(second);
+            versions.ApplyPendingAtStartup();
+            File.AppendAllText(Path.Combine(secondRoot, DeclarativeGameModuleLoader.RuntimePath), " ");
+            Throws<InvalidDataException>(() => loader.Load(secondRoot, versions.Snapshot.Single().Active!));
+            Equal(true, versions.ReportActivationFailure(new("thirdparty.example"), new Version(2, 0, 0)));
+            var failed = versions.Snapshot.Single();
+            Equal<InstalledGameModuleVersion?>(null, failed.Active);
+            Equal(new Version(1, 0, 0), failed.Pending?.Version);
+            Equal(new Version(2, 0, 0), failed.Failed?.Version);
+            versions.ApplyPendingAtStartup();
+            Equal(new Version(1, 0, 0), versions.Snapshot.Single().Active?.Version);
+            Equal(true, File.ReadAllText(Path.Combine(moduleRoot, "versions.json"))
+                .Contains("\"schemaVersion\":2", StringComparison.Ordinal));
+
+            var legacyRoot = Path.Combine(root, "legacy-modules");
+            Directory.CreateDirectory(legacyRoot);
+            File.WriteAllText(Path.Combine(legacyRoot, "versions.json"),
+                "{\"schemaVersion\":1,\"modules\":[]}");
+            Equal(0, new GameModuleVersionStore(legacyRoot).Snapshot.Count);
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static string CreateDeclarativePackage(string root, ECDsa publisherKey,
+        string version, string fileName)
+    {
+        var card = "card-image-placeholder"u8.ToArray();
+        var runtime = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1, kind = "line-placement-v1", boardWidth = 9, boardHeight = 9,
+            winLength = 5, firstPlayerLabel = "黑方", secondPlayerLabel = "白方", firstPlayer = 0
+        });
+        var publicKey = Convert.ToBase64String(publisherKey.ExportSubjectPublicKeyInfo());
+        var files = new[]
+        {
+            new { path = "content/card.png", length = card.LongLength,
+                sha256 = Convert.ToHexString(SHA256.HashData(card)) },
+            new { path = DeclarativeGameModuleLoader.RuntimePath, length = runtime.LongLength,
+                sha256 = Convert.ToHexString(SHA256.HashData(runtime)) }
+        };
+        var manifest = new
+        {
+            schemaVersion = 1, id = "thirdparty.example", version,
+            displayName = "声明式玩法", summary = "受限运行时测试", cardAsset = "content/card.png",
+            defaultOrder = 500, capabilities = new[] { "local-play" },
+            routes = new[] { new { id = "local", group = "开始游戏", label = "本地对局", capability = "local-play", order = 0 } },
+            minimumHostApi = "1.0", executionMode = "sandboxed",
+            permissions = new[] { "module-storage" }, publisher = "测试发布者",
+            publisherPublicKey = publicKey, files
+        };
+        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest);
+        var signature = publisherKey.SignData(manifestBytes, HashAlgorithmName.SHA256,
+            DSASignatureFormat.Rfc3279DerSequence);
+        var packagePath = Path.Combine(root, fileName);
+        using var stream = new FileStream(packagePath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+        WriteEntry(archive, "manifest.json", manifestBytes);
+        WriteEntry(archive, "signature.sig", signature);
+        WriteEntry(archive, "content/card.png", card);
+        WriteEntry(archive, DeclarativeGameModuleLoader.RuntimePath, runtime);
+        return packagePath;
     }
 
     private static string CreatePackage(string root, GamePackageExecutionMode mode,
