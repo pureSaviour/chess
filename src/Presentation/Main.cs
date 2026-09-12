@@ -64,7 +64,9 @@ public partial class Main : Control
         var registrations = CreateBuiltInGameModules();
         var catalog = new GameModuleCatalog(registrations);
         var ordered = catalog.Order(_settings.GameModuleOrder).Cast<GameModuleRegistration>().ToArray();
-        SwitchTo(new ModeGalleryScreen(ReturnFromGallery, ordered, MoveGameModule));
+        var packageDriver = new GamePackageInstallDriver(new Version(1, 0),
+            ProjectSettings.GlobalizePath("user://modules"));
+        SwitchTo(new ModeGalleryScreen(ReturnFromGallery, ordered, MoveGameModule, packageDriver));
     }
 
     private void MoveGameModule(GameModuleId id, int offset)
@@ -580,8 +582,8 @@ public partial class Main : Control
         {
             ShowGallery();
             await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not ModeGalleryScreen { CardCount: 5, OptionCount: 33 })
-                throw new InvalidOperationException("Gallery must expose five horizontal mode cards and thirty-three leaf routes.");
+            if (_currentScreen is not ModeGalleryScreen { CardCount: 5, OptionCount: 33, HasPackageInstaller: true })
+                throw new InvalidOperationException("Gallery must expose five horizontal mode cards, thirty-three leaf routes and package installation.");
             if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
             {
                 await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);

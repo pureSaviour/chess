@@ -14,12 +14,14 @@ public partial class ModeGalleryScreen : Control
 {
     internal int CardCount { get; private set; }
     internal int OptionCount { get; private set; }
+    internal bool HasPackageInstaller { get; private set; }
 
     public ModeGalleryScreen(Action back, IReadOnlyList<GameModuleRegistration> modules,
-        Action<GameModuleId, int> moveModule)
+        Action<GameModuleId, int> moveModule, GamePackageInstallDriver packageDriver)
     {
         ArgumentNullException.ThrowIfNull(modules);
         ArgumentNullException.ThrowIfNull(moveModule);
+        ArgumentNullException.ThrowIfNull(packageDriver);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(46, 28);
         AddChild(margin);
@@ -35,6 +37,9 @@ public partial class ModeGalleryScreen : Control
         var subtitle = new Label { Text = "选择玩法与房间类型" };
         UiStyle.SetMuted(subtitle, 14);
         titles.AddChild(subtitle);
+        var install = UiStyle.CreateButton("安装玩法包…");
+        install.CustomMinimumSize = new Vector2(148, 44);
+        heading.AddChild(install);
         var exit = UiStyle.CreateButton("返回");
         exit.CustomMinimumSize = new Vector2(112, 44);
         exit.Pressed += back;
@@ -61,6 +66,130 @@ public partial class ModeGalleryScreen : Control
             var module = modules[index];
             modes.AddChild(CreateModuleCard(module, index > 0, index + 1 < modules.Count, moveModule));
         }
+
+        AddChild(packageDriver);
+        ConfigurePackageInstall(install, packageDriver);
+        HasPackageInstaller = true;
+    }
+
+    private void ConfigurePackageInstall(Button install, GamePackageInstallDriver driver)
+    {
+        var picker = new FileDialog
+        {
+            Title = "选择玩法包",
+            FileMode = FileDialog.FileModeEnum.OpenFile,
+            Access = FileDialog.AccessEnum.Filesystem,
+            UseNativeDialog = true,
+            Filters = ["*.xqgame ; Xiangqi 玩法包"]
+        };
+        var consent = new ConfirmationDialog
+        {
+            Title = "确认安装第三方玩法",
+            OkButtonText = "我信任此包，继续安装",
+            CancelButtonText = "取消",
+            MinSize = new Vector2I(720, 560)
+        };
+        var result = new AcceptDialog { Title = "玩法包" };
+        AddChild(picker);
+        AddChild(consent);
+        AddChild(result);
+
+        GamePackageInspection? pending = null;
+        var selectedSource = string.Empty;
+        install.Pressed += () => picker.PopupCenteredRatio(0.78f);
+        picker.FileSelected += selected =>
+        {
+            pending = null;
+            selectedSource = selected;
+            install.Disabled = true;
+            install.Text = "正在验证…";
+            driver.Inspect(selected);
+        };
+        driver.Inspected += inspection =>
+        {
+            install.Disabled = false;
+            install.Text = "安装玩法包…";
+            var disposition = GamePackageTrustPolicy.Evaluate(inspection.CreateTrustRequest());
+            if (disposition == GamePackageTrustDisposition.Reject)
+            {
+                ShowPackageResult(result, "玩法包请求被拒绝",
+                    "此包请求了当前执行模式不允许的权限，或完全信任代码没有有效签名。没有写入任何文件。");
+                return;
+            }
+            pending = inspection;
+            consent.DialogText = DescribeTrustRequest(inspection, selectedSource);
+            consent.PopupCentered(new Vector2I(760, 600));
+        };
+        consent.Confirmed += () =>
+        {
+            if (pending is null) return;
+            install.Disabled = true;
+            install.Text = "正在安装…";
+            driver.InstallConfirmed(pending.PackageSha256);
+        };
+        driver.Installed += path =>
+        {
+            pending = null;
+            install.Disabled = false;
+            install.Text = "安装玩法包…";
+            ShowPackageResult(result, "玩法包安装完成",
+                $"已验证并安装到：\n{path}\n\n当前版本不会自动加载下载内容；启用目录与受限运行时完成后才会加入画廊。");
+        };
+        driver.Failed += error =>
+        {
+            pending = null;
+            install.Disabled = false;
+            install.Text = "安装玩法包…";
+            ShowPackageResult(result, "玩法包安装失败", $"{error}\n\n没有启用或执行玩法包内容。");
+        };
+    }
+
+    private static string DescribeTrustRequest(GamePackageInspection inspection, string source)
+    {
+        var manifest = inspection.Manifest;
+        var signature = inspection.SignatureValid
+            ? $"有效（密钥指纹 {inspection.PublisherKeyFingerprint}）"
+            : "未签名";
+        var mode = manifest.ExecutionMode switch
+        {
+            GamePackageExecutionMode.ResourceOnly => "纯资源",
+            GamePackageExecutionMode.Sandboxed => "受限运行时",
+            GamePackageExecutionMode.FullTrust => "完全信任代码",
+            _ => "未知"
+        };
+        var permissions = DescribePermissions(manifest.Permissions);
+        var warning = manifest.ExecutionMode == GamePackageExecutionMode.FullTrust
+            ? "严重警告：完全信任代码一旦启用，可获得与游戏相同的权限，包括访问本机文件、网络及启动进程。签名只能证明来源和完整性，不能证明代码安全。仅在你确实信任发布者时安装。"
+            : "安全提示：此包不会在安装时执行。文件格式解析仍可能存在风险；签名只能证明来源和完整性，不能证明内容绝对安全。";
+        return $"玩法：{manifest.Module.DisplayName}\n" +
+               $"ID / 版本：{manifest.Module.Id} / {manifest.Module.Version}\n" +
+               $"来源：{source}\n发布者：{manifest.Publisher}\n签名：{signature}\n" +
+               $"执行模式：{mode}\n请求权限：{permissions}\n" +
+               $"文件数：{manifest.Files.Count}\n包 SHA-256：\n{inspection.PackageSha256}\n\n{warning}";
+    }
+
+    private static string DescribePermissions(GamePackagePermissions permissions)
+    {
+        if (permissions == GamePackagePermissions.None) return "无";
+        var names = new List<string>();
+        void Add(GamePackagePermissions value, string label)
+        {
+            if (permissions.HasFlag(value)) names.Add(label);
+        }
+        Add(GamePackagePermissions.ModuleStorage, "玩法独立存储");
+        Add(GamePackagePermissions.RoomNetwork, "房间网络");
+        Add(GamePackagePermissions.PlayerProfile, "玩家资料");
+        Add(GamePackagePermissions.ExternalProcess, "启动外部进程");
+        Add(GamePackagePermissions.NativeCode, "原生代码");
+        Add(GamePackagePermissions.UnrestrictedFileSystem, "任意文件系统");
+        return string.Join("、", names);
+    }
+
+    private static void ShowPackageResult(AcceptDialog dialog, string title, string message)
+    {
+        dialog.Title = title;
+        dialog.DialogText = message;
+        dialog.PopupCentered(new Vector2I(680, 300));
     }
 
     private Control CreateModuleCard(GameModuleRegistration module, bool canMoveEarlier,

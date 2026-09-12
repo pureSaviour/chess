@@ -201,6 +201,14 @@ internal static class GameModuleCatalogTests
                 fileName: "size-limit.xqgame");
             Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0),
                 new GamePackageLimits(MaximumFileBytes: 3)).Inspect(sizeLimited));
+
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            Throws<OperationCanceledException>(() => new GamePackageReader(new Version(1, 0))
+                .Inspect(sizeLimited, cancellation.Token));
+            Throws<OperationCanceledException>(() => new GamePackageInstaller(new(new Version(1, 0)))
+                .InstallConfirmed(sizeLimited, Path.Combine(root, "cancelled-install"),
+                    new string('0', 64), cancellationToken: cancellation.Token));
         }
         finally { DeleteTemporaryRoot(root); }
     }

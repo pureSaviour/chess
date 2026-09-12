@@ -78,20 +78,21 @@ public sealed class GamePackageReader
         ValidateLimits(_limits);
     }
 
-    public GamePackageInspection Inspect(string packagePath)
+    public GamePackageInspection Inspect(string packagePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             using var stream = OpenPackage(packagePath);
-            var packageHash = HashStream(stream);
+            var packageHash = HashStream(stream, cancellationToken);
             stream.Position = 0;
             using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
-            var entries = IndexEntries(archive);
-            var manifestBytes = ReadSpecial(entries, ManifestPath, _limits.MaximumManifestBytes, required: true)!;
-            var signature = ReadSpecial(entries, SignaturePath, _limits.MaximumSignatureBytes, required: false);
+            var entries = IndexEntries(archive, cancellationToken);
+            var manifestBytes = ReadSpecial(entries, ManifestPath, _limits.MaximumManifestBytes, required: true, cancellationToken)!;
+            var signature = ReadSpecial(entries, SignaturePath, _limits.MaximumSignatureBytes, required: false, cancellationToken);
             var manifest = ParseManifest(manifestBytes);
-            ValidatePayload(entries, manifest);
+            ValidatePayload(entries, manifest, cancellationToken);
             var (fingerprint, signatureValid) = VerifySignature(manifest, manifestBytes, signature);
             return new GamePackageInspection(manifest, packageHash, fingerprint, signatureValid);
         }
@@ -115,7 +116,8 @@ public sealed class GamePackageReader
         return stream;
     }
 
-    internal IReadOnlyDictionary<string, ZipArchiveEntry> IndexEntries(ZipArchive archive)
+    internal IReadOnlyDictionary<string, ZipArchiveEntry> IndexEntries(ZipArchive archive,
+        CancellationToken cancellationToken = default)
     {
         if (archive.Entries.Count is 0 || archive.Entries.Count > _limits.MaximumFiles + 32)
             throw new InvalidDataException("玩法包文件数量超出允许范围。");
@@ -123,6 +125,7 @@ public sealed class GamePackageReader
         var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in archive.Entries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var path = NormalizePackagePath(entry.FullName, allowDirectory: true);
             RejectLink(entry);
             if (!entries.TryAdd(path, entry))
@@ -219,21 +222,26 @@ public sealed class GamePackageReader
         return result;
     }
 
-    private void ValidatePayload(IReadOnlyDictionary<string, ZipArchiveEntry> entries, GamePackageManifest manifest)
+    private void ValidatePayload(IReadOnlyDictionary<string, ZipArchiveEntry> entries,
+        GamePackageManifest manifest, CancellationToken cancellationToken)
     {
         var expected = manifest.Files.ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
         foreach (var (path, entry) in entries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (IsDirectory(entry) || path.Equals(ManifestPath, StringComparison.OrdinalIgnoreCase) ||
                 path.Equals(SignaturePath, StringComparison.OrdinalIgnoreCase)) continue;
             if (!expected.TryGetValue(path, out var file)) throw new InvalidDataException($"玩法包包含未列入清单的文件：{path}。");
             if (entry.Length != file.Length) throw new InvalidDataException($"文件长度与清单不符：{path}。");
         }
         foreach (var file in manifest.Files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!entries.TryGetValue(file.Path, out var entry) || IsDirectory(entry))
                 throw new InvalidDataException($"玩法包缺少清单文件：{file.Path}。");
-            else if (!CryptographicOperations.FixedTimeEquals(HashEntry(entry), Convert.FromHexString(file.Sha256)))
+            else if (!CryptographicOperations.FixedTimeEquals(HashEntry(entry, cancellationToken), Convert.FromHexString(file.Sha256)))
                 throw new InvalidDataException($"文件哈希与清单不符：{file.Path}。");
+        }
     }
 
     private (string? Fingerprint, bool Valid) VerifySignature(GamePackageManifest manifest,
@@ -262,16 +270,18 @@ public sealed class GamePackageReader
 
     private FileStream OpenPackageForInstall(string packagePath) => OpenPackage(packagePath);
 
-    private Dictionary<string, ZipArchiveEntry> IndexEntriesForInstall(ZipArchive archive) =>
-        new(IndexEntries(archive), StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ZipArchiveEntry> IndexEntriesForInstall(ZipArchive archive,
+        CancellationToken cancellationToken) =>
+        new(IndexEntries(archive, cancellationToken), StringComparer.OrdinalIgnoreCase);
 
     internal (FileStream Stream, ZipArchive Archive, IReadOnlyDictionary<string, ZipArchiveEntry> Entries,
-        GamePackageInspection Inspection) OpenValidatedForInstall(string packagePath, string expectedSha256)
+        GamePackageInspection Inspection) OpenValidatedForInstall(string packagePath, string expectedSha256,
+        CancellationToken cancellationToken)
     {
         var stream = OpenPackageForInstall(packagePath);
         try
         {
-            var hash = HashStream(stream);
+            var hash = HashStream(stream, cancellationToken);
             if (!CryptographicOperations.FixedTimeEquals(Convert.FromHexString(hash),
                     Convert.FromHexString(NormalizeSha256(expectedSha256))))
                 throw new InvalidDataException("玩法包已在确认后发生变化。");
@@ -279,11 +289,11 @@ public sealed class GamePackageReader
             var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
             try
             {
-                var entries = IndexEntriesForInstall(archive);
-                var manifestBytes = ReadSpecial(entries, ManifestPath, _limits.MaximumManifestBytes, true)!;
-                var signature = ReadSpecial(entries, SignaturePath, _limits.MaximumSignatureBytes, false);
+                var entries = IndexEntriesForInstall(archive, cancellationToken);
+                var manifestBytes = ReadSpecial(entries, ManifestPath, _limits.MaximumManifestBytes, true, cancellationToken)!;
+                var signature = ReadSpecial(entries, SignaturePath, _limits.MaximumSignatureBytes, false, cancellationToken);
                 var manifest = ParseManifest(manifestBytes);
-                ValidatePayload(entries, manifest);
+                ValidatePayload(entries, manifest, cancellationToken);
                 var (fingerprint, valid) = VerifySignature(manifest, manifestBytes, signature);
                 return (stream, archive, entries, new GamePackageInspection(manifest, hash, fingerprint, valid));
             }
@@ -324,7 +334,7 @@ public sealed class GamePackageReader
     }
 
     private static byte[]? ReadSpecial(IReadOnlyDictionary<string, ZipArchiveEntry> entries,
-        string path, int maximumBytes, bool required)
+        string path, int maximumBytes, bool required, CancellationToken cancellationToken)
     {
         if (!entries.TryGetValue(path, out var entry))
         {
@@ -334,19 +344,33 @@ public sealed class GamePackageReader
         if (IsDirectory(entry) || entry.Length > maximumBytes) throw new InvalidDataException($"{path} 大小无效。");
         using var source = entry.Open();
         using var destination = new MemoryStream((int)entry.Length);
-        source.CopyTo(destination);
+        var buffer = new byte[16 * 1024];
+        int count;
+        while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            destination.Write(buffer, 0, count);
+            if (destination.Length > maximumBytes) throw new InvalidDataException($"{path} 实际大小无效。");
+        }
         if (destination.Length != entry.Length || destination.Length > maximumBytes)
             throw new InvalidDataException($"{path} 实际大小无效。");
         return destination.ToArray();
     }
 
-    private static string HashStream(Stream stream)
+    private static string HashStream(Stream stream, CancellationToken cancellationToken)
     {
-        var hash = SHA256.HashData(stream);
-        return Convert.ToHexString(hash);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        int count;
+        while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hash.AppendData(buffer, 0, count);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
     }
 
-    private static byte[] HashEntry(ZipArchiveEntry entry)
+    private static byte[] HashEntry(ZipArchiveEntry entry, CancellationToken cancellationToken)
     {
         using var stream = entry.Open();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -355,6 +379,7 @@ public sealed class GamePackageReader
         int count;
         while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (read > entry.Length - count) throw new InvalidDataException("压缩条目实际长度超过目录声明。");
             hash.AppendData(buffer, 0, count);
             read += count;
@@ -527,9 +552,10 @@ public sealed class GamePackageInstaller
     public GamePackageInstaller(GamePackageReader reader) => _reader = reader ?? throw new ArgumentNullException(nameof(reader));
 
     public string InstallConfirmed(string packagePath, string installRoot, string expectedSha256,
-        bool developerMode = false)
+        bool developerMode = false, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installRoot);
+        cancellationToken.ThrowIfCancellationRequested();
         var fullRoot = Path.GetFullPath(installRoot);
         Directory.CreateDirectory(fullRoot);
         RejectReparseDirectory(fullRoot);
@@ -540,7 +566,7 @@ public sealed class GamePackageInstaller
         Directory.CreateDirectory(staging);
         try
         {
-            var opened = _reader.OpenValidatedForInstall(packagePath, expectedSha256);
+            var opened = _reader.OpenValidatedForInstall(packagePath, expectedSha256, cancellationToken);
             using var stream = opened.Stream;
             using var archive = opened.Archive;
             var manifest = opened.Inspection.Manifest;
@@ -549,11 +575,12 @@ public sealed class GamePackageInstaller
             if (disposition == GamePackageTrustDisposition.Reject)
                 throw new UnauthorizedAccessException("玩法包不满足宿主信任策略，不能安装。");
             WriteSpecial(opened.Entries[GamePackageReader.ManifestPath],
-                Path.Combine(staging, GamePackageReader.ManifestPath));
+                Path.Combine(staging, GamePackageReader.ManifestPath), cancellationToken);
             if (opened.Entries.TryGetValue(GamePackageReader.SignaturePath, out var signature))
-                WriteSpecial(signature, Path.Combine(staging, GamePackageReader.SignaturePath));
+                WriteSpecial(signature, Path.Combine(staging, GamePackageReader.SignaturePath), cancellationToken);
             foreach (var file in manifest.Files)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var destination = ResolveContainedPath(staging, file.Path);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 using var input = opened.Entries[file.Path].Open();
@@ -564,6 +591,7 @@ public sealed class GamePackageInstaller
                 int count;
                 while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (written > file.Length - count) throw new InvalidDataException($"文件实际大小超过清单：{file.Path}。");
                     output.Write(buffer, 0, count);
                     hash.AppendData(buffer, 0, count);
@@ -580,6 +608,7 @@ public sealed class GamePackageInstaller
             var moduleRoot = Path.GetDirectoryName(destinationDirectory)!;
             Directory.CreateDirectory(moduleRoot);
             RejectReparseDirectory(moduleRoot);
+            cancellationToken.ThrowIfCancellationRequested();
             Directory.Move(staging, destinationDirectory);
             return destinationDirectory;
         }
@@ -589,11 +618,18 @@ public sealed class GamePackageInstaller
         }
     }
 
-    private static void WriteSpecial(ZipArchiveEntry entry, string destination)
+    private static void WriteSpecial(ZipArchiveEntry entry, string destination,
+        CancellationToken cancellationToken)
     {
         using var input = entry.Open();
         using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        input.CopyTo(output);
+        var buffer = new byte[16 * 1024];
+        int count;
+        while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            output.Write(buffer, 0, count);
+        }
     }
 
     private static string ResolveContainedPath(string root, string packagePath)
