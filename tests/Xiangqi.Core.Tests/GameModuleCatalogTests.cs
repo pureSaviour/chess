@@ -1,4 +1,7 @@
 using Xiangqi.GameHost;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 internal static class GameModuleCatalogTests
 {
@@ -10,7 +13,10 @@ internal static class GameModuleCatalogTests
         ("玩法目录拒绝重复模块和未声明能力", RejectInvalidModules),
         ("玩法记录存储隔离路径并原子写入和淘汰", RecordStorageIsolation),
         ("玩法记录存储无损且幂等导入旧目录", LegacyRecordImport),
-        ("混合信任策略区分沙箱与完全信任代码", PackageTrustPolicy)
+        ("混合信任策略区分沙箱与完全信任代码", PackageTrustPolicy),
+        ("玩法包严格扫描并原子安装已确认内容", PackageInspectionAndInstall),
+        ("玩法包验证发布者签名并绑定信任证据", SignedPackageInspection),
+        ("玩法包拒绝篡改内容和越目录路径", RejectUnsafePackages)
     ];
 
     private static void DefaultOrder()
@@ -113,6 +119,152 @@ internal static class GameModuleCatalogTests
         Equal(GamePackageTrustDisposition.RequireFullTrustConfirmation,
             GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.FullTrust, GamePackagePermissions.None, false),
                 developerMode: true));
+    }
+
+    private static void PackageInspectionAndInstall()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            var package = CreatePackage(root, GamePackageExecutionMode.ResourceOnly);
+            var reader = new GamePackageReader(new Version(1, 0));
+            var inspection = reader.Inspect(package);
+            Equal("thirdparty.example", inspection.Manifest.Module.Id.Value);
+            Equal(false, inspection.SignatureValid);
+            Equal(GamePackageTrustDisposition.RequireRestrictedModuleConfirmation,
+                GamePackageTrustPolicy.Evaluate(inspection.CreateTrustRequest()));
+
+            var installRoot = Path.Combine(root, "installed");
+            var installed = new GamePackageInstaller(reader).InstallConfirmed(
+                package, installRoot, inspection.PackageSha256);
+            Equal(true, File.Exists(Path.Combine(installed, "manifest.json")));
+            Equal("card", File.ReadAllText(Path.Combine(installed, "content", "card.png")));
+            Throws<IOException>(() => new GamePackageInstaller(reader).InstallConfirmed(
+                package, installRoot, inspection.PackageSha256));
+            Throws<InvalidDataException>(() => new GamePackageInstaller(reader).InstallConfirmed(
+                package, Path.Combine(root, "wrong-hash"), new string('0', 64)));
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void SignedPackageInspection()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            using var publisherKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var package = CreatePackage(root, GamePackageExecutionMode.FullTrust, publisherKey: publisherKey);
+            var inspection = new GamePackageReader(new Version(1, 0)).Inspect(package);
+            Equal(true, inspection.SignatureValid);
+            Equal(64, inspection.PublisherKeyFingerprint?.Length ?? 0);
+            Equal(GamePackageTrustDisposition.RequireFullTrustConfirmation,
+                GamePackageTrustPolicy.Evaluate(inspection.CreateTrustRequest()));
+
+            var invalidSignature = CreatePackage(root, GamePackageExecutionMode.FullTrust,
+                publisherKey: publisherKey, damageSignature: true, fileName: "bad-signature.xqgame");
+            Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0)).Inspect(invalidSignature));
+
+            var unsigned = CreatePackage(root, GamePackageExecutionMode.FullTrust,
+                fileName: "unsigned-full-trust.xqgame");
+            var unsignedInspection = new GamePackageReader(new Version(1, 0)).Inspect(unsigned);
+            Throws<UnauthorizedAccessException>(() => new GamePackageInstaller(new(new Version(1, 0)))
+                .InstallConfirmed(unsigned, Path.Combine(root, "unsigned-install"), unsignedInspection.PackageSha256));
+            var developerInstall = new GamePackageInstaller(new(new Version(1, 0))).InstallConfirmed(unsigned,
+                Path.Combine(root, "developer-install"), unsignedInspection.PackageSha256, developerMode: true);
+            Equal(true, Directory.Exists(developerInstall));
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void RejectUnsafePackages()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            var wrongHash = CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                declaredHash: new string('0', 64), fileName: "wrong-hash.xqgame");
+            Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0)).Inspect(wrongHash));
+
+            var traversal = CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                payloadPath: "../escape.png", fileName: "traversal.xqgame");
+            Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0)).Inspect(traversal));
+
+            var executableResource = CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                payloadPath: "content/unsafe.dll", fileName: "resource-code.xqgame");
+            Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0)).Inspect(executableResource));
+
+            var duplicateJson = CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                duplicateSchema: true, fileName: "duplicate-json.xqgame");
+            Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0)).Inspect(duplicateJson));
+
+            var sizeLimited = CreatePackage(root, GamePackageExecutionMode.ResourceOnly,
+                fileName: "size-limit.xqgame");
+            Throws<InvalidDataException>(() => new GamePackageReader(new Version(1, 0),
+                new GamePackageLimits(MaximumFileBytes: 3)).Inspect(sizeLimited));
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static string CreatePackage(string root, GamePackageExecutionMode mode,
+        ECDsa? publisherKey = null, bool damageSignature = false, string? declaredHash = null,
+        string payloadPath = "content/card.png", string fileName = "module.xqgame",
+        bool duplicateSchema = false)
+    {
+        var payload = "card"u8.ToArray();
+        var payloadHash = declaredHash ?? Convert.ToHexString(SHA256.HashData(payload));
+        var publicKey = publisherKey is null ? null :
+            Convert.ToBase64String(publisherKey.ExportSubjectPublicKeyInfo());
+        var manifest = new
+        {
+            schemaVersion = 1,
+            id = "thirdparty.example",
+            version = "1.0.0",
+            displayName = "第三方玩法",
+            summary = "用于验证安全安装流程",
+            cardAsset = payloadPath,
+            defaultOrder = 100,
+            capabilities = new[] { "local-play" },
+            routes = new[] { new { id = "local", group = "开始游戏", label = "本地对局", capability = "local-play", order = 0 } },
+            minimumHostApi = "1.0",
+            executionMode = mode switch
+            {
+                GamePackageExecutionMode.ResourceOnly => "resource-only",
+                GamePackageExecutionMode.Sandboxed => "sandboxed",
+                _ => "full-trust"
+            },
+            permissions = Array.Empty<string>(),
+            publisher = "测试发布者",
+            publisherPublicKey = publicKey,
+            files = new[] { new { path = payloadPath, length = payload.LongLength, sha256 = payloadHash } }
+        };
+        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest);
+        if (duplicateSchema)
+            manifestBytes = System.Text.Encoding.UTF8.GetBytes(
+                System.Text.Encoding.UTF8.GetString(manifestBytes).Replace(
+                    "{\"schemaVersion\":1,", "{\"schemaVersion\":1,\"schemaVersion\":1,",
+                    StringComparison.Ordinal));
+        byte[]? signature = null;
+        if (publisherKey is not null)
+        {
+            signature = publisherKey.SignData(manifestBytes, HashAlgorithmName.SHA256,
+                DSASignatureFormat.Rfc3279DerSequence);
+            if (damageSignature) signature[^1] ^= 0x01;
+        }
+
+        var packagePath = Path.Combine(root, fileName);
+        using var stream = new FileStream(packagePath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+        WriteEntry(archive, "manifest.json", manifestBytes);
+        if (signature is not null) WriteEntry(archive, "signature.sig", signature);
+        WriteEntry(archive, payloadPath, payload);
+        return packagePath;
+    }
+
+    private static void WriteEntry(ZipArchive archive, string path, byte[] content)
+    {
+        var entry = archive.CreateEntry(path, CompressionLevel.Optimal);
+        using var stream = entry.Open();
+        stream.Write(content);
     }
 
     private static IGameModule Module(string id, int order)
