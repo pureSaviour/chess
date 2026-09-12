@@ -9,7 +9,8 @@ internal static class GameModuleCatalogTests
         ("玩法目录可前后移动模块且限制边界", MoveModule),
         ("玩法目录拒绝重复模块和未声明能力", RejectInvalidModules),
         ("玩法记录存储隔离路径并原子写入和淘汰", RecordStorageIsolation),
-        ("玩法记录存储无损且幂等导入旧目录", LegacyRecordImport)
+        ("玩法记录存储无损且幂等导入旧目录", LegacyRecordImport),
+        ("混合信任策略区分沙箱与完全信任代码", PackageTrustPolicy)
     ];
 
     private static void DefaultOrder()
@@ -88,6 +89,30 @@ internal static class GameModuleCatalogTests
             Equal(1, new GameRecordStorage(Path.Combine(root, "games"), new("games.first"), ".pgn", "first", legacy).List(false).Count);
         }
         finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void PackageTrustPolicy()
+    {
+        const string hash = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        const string fingerprint = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
+        GamePackageTrustRequest Request(GamePackageExecutionMode mode, GamePackagePermissions permissions,
+            bool signed = true) => new(new("thirdparty.example"), new Version(1, 0), mode, permissions,
+                hash, "第三方作者", signed ? fingerprint : null, signed);
+
+        Equal(GamePackageTrustDisposition.RequireRestrictedModuleConfirmation,
+            GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.Sandboxed, GamePackagePermissions.ModuleStorage)));
+        Equal(GamePackageTrustDisposition.Reject,
+            GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.Sandboxed, GamePackagePermissions.NativeCode)));
+        Equal(GamePackageTrustDisposition.Reject,
+            GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.FullTrust, GamePackagePermissions.None, false)));
+        Equal(GamePackageTrustDisposition.RequireFullTrustConfirmation,
+            GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.FullTrust, GamePackagePermissions.None)));
+        Equal(GamePackageTrustDisposition.AllowPreviouslyConfirmedPackage,
+            GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.FullTrust, GamePackagePermissions.None),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { hash }));
+        Equal(GamePackageTrustDisposition.RequireFullTrustConfirmation,
+            GamePackageTrustPolicy.Evaluate(Request(GamePackageExecutionMode.FullTrust, GamePackagePermissions.None, false),
+                developerMode: true));
     }
 
     private static IGameModule Module(string id, int order)
