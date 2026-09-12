@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Xiangqi", "Xiangqi.csproj",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Xiangqi.Core", "src\Xiangqi.Core\Xiangqi.Core.csproj", "{65CCB61D-D5AC-42DE-A1EA-5F02906D4F2E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Xiangqi.GameHost", "src\Xiangqi.GameHost\Xiangqi.GameHost.csproj", "{B1A41DAA-77A5-4B63-8C7B-F2696B6776DA}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Xiangqi.Core.Tests", "tests\Xiangqi.Core.Tests\Xiangqi.Core.Tests.csproj", "{DF3D53CA-620C-416D-B591-7713C4B5E9D0}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Xiangqi.Transport", "src\Xiangqi.Transport\Xiangqi.Transport.csproj", "{A5475906-1B5C-4CCD-AF27-755737A81C05}"
@@ -38,6 +40,10 @@ Global
 		{DF3D53CA-620C-416D-B591-7713C4B5E9D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DF3D53CA-620C-416D-B591-7713C4B5E9D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DF3D53CA-620C-416D-B591-7713C4B5E9D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B1A41DAA-77A5-4B63-8C7B-F2696B6776DA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1A41DAA-77A5-4B63-8C7B-F2696B6776DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1A41DAA-77A5-4B63-8C7B-F2696B6776DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1A41DAA-77A5-4B63-8C7B-F2696B6776DA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
 

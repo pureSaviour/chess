@@ -15,6 +15,7 @@
     <!-- Pure managed MIT-licensed 7z reader used only by the opt-in AI package installer. -->
     <PackageReference Include="SharpCompress" Version="0.50.4" Condition=" '$(GodotTargetPlatform)' != 'android' " />
     <Compile Include="src/Presentation/**/*.cs" />
+    <ProjectReference Include="src/Xiangqi.GameHost/Xiangqi.GameHost.csproj" />
     <ProjectReference Include="src/Xiangqi.Core/Xiangqi.Core.csproj" />
     <ProjectReference Include="src/Xiangqi.Transport/Xiangqi.Transport.csproj" />
     <!-- Steamworks.NET is pinned to the SDK 1.65-compatible upstream commit documented

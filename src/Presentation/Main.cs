@@ -13,6 +13,8 @@ using Xiangqi.Presentation.Profiles;
 using Xiangqi.Presentation.Screens;
 using Xiangqi.Presentation.Settings;
 using Xiangqi.Presentation.UI;
+using Xiangqi.GameHost;
+using Xiangqi.Presentation.GameModules;
 
 namespace Xiangqi.Presentation;
 
@@ -57,41 +59,21 @@ public partial class Main : Control
         ShowSettings,
         () => GetTree().Quit()));
 
-    private void ShowGallery() => SwitchTo(new ModeGalleryScreen(
-        ReturnFromGallery,
-        () => ShowClassicGallery(ClassicGalleryEntry.Local),
-        () => ShowClassicGallery(ClassicGalleryEntry.Lan),
-        () => ShowClassicGallery(ClassicGalleryEntry.Steam),
-        StartConfiguredAiMatch,
-        ShowAiSettings,
-        () => ShowClassicRecords(false),
-        () => ShowClassicRecords(true),
-        () => ShowClassicImport(false),
-        () => ShowClassicImport(true),
-        () => ShowThreeGallery(ThreeGalleryEntry.Local),
-        () => ShowThreeGallery(ThreeGalleryEntry.Lan),
-        () => ShowThreeGallery(ThreeGalleryEntry.Steam),
-        () => ShowThreeRecords(false),
-        () => ShowThreeRecords(true),
-        () => StartJieqiLocal(TimeControl.Unlimited),
-        () => ShowJieqiGallery(ClassicGalleryEntry.Lan),
-        () => ShowJieqiGallery(ClassicGalleryEntry.Steam),
-        () => ShowJieqiRecords(false),
-        () => ShowJieqiRecords(true),
-        StartJunqiLocal,
-        () => ShowJunqiGallery(ClassicGalleryEntry.Lan),
-        () => ShowJunqiGallery(ClassicGalleryEntry.Steam),
-        () => ShowJunqiRecords(false),
-        () => ShowJunqiRecords(true),
-        () => ShowGomokuGallery(ClassicGalleryEntry.Local),
-        () => ShowGomokuGallery(ClassicGalleryEntry.Lan),
-        () => ShowGomokuGallery(ClassicGalleryEntry.Steam),
-        () => ShowGomokuRecords(false),
-        () => ShowGomokuRecords(true),
-        () => ShowGomokuImport(false),
-        () => ShowGomokuImport(true),
-        StartConfiguredGomokuAiMatch,
-        ShowGomokuAiSettings));
+    private void ShowGallery()
+    {
+        var registrations = CreateBuiltInGameModules();
+        var catalog = new GameModuleCatalog(registrations);
+        var ordered = catalog.Order(_settings.GameModuleOrder).Cast<GameModuleRegistration>().ToArray();
+        SwitchTo(new ModeGalleryScreen(ReturnFromGallery, ordered, MoveGameModule));
+    }
+
+    private void MoveGameModule(GameModuleId id, int offset)
+    {
+        var catalog = new GameModuleCatalog(CreateBuiltInGameModules());
+        _settings.GameModuleOrder = [.. catalog.Move(_settings.GameModuleOrder, id, offset)];
+        _settings.SaveAndApply();
+        ShowGallery();
+    }
 
     private void StartJieqiLocal(TimeControl timeControl)
     {

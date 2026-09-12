@@ -1,4 +1,6 @@
 using Godot;
+using Xiangqi.GameHost;
+using Xiangqi.Presentation.GameModules;
 using Xiangqi.Presentation.UI;
 
 namespace Xiangqi.Presentation.Screens;
@@ -13,42 +15,11 @@ public partial class ModeGalleryScreen : Control
     internal int CardCount { get; private set; }
     internal int OptionCount { get; private set; }
 
-    public ModeGalleryScreen(
-        Action back,
-        Action classicLocal,
-        Action classicLan,
-        Action classicSteam,
-        Action classicAi,
-        Action classicAiSettings,
-        Action classicRecent,
-        Action classicSaved,
-        Action classicPgnImport,
-        Action classicFenImport,
-        Action threeLocal,
-        Action threeLan,
-        Action threeSteam,
-        Action threeRecent,
-        Action threeSaved,
-        Action jieqiLocal,
-        Action jieqiLan,
-        Action jieqiSteam,
-        Action jieqiRecent,
-        Action jieqiSaved,
-        Action junqiLocal,
-        Action junqiLan,
-        Action junqiSteam,
-        Action junqiRecent,
-        Action junqiSaved,
-        Action gomokuLocal,
-        Action gomokuLan,
-        Action gomokuSteam,
-        Action gomokuRecent,
-        Action gomokuSaved,
-        Action gomokuSgfImport,
-        Action gomokuPositionImport,
-        Action gomokuAi,
-        Action gomokuAiSettings)
+    public ModeGalleryScreen(Action back, IReadOnlyList<GameModuleRegistration> modules,
+        Action<GameModuleId, int> moveModule)
     {
+        ArgumentNullException.ThrowIfNull(modules);
+        ArgumentNullException.ThrowIfNull(moveModule);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(46, 28);
         AddChild(margin);
@@ -85,47 +56,43 @@ public partial class ModeGalleryScreen : Control
         modes.AddThemeConstantOverride("separation", 24);
         scroll.AddChild(modes);
 
-        modes.AddChild(CreateTreeCard(
-            "经典象棋",
-            "楚河汉界 · 红黑争锋",
-            "res://assets/gallery/classic-xiangqi-card.png",
-            classicLocal, classicLan, classicSteam, classicRecent, classicSaved,
-            classicPgnImport, classicFenImport, classicAi, classicAiSettings));
-        modes.AddChild(CreateGroupedCard(
-            "三国象棋",
-            "魏 · 吴 · 蜀 · 合纵连横",
-            "res://assets/gallery/three-kingdoms-card.png",
-            [("联机模式", new (string, Action)[] { ("本地三人对决", threeLocal), ("局域网三人联机", threeLan), ("邀请 Steam 好友", threeSteam) }),
-             ("对局记录", new (string, Action)[] { ("最近对局", threeRecent), ("保存对局", threeSaved) })]));
-        modes.AddChild(CreateGroupedCard(
-            "揭棋", "暗子初行 · 揭开玄机",
-            "res://assets/gallery/jieqi-card.png",
-            [("联机模式", new (string, Action)[] { ("本地联机", jieqiLocal), ("局域网联机", jieqiLan), ("Steam 邀请好友", jieqiSteam) }),
-             ("对局记录", new (string, Action)[] { ("最近对局", jieqiRecent), ("保存对局", jieqiSaved) })]));
-        modes.AddChild(CreateGroupedCard(
-            "军旗", "铁路纵横 · 夺旗制胜",
-            "res://assets/gallery/junqi-card.svg",
-            [("联机模式", new (string, Action)[] { ("本地联机", junqiLocal), ("局域网联机", junqiLan), ("Steam 邀请好友", junqiSteam) }),
-             ("对局记录", new (string, Action)[] { ("最近对局", junqiRecent), ("保存对局", junqiSaved) })]));
-        modes.AddChild(CreateTreeCard(
-            "五子棋", "纵横十九路 · 黑白连珠",
-            "res://assets/gallery/gomoku-card.svg",
-            gomokuLocal, gomokuLan, gomokuSteam, gomokuRecent, gomokuSaved,
-            gomokuSgfImport, gomokuPositionImport, gomokuAi, gomokuAiSettings));
+        for (var index = 0; index < modules.Count; index++)
+        {
+            var module = modules[index];
+            modes.AddChild(CreateModuleCard(module, index > 0, index + 1 < modules.Count, moveModule));
+        }
     }
 
-    private Control CreateTreeCard(string title, string subtitle, string texturePath,
-        Action local, Action lan, Action steam, Action recent, Action saved,
-        Action pgnImport, Action fenImport, Action ai, Action aiSettings)
+    private Control CreateModuleCard(GameModuleRegistration module, bool canMoveEarlier,
+        bool canMoveLater, Action<GameModuleId, int> moveModule)
     {
-        var panel = CreateCardShell(title, subtitle, texturePath, out var content);
+        var manifest = module.Manifest;
+        var panel = CreateCardShell(manifest.DisplayName, manifest.Summary, manifest.CardAssetPath,
+            out var content, out var title);
+        var order = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ShrinkEnd };
+        var earlier = UiStyle.CreateButton("←");
+        earlier.TooltipText = "向前移动玩法";
+        earlier.Disabled = !canMoveEarlier;
+        earlier.CustomMinimumSize = new Vector2(44, 36);
+        earlier.Pressed += () => moveModule(manifest.Id, -1);
+        var later = UiStyle.CreateButton("→");
+        later.TooltipText = "向后移动玩法";
+        later.Disabled = !canMoveLater;
+        later.CustomMinimumSize = new Vector2(44, 36);
+        later.Pressed += () => moveModule(manifest.Id, 1);
+        order.AddChild(earlier);
+        order.AddChild(later);
+        title.AddChild(order);
+
         var collapse = new List<Action>();
-        AddExpandable(content, "联机模式", [
-            ("本地联机", local), ("局域网联机", lan), ("Steam 邀请好友", steam)], collapse);
-        AddExpandable(content, "对局记录", [("最近对局", recent), ("保存对局", saved)], collapse);
-        AddExpandable(content, "棋谱导入", [("棋谱导入", pgnImport), ("残局导入", fenImport)], collapse);
-        AddExpandable(content, "人机模式", [("人机对决", ai), ("人机设置", aiSettings)], collapse);
-        OptionCount += 9; CardCount++;
+        foreach (var group in module.Routes.GroupBy(route => route.Group))
+        {
+            var leaves = group.OrderBy(route => route.Order)
+                .Select(route => (route.Label, (Action)(() => module.Activate(route.Id)))).ToArray();
+            AddExpandable(content, group.Key, leaves, collapse);
+        }
+        OptionCount += module.Routes.Count;
+        CardCount++;
         return panel;
     }
 
@@ -162,7 +129,8 @@ public partial class ModeGalleryScreen : Control
         header.Pressed += () => { var next = !expanded; if (next) foreach (var close in collapseSiblings) close(); SetExpanded(next); };
     }
 
-    private static Control CreateCardShell(string title, string subtitle, string texturePath, out VBoxContainer content)
+    private static Control CreateCardShell(string title, string subtitle, string texturePath,
+        out VBoxContainer content, out HBoxContainer titleRow)
     {
         var panel = UiStyle.CreatePanel(new Color(0.06f, 0.045f, 0.035f, 1), 16);
         panel.ClipContents = true; panel.CustomMinimumSize = new Vector2(370, 520);
@@ -173,77 +141,12 @@ public partial class ModeGalleryScreen : Control
         var inset = new MarginContainer(); inset.AddThemeConstantOverride("margin_left", 26); inset.AddThemeConstantOverride("margin_right", 26);
         inset.AddThemeConstantOverride("margin_top", 24); inset.AddThemeConstantOverride("margin_bottom", 24); panel.AddChild(inset);
         content = new VBoxContainer(); content.AddThemeConstantOverride("separation", 10); inset.AddChild(content);
-        var name = UiStyle.CreateTitle(title, 30); name.AddThemeColorOverride("font_shadow_color", new Color(0, 0, 0, 0.82f)); content.AddChild(name);
+        titleRow = new HBoxContainer();
+        content.AddChild(titleRow);
+        var name = UiStyle.CreateTitle(title, 30); name.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        name.AddThemeColorOverride("font_shadow_color", new Color(0, 0, 0, 0.82f)); titleRow.AddChild(name);
         var description = new Label { Text = subtitle }; description.AddThemeColorOverride("font_color", Colors.White); description.AddThemeFontSizeOverride("font_size", 15); content.AddChild(description);
         content.AddChild(new Control { CustomMinimumSize = new Vector2(0, 20) });
-        return panel;
-    }
-
-    private Control CreateCard(
-        string title,
-        string subtitle,
-        string texturePath,
-        IReadOnlyList<(string Label, Action Action, bool Primary)> options)
-    {
-        var panel = UiStyle.CreatePanel(new Color(0.06f, 0.045f, 0.035f, 1), 16);
-        panel.ClipContents = true;
-        panel.CustomMinimumSize = new Vector2(450, 520);
-        panel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        panel.SizeFlagsVertical = SizeFlags.ExpandFill;
-
-        var image = new TextureRect
-        {
-            Texture = GD.Load<Texture2D>(texturePath),
-            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
-            StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered,
-            MouseFilter = MouseFilterEnum.Ignore
-        };
-        panel.AddChild(image);
-        var shade = new ColorRect
-        {
-            Color = new Color(0.025f, 0.018f, 0.014f, 0.48f),
-            MouseFilter = MouseFilterEnum.Ignore
-        };
-        panel.AddChild(shade);
-
-        var inset = new MarginContainer();
-        inset.AddThemeConstantOverride("margin_left", 26);
-        inset.AddThemeConstantOverride("margin_right", 26);
-        inset.AddThemeConstantOverride("margin_top", 24);
-        inset.AddThemeConstantOverride("margin_bottom", 24);
-        panel.AddChild(inset);
-        var content = new VBoxContainer();
-        content.AddThemeConstantOverride("separation", 10);
-        inset.AddChild(content);
-        var name = UiStyle.CreateTitle(title, 30);
-        name.AddThemeColorOverride("font_shadow_color", new Color(0, 0, 0, 0.82f));
-        name.AddThemeConstantOverride("shadow_offset_x", 2);
-        name.AddThemeConstantOverride("shadow_offset_y", 2);
-        content.AddChild(name);
-        var description = new Label { Text = subtitle };
-        description.AddThemeColorOverride("font_color", Colors.White);
-        description.AddThemeColorOverride("font_shadow_color", new Color(0, 0, 0, 0.9f));
-        description.AddThemeFontSizeOverride("font_size", 15);
-        content.AddChild(description);
-        content.AddChild(new Control { SizeFlagsVertical = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(0, 100) });
-        foreach (var option in options)
-        {
-            var button = CreateCardButton(option.Label, option.Primary);
-            button.Pressed += option.Action;
-            content.AddChild(button);
-            OptionCount++;
-        }
-        CardCount++;
-        return panel;
-    }
-
-    private Control CreateGroupedCard(string title, string subtitle, string texturePath,
-        IReadOnlyList<(string Label, (string Label, Action Action)[] Leaves)> groups)
-    {
-        var panel = CreateCardShell(title, subtitle, texturePath, out var content);
-        var collapse = new List<Action>();
-        foreach (var group in groups) AddExpandable(content, group.Label, group.Leaves, collapse);
-        OptionCount += groups.Sum(group => group.Leaves.Length); CardCount++;
         return panel;
     }
 

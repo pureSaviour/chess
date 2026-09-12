@@ -1,4 +1,5 @@
 using Godot;
+using Xiangqi.GameHost;
 
 namespace Xiangqi.Presentation.Settings;
 
@@ -47,6 +48,11 @@ public sealed class AppSettings
     public int GomokuAiBoardSize { get; set; } = 15;
     public bool GomokuAiForbiddenMoves { get; set; }
     public int GomokuAiThinkMilliseconds { get; set; } = 1500;
+    /// <summary>
+    /// Preferred gallery order by stable module ID. Missing modules are retained on disk by the
+    /// catalog store but ignored while unavailable; newly discovered modules append deterministically.
+    /// </summary>
+    public string[] GameModuleOrder { get; set; } = [];
     public bool HasCustomProfile => !string.IsNullOrWhiteSpace(CustomPlayerId) ||
                                     !string.IsNullOrWhiteSpace(CustomAvatarPath);
 
@@ -83,11 +89,18 @@ public sealed class AppSettings
         result.GomokuAiBoardSize = config.GetValue("gomoku_ai", "board_size", 15).AsInt32();
         result.GomokuAiForbiddenMoves = config.GetValue("gomoku_ai", "forbidden_moves", false).AsBool();
         result.GomokuAiThinkMilliseconds = config.GetValue("gomoku_ai", "think_milliseconds", 1500).AsInt32();
+        result.GameModuleOrder = config.GetValue("gallery", "module_order", string.Empty).AsString()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         result.Clamp();
         return result;
     }
 
-    public AppSettings Copy() => (AppSettings)MemberwiseClone();
+    public AppSettings Copy()
+    {
+        var copy = (AppSettings)MemberwiseClone();
+        copy.GameModuleOrder = [.. GameModuleOrder];
+        return copy;
+    }
 
     public void UpdateFrom(AppSettings source)
     {
@@ -114,6 +127,7 @@ public sealed class AppSettings
         GomokuAiBoardSize = source.GomokuAiBoardSize;
         GomokuAiForbiddenMoves = source.GomokuAiForbiddenMoves;
         GomokuAiThinkMilliseconds = source.GomokuAiThinkMilliseconds;
+        GameModuleOrder = [.. source.GameModuleOrder];
     }
 
     public void SaveAndApply()
@@ -143,6 +157,7 @@ public sealed class AppSettings
         config.SetValue("gomoku_ai", "board_size", GomokuAiBoardSize);
         config.SetValue("gomoku_ai", "forbidden_moves", GomokuAiForbiddenMoves);
         config.SetValue("gomoku_ai", "think_milliseconds", GomokuAiThinkMilliseconds);
+        config.SetValue("gallery", "module_order", string.Join(',', GameModuleOrder));
         var error = config.Save(SettingsPath);
         if (error != Error.Ok) GD.PushWarning($"无法保存设置：{error}");
         Apply();
@@ -185,6 +200,11 @@ public sealed class AppSettings
         GomokuAiSideChoice = Math.Clamp(GomokuAiSideChoice, 0, 2);
         GomokuAiBoardSize = Math.Clamp(GomokuAiBoardSize, 9, 22);
         GomokuAiThinkMilliseconds = Math.Clamp(GomokuAiThinkMilliseconds, 100, 120_000);
+        GameModuleOrder = GameModuleOrder.Take(256).Select(value =>
+        {
+            try { return new GameModuleId(value).Value; }
+            catch (ArgumentException) { return string.Empty; }
+        }).Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
     }
 
     private static void SetBusVolume(string busName, float value, bool create)

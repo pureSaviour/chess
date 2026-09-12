@@ -16,6 +16,8 @@
 
 抽象是否有效，要看消费者是否依赖契约、组合根能否注入替代实现、测试能否不用真实平台运行，不以接口数量判断。领域聚合、值对象、工厂和不可变快照也是抽象，不必为每个类建立同名接口。
 
+画廊的跨玩法发现使用 `IGameModule` / `GameModuleCatalog`，只统一稳定身份、Manifest、能力、入口和顺序，不统一棋局快照或控制器。具体生命周期、错误、第三方信任和包计划见[玩法模块与 DLC](game-modules.md)。
+
 ## 2. 经典棋种：IReadOnlyBoard / IPieceRule
 
 定义：[BoardState.cs](../src/Xiangqi.Core/Domain/BoardState.cs)、[IPieceRule.cs](../src/Xiangqi.Core/Domain/Rules/IPieceRule.cs)。

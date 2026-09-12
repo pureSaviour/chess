@@ -18,6 +18,8 @@
 
 这些玩法共享设置、主题、反馈效果、部分记录设施和传输端口，但不共享一个“任意人数、任意棋盘”的通用棋局引擎。经典的红黑双方、9×10 坐标和协议语义不能套用到三国、军旗或五子棋。
 
+画廊现通过 `IGameModule` / `GameModuleCatalog` 发现五个内置玩法，并按稳定 GameId 保存玩家顺序；入口、分组和能力由模块声明，不再由画廊构造函数逐项硬编码。当前仍是静态编译的内置模块，下载、签名验证、第三方代码执行和独立记录根属于后续阶段，边界见[玩法模块与 DLC](docs/game-modules.md)。
+
 当前架构结论：核心棋规与 Godot UI 已分离；跨玩法抽象已有实际调用链，但经典房间编排、三国只读查询面和拓扑/投影注入仍存在已记录的边界缺口。证据及改进优先级见 [架构检查记录](docs/architecture-review.md)。
 
 ## 2. 工程与依赖方向
@@ -26,8 +28,12 @@
 Xiangqi（Godot 应用）
   ├── Presentation：页面、棋盘、输入、外观、动效、音频
   ├── 基础设施适配：ENet、Steam、外部 AI、玩家资料
+  ├── → Xiangqi.GameHost
   ├── → Xiangqi.Core
   └── → Xiangqi.Transport → Xiangqi.Core
+
+Xiangqi.GameHost
+  └── 玩法身份、Manifest、能力、入口与目录顺序（无引擎/棋规依赖）
 
 Xiangqi.Core
   ├── Application：会话、控制器、端口、命令、协议、棋钟
@@ -42,9 +48,10 @@ Xiangqi.ThreeNetwork.Tests → Xiangqi.Core + Xiangqi.Transport
 | 工程/入口 | 作用 |
 | --- | --- |
 | [Xiangqi.csproj](Xiangqi.csproj) | Godot 应用；桌面 `net10.0`，Android 条件 `net9.0` |
+| [Xiangqi.GameHost.csproj](src/Xiangqi.GameHost/Xiangqi.GameHost.csproj) | 第三方 SDK 的最小无引擎契约面；不引用具体玩法 |
 | [Xiangqi.Core.csproj](src/Xiangqi.Core/Xiangqi.Core.csproj) | 无引擎依赖的领域与应用层 |
 | [Xiangqi.Transport.csproj](src/Xiangqi.Transport/Xiangqi.Transport.csproj) | 三国 TCP、握手与连接管理，只引用 Core |
-| [Xiangqi.sln](Xiangqi.sln) | 应用、Core、Transport 与两个控制台测试工程 |
+| [Xiangqi.sln](Xiangqi.sln) | 应用、GameHost、Core、Transport 与两个控制台测试工程 |
 | [project.godot](project.godot) | Godot 主场景与渲染配置 |
 
 Steam 原生引用按 Windows 目标隔离。条件编译成功不能替代 Android 实机、跨设备 LAN 或 Steam 多账号验收；平台现状与构建依据见 [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md)。
@@ -88,6 +95,7 @@ Steam 原生引用按 Windows 目标隔离。条件编译成功不能替代 Andr
 | 修改范围 | 文档 |
 | --- | --- |
 | 新增或变更抽象、控制器、双人/三人传输、AI、主题、棋谱、试下 | [抽象层使用手册](docs/abstractions.md) |
+| 玩法目录、顺序、模块包、第三方信任与 DLC | [玩法模块与 DLC](docs/game-modules.md) |
 | Steam 初始化、开发 App ID、Lobby 与发布验收 | [Steam 集成](docs/steam-integration.md) |
 | XML 主题、atlas、shader、安全解析和资源租约 | [XML 主题包与 shader 接口](docs/theme-package-proposal.md) |
 | Godot/.NET 目标框架、条件构建和迁移风险 | [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md) |
