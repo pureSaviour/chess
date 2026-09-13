@@ -90,6 +90,7 @@ Steam 原生引用按 Windows 目标隔离。条件编译成功不能替代 Andr
 | 揭棋 | [docs/jieqi.md](docs/jieqi.md) | 暗子身份、洗牌承诺、权威脱敏协议、记录与翻面边界 |
 | 军旗 | [docs/junqi.md](docs/junqi.md) | 图拓扑、布阵/战斗、玩家视图隐私、联机控制器与 AC2 |
 | 五子棋 | [docs/gomoku.md](docs/gomoku.md) | 可配棋盘、禁手、控制器、可信房主协议、SGF 与 Rapfi |
+| AI 难度与分析 | [docs/ai-engines.md](docs/ai-engines.md) | 象棋/五子棋五档与高级搜索、五子棋胜率图、军旗/三国评估边界 |
 
 ### 4.2 按横切能力进入
 
@@ -112,7 +113,7 @@ Steam 原生引用按 Windows 目标隔离。条件编译成功不能替代 Andr
 - 双人 transport 只搬运有界数据；经典类型化消息与揭棋/军旗/五子棋的玩法协议不能互相解释。三国使用固定三席端口和独立同步模型。
 - 双人房聊天固定发送给唯一对手，不显示接收者选择；经典协调器和揭棋/军旗/五子棋原始包适配器共用 `RoomChatManager.PostToOpponent`。只有三人及以上房间允许选择全房间或指定席位。
 - LAN 与 Steam 可以复用传输适配层，但身份绑定、重放防护、权威模型和断线语义由各玩法应用层负责。
-- 经典 AI 使用 `IXiangqiAiEngine` 与 UCI；五子棋使用 `IGomokuAiEngine` 与 Piskvork/Rapfi。两个端口的局面、着法和取消语义不同。
+- 经典 AI 使用 `IXiangqiAiEngine` 与 UCI；五子棋使用 `IGomokuAiEngine` 与 Piskvork/Rapfi。两个端口的局面、着法和取消语义不同。两者只共享玩家可见的五档难度枚举，并分别映射时间、深度与引擎参数；详见 [AI 难度与分析](docs/ai-engines.md)。军旗与三国 AI 尚未实现。
 - 一键引擎安装由共享安装端口负责固定版本下载、SHA-256 校验、安全解压和必要文件探测；路径仅保存在本机设置中。
 - 玩法更新索引与玩法包使用两层签名边界：索引密钥授权“服务器推荐哪些版本”，包发布者密钥证明“内容由谁发布”；两者不能互相替代。
 - 声明式 DLC 只向宿主提交有界数据；落子、轮次、胜负和记录写入由宿主实现。包不能提供委托、脚本、程序集、Godot 节点或任意文件路径。

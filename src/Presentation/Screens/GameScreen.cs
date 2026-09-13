@@ -1253,7 +1253,11 @@ public partial class GameScreen : Control
     {
         try
         {
-            await _ai!.PlayAiTurnAsync(_aiConfiguration!.Value.MoveTimeMilliseconds);
+            var configuration = _aiConfiguration!.Value;
+            await _ai!.PlayAiTurnAsync(new AiSearchRequest(configuration.MoveTimeMilliseconds,
+                configuration.VariationCount, configuration.MaxDepth),
+                configuration.CandidateRank, configuration.MaximumCentipawnLoss,
+                configuration.UseDeterministicLegalMove);
         }
         catch (OperationCanceledException)
         {

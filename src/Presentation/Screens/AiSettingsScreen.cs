@@ -1,4 +1,5 @@
 using Godot;
+using Xiangqi.Core.Application;
 using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Settings;
 using Xiangqi.Presentation.UI;
@@ -11,6 +12,9 @@ namespace Xiangqi.Presentation.Screens;
 /// </summary>
 public partial class AiSettingsScreen : Control
 {
+    private readonly VBoxContainer _advancedSettings;
+    public bool AreAdvancedSettingsVisible => _advancedSettings.Visible;
+
     public AiSettingsScreen(AppSettings current, Action<AppSettings> save, Action back, EnginePackageInstaller installer)
     {
         var draft = current.Copy();
@@ -20,25 +24,35 @@ public partial class AiSettingsScreen : Control
         var header = new HBoxContainer(); root.AddChild(header);
         var title = UiStyle.CreateTitle("人机设置"); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
-        var panel = UiStyle.CreatePanel(UiStyle.PanelLight, 14); panel.CustomMinimumSize = new(760, 500); root.AddChild(panel);
-        var content = new VBoxContainer(); content.AddThemeConstantOverride("separation", 16); panel.AddChild(content);
-        content.AddChild(new Label { Text = "UCI 象棋引擎路径（对局与复盘共用）" });
-        var pathRow = new HBoxContainer(); content.AddChild(pathRow);
+        var panel = UiStyle.CreatePanel(UiStyle.PanelLight, 14); panel.CustomMinimumSize = new(760, 500); panel.SizeFlagsVertical = SizeFlags.ExpandFill; root.AddChild(panel);
+        var scroll = new ScrollContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill }; panel.AddChild(scroll);
+        var content = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill }; content.AddThemeConstantOverride("separation", 16); scroll.AddChild(content);
+        var basic = new GridContainer { Columns = 2 }; basic.AddThemeConstantOverride("h_separation", 20); basic.AddThemeConstantOverride("v_separation", 14); content.AddChild(basic);
+        basic.AddChild(new Label { Text = "难度" }); var difficulty = CreateDifficultyPicker(draft.AiDifficulty); basic.AddChild(difficulty);
+        basic.AddChild(new Label { Text = "玩家执子" }); var side = new OptionButton(); side.AddItem("玩家执红"); side.AddItem("玩家执黑"); side.AddItem("随机猜先"); side.Select(draft.AiSideChoice); basic.AddChild(side);
+        basic.AddChild(new Label { Text = "局时（分钟，0 不限）" }); var game = new SpinBox { MinValue = 0, MaxValue = 180, Value = draft.AiGameSeconds / 60.0, Step = 1 }; basic.AddChild(game);
+        basic.AddChild(new Label { Text = "步时（秒，0 不限）" }); var move = new SpinBox { MinValue = 0, MaxValue = 300, Value = draft.AiMoveSeconds, Step = 5 }; basic.AddChild(move);
+
+        var advancedToggle = new CheckButton { Text = "高级设置" }; content.AddChild(advancedToggle);
+        _advancedSettings = new VBoxContainer { Visible = false, SizeFlagsHorizontal = SizeFlags.ExpandFill }; _advancedSettings.AddThemeConstantOverride("separation", 12); content.AddChild(_advancedSettings);
+        advancedToggle.Toggled += visible => _advancedSettings.Visible = visible;
+        _advancedSettings.AddChild(new Label { Text = "UCI 象棋引擎路径（对局与复盘共用）" });
+        var pathRow = new HBoxContainer(); _advancedSettings.AddChild(pathRow);
         var path = new LineEdit { Text = draft.AiEnginePath, Editable = false, SizeFlagsHorizontal = SizeFlags.ExpandFill, PlaceholderText = "例如 pikafish.exe" }; pathRow.AddChild(path);
         var browse = UiStyle.CreateButton("浏览…"); pathRow.AddChild(browse);
         var picker = new FileDialog { Title = "选择 UCI 象棋引擎", FileMode = FileDialog.FileModeEnum.OpenFile,
             Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Filters = ["*.exe ; Windows 可执行文件", "* ; 所有文件"] };
         picker.FileSelected += selected => path.Text = selected; browse.Pressed += () => picker.PopupCenteredRatio(0.75f); AddChild(picker);
-        var installRow = new HBoxContainer(); installRow.AddThemeConstantOverride("separation", 12); content.AddChild(installRow);
+        var installRow = new HBoxContainer(); installRow.AddThemeConstantOverride("separation", 12); _advancedSettings.AddChild(installRow);
         var install = UiStyle.CreateButton("一键下载并配置皮卡鱼", true); installRow.AddChild(install);
         var installStatus = new Label { SizeFlagsHorizontal = SizeFlags.ExpandFill, AutowrapMode = TextServer.AutowrapMode.WordSmart }; installRow.AddChild(installStatus);
         var consent = new ConfirmationDialog { Title = "皮卡鱼许可确认", DialogText = EnginePackageInstaller.LicenseNotice(EnginePackageKind.Pikafish), OkButtonText = "同意并下载", CancelButtonText = "取消" }; AddChild(consent);
         var driver = new EngineInstallDriver(installer); AddChild(driver);
-        var grid = new GridContainer { Columns = 2 }; grid.AddThemeConstantOverride("h_separation", 20); grid.AddThemeConstantOverride("v_separation", 14); content.AddChild(grid);
-        grid.AddChild(new Label { Text = "玩家执子" }); var side = new OptionButton(); side.AddItem("玩家执红"); side.AddItem("玩家执黑"); side.AddItem("随机猜先"); side.Select(draft.AiSideChoice); grid.AddChild(side);
-        grid.AddChild(new Label { Text = "局时（分钟，0 不限）" }); var game = new SpinBox { MinValue = 0, MaxValue = 180, Value = draft.AiGameSeconds / 60.0, Step = 1 }; grid.AddChild(game);
-        grid.AddChild(new Label { Text = "步时（秒，0 不限）" }); var move = new SpinBox { MinValue = 0, MaxValue = 300, Value = draft.AiMoveSeconds, Step = 5 }; grid.AddChild(move);
-        grid.AddChild(new Label { Text = "对局每步思考（秒）" }); var think = new SpinBox { MinValue = .1, MaxValue = 120, Value = draft.AiThinkMilliseconds / 1000.0, Step = .1 }; grid.AddChild(think);
+        var grid = new GridContainer { Columns = 2 }; grid.AddThemeConstantOverride("h_separation", 20); grid.AddThemeConstantOverride("v_separation", 14); _advancedSettings.AddChild(grid);
+        grid.AddChild(new Label { Text = "自定义每步思考（秒）" }); var think = new SpinBox { MinValue = .1, MaxValue = 120, Value = draft.AiThinkMilliseconds / 1000.0, Step = .1 }; grid.AddChild(think);
+        grid.AddChild(new Label { Text = "最大深度（0=不限）" }); var depth = new SpinBox { MinValue = 0, MaxValue = 128, Value = draft.AiMaxDepth, Step = 1 }; grid.AddChild(depth);
+        grid.AddChild(new Label { Text = "线程数" }); var threads = new SpinBox { MinValue = 1, MaxValue = 256, Value = draft.AiThreads, Step = 1 }; grid.AddChild(threads);
+        grid.AddChild(new Label { Text = "哈希内存（MB）" }); var hash = new SpinBox { MinValue = 16, MaxValue = 4096, Value = draft.AiHashMegabytes, Step = 16 }; grid.AddChild(hash);
         grid.AddChild(new Label { Text = "复盘每步分析（秒）" }); var analysis = new SpinBox { MinValue = .1, MaxValue = 10, Value = draft.AiAnalysisMilliseconds / 1000.0, Step = .1 }; grid.AddChild(analysis);
         var saveButton = UiStyle.CreateButton("保存人机设置", true); content.AddChild(saveButton);
         void Capture()
@@ -46,6 +60,8 @@ public partial class AiSettingsScreen : Control
             draft.AiEnginePath = path.Text; draft.AiSideChoice = side.Selected;
             draft.AiGameSeconds = (int)Math.Round(game.Value * 60); draft.AiMoveSeconds = (int)move.Value;
             draft.AiThinkMilliseconds = (int)Math.Round(think.Value * 1000); draft.AiAnalysisMilliseconds = (int)Math.Round(analysis.Value * 1000);
+            draft.AiDifficulty = difficulty.Selected; draft.AiMaxDepth = (int)depth.Value;
+            draft.AiThreads = (int)threads.Value; draft.AiHashMegabytes = (int)hash.Value;
         }
         saveButton.Pressed += () => { Capture(); save(draft); };
         install.Pressed += () => consent.PopupCentered(new Vector2I(650, 300));
@@ -57,5 +73,13 @@ public partial class AiSettingsScreen : Control
 #if GODOT_ANDROID
         install.Disabled = true; install.TooltipText = "Android 当前不支持外部进程引擎。";
 #endif
+    }
+
+    private static OptionButton CreateDifficultyPicker(int selected)
+    {
+        var picker = new OptionButton();
+        foreach (var name in new[] { "入门", "简单", "适中", "困难", "大师", "自定义" }) picker.AddItem(name);
+        picker.Select(Math.Clamp(selected, 0, (int)AiDifficultyLevel.Custom));
+        return picker;
     }
 }

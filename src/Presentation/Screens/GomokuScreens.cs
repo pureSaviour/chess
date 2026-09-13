@@ -63,9 +63,45 @@ public partial class GomokuRecordScreen : Control
 
 public partial class GomokuReplayScreen : Control
 {
-    private readonly List<GomokuSnapshot> _positions=[]; private readonly GomokuBoardView _board=new(); private int _index; private readonly Label _ply=new();
-    public GomokuReplayScreen(GomokuGameRecord record,Action back)
-    {var game=new GomokuGame(record.BoardSize,record.Rules,record.Setup,record.SideToMove);_positions.Add(game.Snapshot);foreach(var move in record.Moves){game.TryPlace(move.Point,move.Color);_positions.Add(game.Snapshot);}SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);var margin=UiStyle.CreatePageMargin(32,20);AddChild(margin);var root=new VBoxContainer();margin.AddChild(root);var header=new HBoxContainer();root.AddChild(header);var title=UiStyle.CreateTitle("五子棋复盘",30);title.SizeFlagsHorizontal=SizeFlags.ExpandFill;header.AddChild(title);header.AddChild(_ply);var leave=UiStyle.CreateButton("返回");leave.Pressed+=back;header.AddChild(leave);var center=new CenterContainer{SizeFlagsVertical=SizeFlags.ExpandFill};center.AddChild(_board);root.AddChild(center);var controls=new HBoxContainer{Alignment=BoxContainer.AlignmentMode.Center};root.AddChild(controls);var previous=UiStyle.CreateButton("◀ 上一步");var next=UiStyle.CreateButton("下一步 ▶");controls.AddChild(previous);controls.AddChild(next);void Render(){_board.SetPosition(_positions[_index]);_ply.Text=$"第 {_index}/{_positions.Count-1} 手";previous.Disabled=_index==0;next.Disabled=_index==_positions.Count-1;}previous.Pressed+=()=>{if(_index>0)_index--;Render();};next.Pressed+=()=>{if(_index+1<_positions.Count)_index++;Render();};Render();}
+    private readonly List<GomokuSnapshot> _positions=[];
+    private readonly GomokuBoardView _board=new();
+    private readonly Label _ply=new();
+    private readonly Label? _score;
+    private readonly ReplayEvaluationGraph? _graph;
+    private readonly GomokuReplayAnalysisCoordinator? _analysis;
+    private int _index;
+
+    public GomokuReplayScreen(AppSettings settings,GomokuGameRecord record,Action back)
+    {
+        var game=new GomokuGame(record.BoardSize,record.Rules,record.Setup,record.SideToMove);
+        _positions.Add(game.Snapshot);
+        foreach(var move in record.Moves){var result=game.TryPlace(move.Point,move.Color);if(!result.IsSuccess)break;_positions.Add(game.Snapshot);}
+        SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);var margin=UiStyle.CreatePageMargin(32,20);AddChild(margin);
+        var root=new VBoxContainer();margin.AddChild(root);var header=new HBoxContainer();root.AddChild(header);
+        var title=UiStyle.CreateTitle("五子棋复盘",30);title.SizeFlagsHorizontal=SizeFlags.ExpandFill;header.AddChild(title);header.AddChild(_ply);
+        var leave=UiStyle.CreateButton("返回");leave.Pressed+=back;header.AddChild(leave);
+        var body=new HBoxContainer{SizeFlagsVertical=SizeFlags.ExpandFill};body.AddThemeConstantOverride("separation",16);root.AddChild(body);
+        var center=new CenterContainer{SizeFlagsHorizontal=SizeFlags.ExpandFill,SizeFlagsVertical=SizeFlags.ExpandFill};center.AddChild(_board);body.AddChild(center);
+        if(!string.IsNullOrWhiteSpace(settings.GomokuAiEnginePath)&&File.Exists(settings.GomokuAiEnginePath))
+        {
+            var panel=new VBoxContainer{CustomMinimumSize=new(350,0)};body.AddChild(panel);panel.AddChild(new Label{Text="Rapfi 胜率分析"});
+            _score=new Label{Text="正在计算…",HorizontalAlignment=HorizontalAlignment.Right};panel.AddChild(_score);
+            _graph=new ReplayEvaluationGraph();_graph.Configure(_positions.Count);_graph.SetLabels("黑优","白优");panel.AddChild(_graph);
+            var hint=new Label{Text="曲线为 Rapfi 给出的黑方胜率 · 50% 为均衡",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(hint,13);panel.AddChild(hint);
+            var engine=new PiskvorkProcessGomokuAiEngine(settings.GomokuAiEnginePath);
+            var template=new GomokuAiSearchRequest(_positions[0],settings.GomokuAiAnalysisMilliseconds,0,100,
+                settings.GomokuAiThreads,settings.GomokuAiMemoryMegabytes);
+            _analysis=new GomokuReplayAnalysisCoordinator(engine,_positions,template);_analysis.AnalysisAvailable+=OnAnalysisAvailable;
+        }
+        var timeline=new HSlider{MinValue=0,MaxValue=Math.Max(0,_positions.Count-1),Step=1,SizeFlagsHorizontal=SizeFlags.ExpandFill};root.AddChild(timeline);
+        var controls=new HBoxContainer{Alignment=BoxContainer.AlignmentMode.Center};root.AddChild(controls);var previous=UiStyle.CreateButton("◀ 上一步");var next=UiStyle.CreateButton("下一步 ▶");controls.AddChild(previous);controls.AddChild(next);
+        void Render(bool analyze=true){_board.SetPosition(_positions[_index]);_ply.Text=$"第 {_index}/{_positions.Count-1} 手";timeline.SetValueNoSignal(_index);previous.Disabled=_index==0;next.Disabled=_index==_positions.Count-1;_graph?.SetCurrent(_index);if(_analysis?.Cache.TryGetValue(_index,out var point)==true)Apply(point);else if(_score is not null)_score.Text="正在计算…";if(analyze&&_analysis is not null)_ = AnalyzeAsync(_index);}
+        previous.Pressed+=()=>{if(_index>0)_index--;Render();};next.Pressed+=()=>{if(_index+1<_positions.Count)_index++;Render();};timeline.ValueChanged+=value=>{_index=Math.Clamp((int)Math.Round(value),0,_positions.Count-1);Render();};Render();
+    }
+    private async Task AnalyzeAsync(int index){try{if(_analysis is not null)await _analysis.SelectAndSweepAsync(index);}catch(Exception error){if(_score is not null)_score.Text=$"引擎错误：{error.Message}";}}
+    private void OnAnalysisAvailable(GomokuReplayAnalysisPoint point){_graph?.SetWinRatePoint(point);if(point.PositionIndex==_index)Apply(point);}
+    private void Apply(GomokuReplayAnalysisPoint point){if(_score is not null)_score.Text=$"黑方胜率 {point.BlackWinRate:P1}";}
+    public override void _ExitTree(){if(_analysis is null)return;_analysis.AnalysisAvailable-=OnAnalysisAvailable;_= _analysis.DisposeAsync();}
 }
 
 public partial class GomokuImportScreen : Control
@@ -76,14 +112,31 @@ public partial class GomokuImportScreen : Control
 
 public partial class GomokuAiSettingsScreen : Control
 {
+    private readonly VBoxContainer _advancedSettings;
+    public bool AreAdvancedSettingsVisible => _advancedSettings.Visible;
+
     public GomokuAiSettingsScreen(AppSettings current,EnginePackageInstaller installer,Action<AppSettings> save,Action back)
     {
-        var draft=current.Copy();SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);var margin=UiStyle.CreatePageMargin(60,34);AddChild(margin);var root=new VBoxContainer();root.AddThemeConstantOverride("separation",14);margin.AddChild(root);var header=new HBoxContainer();root.AddChild(header);var title=UiStyle.CreateTitle("五子棋 · Rapfi 设置");title.SizeFlagsHorizontal=SizeFlags.ExpandFill;header.AddChild(title);var leave=UiStyle.CreateButton("返回画廊");leave.Pressed+=back;header.AddChild(leave);var panel=UiStyle.CreatePanel(UiStyle.PanelLight,14);panel.CustomMinimumSize=new(760,500);root.AddChild(panel);var content=new VBoxContainer();content.AddThemeConstantOverride("separation",16);panel.AddChild(content);
-        content.AddChild(new Label{Text="可选择现有 Rapfi，也可一键下载到本机应用数据目录。config.toml 与模型权重须留在同一目录；这些 GPLv3 文件不会打入应用安装包。",AutowrapMode=TextServer.AutowrapMode.WordSmart});
-        var pathRow=new HBoxContainer();content.AddChild(pathRow);var path=new LineEdit{Text=draft.GomokuAiEnginePath,Editable=false,SizeFlagsHorizontal=SizeFlags.ExpandFill,PlaceholderText="例如 pbrain-rapfi-windows-sse.exe"};pathRow.AddChild(path);var browse=UiStyle.CreateButton("浏览…");pathRow.AddChild(browse);var picker=new FileDialog{Title="选择 Rapfi 引擎",FileMode=FileDialog.FileModeEnum.OpenFile,Access=FileDialog.AccessEnum.Filesystem,UseNativeDialog=true,Filters=["*.exe ; Windows 可执行文件","* ; 所有文件"]};picker.FileSelected+=selected=>path.Text=selected;browse.Pressed+=()=>picker.PopupCenteredRatio(.75f);AddChild(picker);
-        var installRow=new HBoxContainer();installRow.AddThemeConstantOverride("separation",12);content.AddChild(installRow);var install=UiStyle.CreateButton("一键下载并配置 Rapfi",true);installRow.AddChild(install);var installStatus=new Label{SizeFlagsHorizontal=SizeFlags.ExpandFill,AutowrapMode=TextServer.AutowrapMode.WordSmart};installRow.AddChild(installStatus);var consent=new ConfirmationDialog{Title="Rapfi 许可确认",DialogText=EnginePackageInstaller.LicenseNotice(EnginePackageKind.Rapfi),OkButtonText="同意并下载",CancelButtonText="取消"};AddChild(consent);var driver=new EngineInstallDriver(installer);AddChild(driver);
-        var grid=new GridContainer{Columns=2};grid.AddThemeConstantOverride("h_separation",20);grid.AddThemeConstantOverride("v_separation",14);content.AddChild(grid);grid.AddChild(new Label{Text="玩家执子"});var side=new OptionButton();side.AddItem("玩家执黑");side.AddItem("玩家执白");side.AddItem("随机猜先");side.Select(draft.GomokuAiSideChoice);grid.AddChild(side);grid.AddChild(new Label{Text="棋盘路数（Rapfi 9–22）"});var size=new SpinBox{MinValue=9,MaxValue=22,Value=Math.Min(draft.GomokuAiBoardSize,22),Step=1};grid.AddChild(size);grid.AddChild(new Label{Text="规则"});var rules=new CheckButton{Text="启用连珠禁手",ButtonPressed=draft.GomokuAiForbiddenMoves};grid.AddChild(rules);grid.AddChild(new Label{Text="每步思考（秒）"});var think=new SpinBox{MinValue=.1,MaxValue=120,Value=draft.GomokuAiThinkMilliseconds/1000.0,Step=.1};grid.AddChild(think);
-        var note=new Label{Text="当前外部进程适配仅支持 Windows 桌面版；Android 不会下载或启动外部引擎。",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(note,13);content.AddChild(note);var saveButton=UiStyle.CreateButton("保存 Rapfi 设置",true);content.AddChild(saveButton);void Capture(){draft.GomokuAiEnginePath=path.Text;draft.GomokuAiSideChoice=side.Selected;draft.GomokuAiBoardSize=(int)size.Value;draft.GomokuAiForbiddenMoves=rules.ButtonPressed;draft.GomokuAiThinkMilliseconds=(int)Math.Round(think.Value*1000);}saveButton.Pressed+=()=>{Capture();save(draft);};
+        var draft=current.Copy();SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);var margin=UiStyle.CreatePageMargin(60,34);AddChild(margin);var root=new VBoxContainer();root.AddThemeConstantOverride("separation",14);margin.AddChild(root);var header=new HBoxContainer();root.AddChild(header);var title=UiStyle.CreateTitle("五子棋 · Rapfi 设置");title.SizeFlagsHorizontal=SizeFlags.ExpandFill;header.AddChild(title);var leave=UiStyle.CreateButton("返回画廊");leave.Pressed+=back;header.AddChild(leave);var panel=UiStyle.CreatePanel(UiStyle.PanelLight,14);panel.CustomMinimumSize=new(760,500);panel.SizeFlagsVertical=SizeFlags.ExpandFill;root.AddChild(panel);var scroll=new ScrollContainer{SizeFlagsHorizontal=SizeFlags.ExpandFill,SizeFlagsVertical=SizeFlags.ExpandFill};panel.AddChild(scroll);var content=new VBoxContainer{SizeFlagsHorizontal=SizeFlags.ExpandFill};content.AddThemeConstantOverride("separation",16);scroll.AddChild(content);
+        var basic=new GridContainer{Columns=2};basic.AddThemeConstantOverride("h_separation",20);basic.AddThemeConstantOverride("v_separation",14);content.AddChild(basic);
+        basic.AddChild(new Label{Text="难度"});var difficulty=new OptionButton();foreach(var name in new[]{"入门","简单","适中","困难","大师","自定义"})difficulty.AddItem(name);difficulty.Select(draft.GomokuAiDifficulty);basic.AddChild(difficulty);
+        basic.AddChild(new Label{Text="玩家执子"});var side=new OptionButton();side.AddItem("玩家执黑");side.AddItem("玩家执白");side.AddItem("随机猜先");side.Select(draft.GomokuAiSideChoice);basic.AddChild(side);
+        basic.AddChild(new Label{Text="棋盘路数（Rapfi 9–22）"});var size=new SpinBox{MinValue=9,MaxValue=22,Value=Math.Min(draft.GomokuAiBoardSize,22),Step=1};basic.AddChild(size);
+        basic.AddChild(new Label{Text="规则"});var rules=new CheckButton{Text="启用连珠禁手",ButtonPressed=draft.GomokuAiForbiddenMoves};basic.AddChild(rules);
+
+        var advancedToggle=new CheckButton{Text="高级设置"};content.AddChild(advancedToggle);
+        _advancedSettings=new VBoxContainer{Visible=false,SizeFlagsHorizontal=SizeFlags.ExpandFill};_advancedSettings.AddThemeConstantOverride("separation",12);content.AddChild(_advancedSettings);advancedToggle.Toggled+=visible=>_advancedSettings.Visible=visible;
+        _advancedSettings.AddChild(new Label{Text="可选择现有 Rapfi，也可一键下载到本机应用数据目录。config.toml 与模型权重须留在同一目录；这些 GPLv3 文件不会打入应用安装包。",AutowrapMode=TextServer.AutowrapMode.WordSmart});
+        var pathRow=new HBoxContainer();_advancedSettings.AddChild(pathRow);var path=new LineEdit{Text=draft.GomokuAiEnginePath,Editable=false,SizeFlagsHorizontal=SizeFlags.ExpandFill,PlaceholderText="例如 pbrain-rapfi-windows-sse.exe"};pathRow.AddChild(path);var browse=UiStyle.CreateButton("浏览…");pathRow.AddChild(browse);var picker=new FileDialog{Title="选择 Rapfi 引擎",FileMode=FileDialog.FileModeEnum.OpenFile,Access=FileDialog.AccessEnum.Filesystem,UseNativeDialog=true,Filters=["*.exe ; Windows 可执行文件","* ; 所有文件"]};picker.FileSelected+=selected=>path.Text=selected;browse.Pressed+=()=>picker.PopupCenteredRatio(.75f);AddChild(picker);
+        var installRow=new HBoxContainer();installRow.AddThemeConstantOverride("separation",12);_advancedSettings.AddChild(installRow);var install=UiStyle.CreateButton("一键下载并配置 Rapfi",true);installRow.AddChild(install);var installStatus=new Label{SizeFlagsHorizontal=SizeFlags.ExpandFill,AutowrapMode=TextServer.AutowrapMode.WordSmart};installRow.AddChild(installStatus);var consent=new ConfirmationDialog{Title="Rapfi 许可确认",DialogText=EnginePackageInstaller.LicenseNotice(EnginePackageKind.Rapfi),OkButtonText="同意并下载",CancelButtonText="取消"};AddChild(consent);var driver=new EngineInstallDriver(installer);AddChild(driver);
+        var grid=new GridContainer{Columns=2};grid.AddThemeConstantOverride("h_separation",20);grid.AddThemeConstantOverride("v_separation",14);_advancedSettings.AddChild(grid);
+        grid.AddChild(new Label{Text="自定义每步思考（秒）"});var think=new SpinBox{MinValue=.1,MaxValue=120,Value=draft.GomokuAiThinkMilliseconds/1000.0,Step=.1};grid.AddChild(think);
+        grid.AddChild(new Label{Text="最大深度（0=不限）"});var depth=new SpinBox{MinValue=0,MaxValue=128,Value=draft.GomokuAiMaxDepth,Step=1};grid.AddChild(depth);
+        grid.AddChild(new Label{Text="线程数"});var threads=new SpinBox{MinValue=1,MaxValue=256,Value=draft.GomokuAiThreads,Step=1};grid.AddChild(threads);
+        grid.AddChild(new Label{Text="内存（MB）"});var memory=new SpinBox{MinValue=16,MaxValue=4096,Value=draft.GomokuAiMemoryMegabytes,Step=16};grid.AddChild(memory);
+        grid.AddChild(new Label{Text="复盘每步分析（秒）"});var analysis=new SpinBox{MinValue=.1,MaxValue=10,Value=draft.GomokuAiAnalysisMilliseconds/1000.0,Step=.1};grid.AddChild(analysis);
+        var note=new Label{Text="深度与时间会同时限制搜索；0 表示不限制深度。外部进程仅支持 Windows 桌面版。",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(note,13);_advancedSettings.AddChild(note);var saveButton=UiStyle.CreateButton("保存 Rapfi 设置",true);content.AddChild(saveButton);
+        void Capture(){draft.GomokuAiEnginePath=path.Text;draft.GomokuAiSideChoice=side.Selected;draft.GomokuAiDifficulty=difficulty.Selected;draft.GomokuAiBoardSize=(int)size.Value;draft.GomokuAiForbiddenMoves=rules.ButtonPressed;draft.GomokuAiThinkMilliseconds=(int)Math.Round(think.Value*1000);draft.GomokuAiMaxDepth=(int)depth.Value;draft.GomokuAiThreads=(int)threads.Value;draft.GomokuAiMemoryMegabytes=(int)memory.Value;draft.GomokuAiAnalysisMilliseconds=(int)Math.Round(analysis.Value*1000);}saveButton.Pressed+=()=>{Capture();save(draft);};
         install.Pressed+=()=>consent.PopupCentered(new Vector2I(650,260));consent.Confirmed+=()=>{Capture();install.Disabled=browse.Disabled=saveButton.Disabled=true;installStatus.Text="准备下载…";driver.Start(EnginePackageKind.Rapfi);};driver.ProgressChanged+=value=>installStatus.Text=value.TotalBytes is>0?$"{value.Stage} {Math.Clamp(value.CompletedBytes*100/value.TotalBytes.Value,0,100)}%":value.Stage;driver.Completed+=result=>{draft.GomokuAiEnginePath=result.ExecutablePath;path.Text=result.ExecutablePath;installStatus.Text=$"已配置 Rapfi {result.Version}";save(draft);};driver.Failed+=error=>{install.Disabled=browse.Disabled=saveButton.Disabled=false;installStatus.Text=$"安装失败：{error}";};
 #if GODOT_ANDROID
         install.Disabled=true;install.TooltipText="Android 当前不支持外部进程引擎。";

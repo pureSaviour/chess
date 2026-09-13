@@ -170,9 +170,9 @@ AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并�
 
 定义：[AiContracts.cs](../src/Xiangqi.Core/Application/AiContracts.cs)；适配器：[UciProcessAiEngine.cs](../src/Presentation/AI/UciProcessAiEngine.cs)。
 
-InitializeAsync/NewGameAsync/SearchAsync/DisposeAsync 是后端生命周期；SearchAsync 接收经典快照与搜索参数，返回 BestMove/候选线路，不允许持有会话并落子。实现必须响应取消、限定输出/超时，释放拥有的进程/连接。
+InitializeAsync/NewGameAsync/SearchAsync/DisposeAsync 是后端生命周期；SearchAsync 接收经典快照与搜索参数，返回 BestMove/候选线路，不允许持有会话并落子。搜索参数包含时间、MultiPV 候选数和可选最大深度；UCI 适配器另由组合根注入线程/哈希资源。实现必须响应取消、限定输出/超时，释放拥有的进程/连接。
 
-AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子复验和人类决策轮撤销。测试用 FakeAiEngine 隔离真实进程；新适配器仍必须验证非法输出、过期结果、取消、释放和重新开局。
+AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子复验和人类决策轮撤销。较低难度允许从有界 MultiPV 中选择非首选着，但候选先逐个经领域规则复验，并受相对最佳着分差限制；失败即回退最佳合法着。测试用 FakeAiEngine 隔离真实进程；新适配器仍必须验证非法输出、过期结果、取消、释放和重新开局。
 
 端口面向经典棋力分析，不适用于三国，也没有自然语言聊天方法。当前 UI 配置必须有 EnginePath，且 GameScreen 要求实现为 Node。远程实现应先补独立的后端配置与驱动/生命周期注入，不应伪造一个无用本地路径来绕过约束。
 
@@ -180,9 +180,9 @@ AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子�
 
 定义：[GomokuAi.cs](../src/Xiangqi.Core/Application/Gomoku/GomokuAi.cs)；桌面适配器：[PiskvorkProcessGomokuAiEngine.cs](../src/Presentation/AI/PiskvorkProcessGomokuAiEngine.cs)。
 
-`IGomokuAiEngine` 的输入是不可变局面和有限思考预算，输出只是候选交叉点。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是实际消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。屏幕退出释放 controller，controller 取消搜索并幂等释放 engine。
+`IGomokuAiEngine` 的输入是不可变局面及有界的时间、最大深度、强度、线程、内存，着法输出只是候选交叉点。`AnalyzeAsync` 另返回黑方视角的有限胜率/原始估值，不返回可写棋局。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是对局消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。`GomokuReplayAnalysisCoordinator` 则串行分析、优先当前选择、缓存并抑制取消后的陈旧完成。屏幕退出释放 controller/coordinator，后者取消搜索并幂等释放 engine。
 
-新增实现应复用这一端口并说明线程、取消和资源所有权。Piskvork 适配器每次搜索拥有子进程，禁用 shell，限制协议行，取消时终止进程树。常见误用包括：UI 直接采用引擎坐标、把 Rapfi 模型复制进导出包、从后台任务触碰 Godot 节点、或者把 rule 2 当成所有五子棋规则。测试入口为核心自运行测试中的 fake engine；真实适配器另做官方引擎烟测。当前 Android 没有外部进程实现。
+新增实现应复用这一端口并说明线程、取消和资源所有权。Piskvork 适配器每次搜索/分析拥有子进程，禁用 shell，限制协议行，取消时终止进程树。常见误用包括：UI 直接采用引擎坐标、把静态估值称为固定深度搜索胜率、把 Rapfi 模型复制进导出包、从后台任务触碰 Godot 节点、或者把 rule 2 当成所有五子棋规则。测试入口为核心自运行测试中的 fake engine；真实适配器另做官方引擎烟测。当前 Android 没有外部进程实现。五档映射、协议翻译、兼容策略和军旗/三国的未实现边界见 [AI 难度与分析](ai-engines.md)。
 
 ### 外部引擎包：EnginePackageInstaller / EngineInstallDriver
 

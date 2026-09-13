@@ -4,9 +4,36 @@ using Xiangqi.Core.Domain.Grid;
 
 namespace Xiangqi.Core.Application.Gomoku;
 
-/// <summary>Engine-neutral request for one Gomoku move. Position is immutable and authoritative;
-/// ThinkMilliseconds is a bounded per-move budget, not permission to mutate the match.</summary>
-public readonly record struct GomokuAiSearchRequest(GomokuSnapshot Position, int ThinkMilliseconds);
+/// <summary>Engine-neutral request for one Gomoku move or evaluation. Position is immutable and
+/// authoritative; all resource/search values are bounded and never grant permission to mutate it.</summary>
+public readonly record struct GomokuAiSearchRequest(
+    GomokuSnapshot Position,
+    int ThinkMilliseconds,
+    int MaxDepth = 0,
+    int Strength = 100,
+    int Threads = 1,
+    int MemoryMegabytes = 256)
+{
+    public GomokuAiSearchRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Position);
+        if (ThinkMilliseconds is < 100 or > 120_000) throw new ArgumentOutOfRangeException(nameof(ThinkMilliseconds));
+        if (MaxDepth is < 0 or > 128) throw new ArgumentOutOfRangeException(nameof(MaxDepth));
+        if (Strength is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(Strength));
+        if (Threads is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(Threads));
+        if (MemoryMegabytes is < 16 or > 4096) throw new ArgumentOutOfRangeException(nameof(MemoryMegabytes));
+        return this;
+    }
+}
+
+public readonly record struct GomokuAnalysisResult(float BlackWinRate, int Evaluation, int Depth)
+{
+    public GomokuAnalysisResult Validate() => !float.IsFinite(BlackWinRate) || BlackWinRate is < 0 or > 1
+        ? throw new ArgumentOutOfRangeException(nameof(BlackWinRate)) : this;
+}
+
+public readonly record struct GomokuReplayAnalysisPoint(int PositionIndex, float BlackWinRate,
+    int Evaluation, int Depth);
 
 /// <summary>Replaceable Gomoku analysis port. Implementations own their worker/process resources,
 /// accept only one search at a time, honor cancellation, and return an untrusted candidate point.
@@ -17,6 +44,73 @@ public interface IGomokuAiEngine : IAsyncDisposable
     bool IsReady { get; }
     ValueTask InitializeAsync(int boardSize, GomokuRuleSet rules, CancellationToken cancellationToken = default);
     ValueTask<GridPoint> FindMoveAsync(GomokuAiSearchRequest request, CancellationToken cancellationToken = default);
+    ValueTask<GomokuAnalysisResult> AnalyzeAsync(GomokuAiSearchRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Serial replay analyzer. The coordinator owns the engine, prioritizes the selected
+/// position, caches black-perspective win rates, and suppresses stale results after cancellation.</summary>
+public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
+{
+    private readonly IGomokuAiEngine _engine;
+    private readonly IReadOnlyList<GomokuSnapshot> _positions;
+    private readonly GomokuAiSearchRequest _template;
+    private readonly Dictionary<int, GomokuReplayAnalysisPoint> _cache = [];
+    private CancellationTokenSource? _active;
+    private long _generation;
+    private bool _disposed;
+
+    public GomokuReplayAnalysisCoordinator(IGomokuAiEngine engine,
+        IReadOnlyList<GomokuSnapshot> positions, GomokuAiSearchRequest template)
+    {
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _positions = positions ?? throw new ArgumentNullException(nameof(positions));
+        if (positions.Count == 0) throw new ArgumentException("Replay has no positions.", nameof(positions));
+        _template = template.Validate();
+    }
+
+    public event Action<GomokuReplayAnalysisPoint>? AnalysisAvailable;
+    public IReadOnlyDictionary<int, GomokuReplayAnalysisPoint> Cache => _cache;
+
+    public async Task SelectAndSweepAsync(int selectedIndex)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (selectedIndex < 0 || selectedIndex >= _positions.Count) throw new ArgumentOutOfRangeException(nameof(selectedIndex));
+        _active?.Cancel(); _active?.Dispose();
+        var operation = _active = new CancellationTokenSource();
+        var generation = ++_generation;
+        try
+        {
+            var first = _positions[0];
+            await _engine.InitializeAsync(first.BoardSize, first.Rules, operation.Token);
+            foreach (var index in Enumerable.Range(0, _positions.Count)
+                         .OrderBy(i => i == selectedIndex ? -1 : Math.Abs(i - selectedIndex)))
+            {
+                operation.Token.ThrowIfCancellationRequested();
+                if (_cache.ContainsKey(index)) continue;
+                var position = _positions[index];
+                GomokuAnalysisResult analysis;
+                if (position.IsFinished)
+                    analysis = new(position.Winner == StoneColor.Black ? 1f : position.Winner == StoneColor.White ? 0f : .5f,
+                        position.Winner == StoneColor.Black ? 30_000 : position.Winner == StoneColor.White ? -30_000 : 0, 0);
+                else
+                    analysis = (await _engine.AnalyzeAsync(_template with { Position = position }, operation.Token)).Validate();
+                if (generation != _generation) return;
+                var point = new GomokuReplayAnalysisPoint(index, analysis.BlackWinRate, analysis.Evaluation, analysis.Depth);
+                _cache[index] = point;
+                AnalysisAvailable?.Invoke(point);
+            }
+        }
+        catch (OperationCanceledException) when (operation.IsCancellationRequested) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true; _generation++;
+        _active?.Cancel(); _active?.Dispose(); _active = null;
+        await _engine.DisposeAsync();
+    }
 }
 
 /// <summary>Human-versus-engine application coordinator. It is the sole owner of the authoritative
@@ -29,6 +123,11 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
     private readonly IGomokuAiEngine _engine;
     private readonly StoneColor _humanColor;
     private readonly int _thinkMilliseconds;
+    private readonly int _maxDepth;
+    private readonly int _strength;
+    private readonly int _threads;
+    private readonly int _memoryMegabytes;
+    private readonly bool _useDeterministicLegalMove;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ConcurrentQueue<AiCompletion> _completions = new();
     private bool _initialized;
@@ -36,14 +135,22 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
     private bool _disposed;
 
     public AiGomokuMatchController(IGomokuAiEngine engine, int boardSize, GomokuRuleSet rules,
-        StoneColor humanColor, int thinkMilliseconds)
+        StoneColor humanColor, int thinkMilliseconds, int maxDepth = 0, int strength = 100,
+        int threads = 1, int memoryMegabytes = 256, bool useDeterministicLegalMove = false)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         if (!Enum.IsDefined(humanColor)) throw new ArgumentOutOfRangeException(nameof(humanColor));
         if (thinkMilliseconds is < 100 or > 120_000) throw new ArgumentOutOfRangeException(nameof(thinkMilliseconds));
         _game = new GomokuGame(boardSize, rules);
+        var search = new GomokuAiSearchRequest(_game.Snapshot, thinkMilliseconds, maxDepth,
+            strength, threads, memoryMegabytes).Validate();
         _humanColor = humanColor;
-        _thinkMilliseconds = thinkMilliseconds;
+        _thinkMilliseconds = search.ThinkMilliseconds;
+        _maxDepth = search.MaxDepth;
+        _strength = search.Strength;
+        _threads = search.Threads;
+        _memoryMegabytes = search.MemoryMegabytes;
+        _useDeterministicLegalMove = useDeterministicLegalMove;
     }
 
     public event Action? Changed;
@@ -118,11 +225,29 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
     {
         try
         {
-            var point = await _engine.FindMoveAsync(new(snapshot, _thinkMilliseconds), _lifetime.Token);
+            var point = _useDeterministicLegalMove
+                ? SelectDeterministicLegalPoint(snapshot)
+                : await _engine.FindMoveAsync(new(snapshot, _thinkMilliseconds, _maxDepth,
+                    _strength, _threads, _memoryMegabytes), _lifetime.Token);
             _completions.Enqueue(new(snapshot.PlyNumber, point, null));
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) { _completions.Enqueue(new(snapshot.PlyNumber, default, error.Message)); }
+    }
+
+    private static GridPoint SelectDeterministicLegalPoint(GomokuSnapshot snapshot)
+    {
+        var legal = new List<GridPoint>();
+        for (var row = 0; row < snapshot.BoardSize; row++)
+        for (var column = 0; column < snapshot.BoardSize; column++)
+        {
+            var point = new GridPoint(column, row);
+            var verifier = new GomokuGame(snapshot.BoardSize, snapshot.Rules,
+                snapshot.Stones, snapshot.SideToMove);
+            if (verifier.TryPlace(point, snapshot.SideToMove).IsSuccess) legal.Add(point);
+        }
+        if (legal.Count == 0) throw new InvalidDataException("当前局面没有可供入门 AI 选择的合法落点。");
+        return legal[(int)((snapshot.PlyNumber * 37 + 11) % legal.Count)];
     }
 
     private readonly record struct AiCompletion(long ExpectedPly, GridPoint Point, string? Error);

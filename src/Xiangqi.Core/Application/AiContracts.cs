@@ -12,7 +12,12 @@ public readonly record struct AiMatchConfiguration(
     TimeControl TimeControl,
     PieceSide HumanSide,
     int MoveTimeMilliseconds,
-    string EnginePath)
+    string EnginePath,
+    int MaxDepth = 0,
+    int VariationCount = 1,
+    int CandidateRank = 1,
+    int MaximumCentipawnLoss = 0,
+    bool UseDeterministicLegalMove = false)
 {
     public PieceSide AiSide => HumanSide.Opponent();
 
@@ -21,19 +26,27 @@ public readonly record struct AiMatchConfiguration(
         TimeControl.Validate();
         if (MoveTimeMilliseconds is < 100 or > 120_000)
             throw new ArgumentOutOfRangeException(nameof(MoveTimeMilliseconds), "AI 思考时间必须在 0.1 到 120 秒之间。");
+        if (MaxDepth is < 0 or > 128) throw new ArgumentOutOfRangeException(nameof(MaxDepth));
+        if (VariationCount is < 1 or > 8) throw new ArgumentOutOfRangeException(nameof(VariationCount));
+        if (CandidateRank is < 1 or > 8 || CandidateRank > VariationCount)
+            throw new ArgumentOutOfRangeException(nameof(CandidateRank));
+        if (MaximumCentipawnLoss is < 0 or > 10_000)
+            throw new ArgumentOutOfRangeException(nameof(MaximumCentipawnLoss));
         if (string.IsNullOrWhiteSpace(EnginePath))
             throw new ArgumentException("请选择 AI 引擎程序。", nameof(EnginePath));
         return this with { EnginePath = EnginePath.Trim() };
     }
 }
 
-public readonly record struct AiSearchRequest(int MoveTimeMilliseconds, int VariationCount = 1)
+public readonly record struct AiSearchRequest(int MoveTimeMilliseconds, int VariationCount = 1, int MaxDepth = 0)
 {
     public AiSearchRequest Validate() => MoveTimeMilliseconds is < 100 or > 120_000
         ? throw new ArgumentOutOfRangeException(nameof(MoveTimeMilliseconds))
         : VariationCount is < 1 or > 8
             ? throw new ArgumentOutOfRangeException(nameof(VariationCount))
-            : this;
+            : MaxDepth is < 0 or > 128
+                ? throw new ArgumentOutOfRangeException(nameof(MaxDepth))
+                : this;
 }
 
 public readonly record struct AiVariation(
@@ -324,6 +337,14 @@ public sealed class AiGameCoordinator : IAsyncDisposable
     public async ValueTask<MoveResult?> PlayAiTurnAsync(
         int moveTimeMilliseconds,
         CancellationToken cancellationToken = default)
+        => await PlayAiTurnAsync(new AiSearchRequest(moveTimeMilliseconds), 1, 0, false, cancellationToken);
+
+    public async ValueTask<MoveResult?> PlayAiTurnAsync(
+        AiSearchRequest request,
+        int candidateRank,
+        int maximumCentipawnLoss,
+        bool useDeterministicLegalMove = false,
+        CancellationToken cancellationToken = default)
     {
         if (_disposed || IsThinking || _session.Snapshot.IsFinished ||
             _session.Snapshot.SideToMove != AiSide) return null;
@@ -331,20 +352,63 @@ public sealed class AiGameCoordinator : IAsyncDisposable
         using var linked = BeginOperation(cancellationToken);
         try
         {
-            var search = await _engine.SearchAsync(snapshot,
-                new AiSearchRequest(moveTimeMilliseconds), linked.Token);
+            request.Validate();
+            if (candidateRank < 1 || candidateRank > request.VariationCount)
+                throw new ArgumentOutOfRangeException(nameof(candidateRank));
+            if (maximumCentipawnLoss < 0) throw new ArgumentOutOfRangeException(nameof(maximumCentipawnLoss));
+            AiSearchResult? search = useDeterministicLegalMove
+                ? null
+                : await _engine.SearchAsync(snapshot, request, linked.Token);
             if (_session.Snapshot.PlyNumber != snapshot.PlyNumber ||
                 _session.Snapshot.SideToMove != AiSide || _session.Snapshot.IsFinished) return null;
-            var result = _session.TryMove(search.BestMove.From, search.BestMove.To);
+            var selected = search is null
+                ? SelectDeterministicLegalMove(snapshot)
+                : SelectVerifiedCandidate(snapshot, search.Value, candidateRank, maximumCentipawnLoss);
+            var result = _session.TryMove(selected.From, selected.To);
             if (!result.IsSuccess)
                 throw new InvalidOperationException(
-                    $"AI 返回了未通过本地棋规校验的着法 {XiangqiUciNotation.FormatMove(search.BestMove)}：{result.Rejection}。");
+                    $"AI 返回了未通过本地棋规校验的着法 {XiangqiUciNotation.FormatMove(selected)}：{result.Rejection}。");
             return result;
         }
         finally
         {
             EndOperation(linked);
         }
+    }
+
+    private static ChessMove SelectDeterministicLegalMove(GameSnapshot snapshot)
+    {
+        var verifier = ChessGame.FromPosition(snapshot);
+        var legal = snapshot.Pieces.Where(piece => piece.Piece.Side == snapshot.SideToMove)
+            .OrderBy(piece => piece.Position.Rank).ThenBy(piece => piece.Position.File)
+            .SelectMany(piece => verifier.GetLegalDestinations(piece.Position)
+                .OrderBy(point => point.Rank).ThenBy(point => point.File)
+                .Select(point => new ChessMove(piece.Position, point)))
+            .ToArray();
+        if (legal.Length == 0) throw new InvalidDataException("当前局面没有可供入门 AI 选择的合法着法。");
+        return legal[(snapshot.PlyNumber * 37 + 11) % legal.Length];
+    }
+
+    private static ChessMove SelectVerifiedCandidate(GameSnapshot snapshot, AiSearchResult search,
+        int candidateRank, int maximumCentipawnLoss)
+    {
+        var legal = new List<AiVariation>();
+        foreach (var candidate in search.Variations.OrderBy(value => value.Rank))
+        {
+            var verifier = ChessGame.FromPosition(snapshot);
+            if (verifier.TryMove(candidate.Move).IsSuccess) legal.Add(candidate);
+        }
+        if (legal.Count == 0) throw new InvalidDataException("AI 没有返回任何合法候选着法。");
+        var best = legal[0];
+        var requested = legal.FirstOrDefault(value => value.Rank == candidateRank);
+        if (requested.Equals(default(AiVariation))) return best.Move;
+        if (candidateRank == 1)
+            return requested.Move;
+        if (best.MateIn is not null || requested.MateIn is not null ||
+            best.CentipawnScore is null || requested.CentipawnScore is null)
+            return best.Move;
+        return best.CentipawnScore.Value - requested.CentipawnScore.Value <= maximumCentipawnLoss
+            ? requested.Move : best.Move;
     }
 
     public async ValueTask<AiSearchResult> AnalyzeAsync(

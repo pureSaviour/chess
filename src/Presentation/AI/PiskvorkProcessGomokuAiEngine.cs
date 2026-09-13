@@ -61,13 +61,11 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
 
     public async ValueTask<GridPoint> FindMoveAsync(GomokuAiSearchRequest request, CancellationToken cancellationToken = default)
     {
+        request = request.Validate();
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!IsReady) throw new InvalidOperationException("Rapfi 尚未初始化。");
         if (request.Position.BoardSize != _boardSize || request.Position.Rules != _rules)
             throw new ArgumentException("AI 请求与初始化棋盘配置不一致。", nameof(request));
-        if (request.ThinkMilliseconds is < 100 or > 120_000)
-            throw new ArgumentOutOfRangeException(nameof(request), "AI 思考时间必须在 100–120000 毫秒之间。");
-
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -81,8 +79,12 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
                 throw new InvalidDataException($"Piskvork 握手失败：{response}");
             await WriteLine(process, $"INFO timeout_turn {request.ThinkMilliseconds}", timeout.Token);
             await WriteLine(process, $"INFO time_left {Math.Max(request.ThinkMilliseconds * 10L, request.ThinkMilliseconds)}", timeout.Token);
-            await WriteLine(process, "INFO max_memory 268435456", timeout.Token);
+            await WriteLine(process, $"INFO max_memory {request.MemoryMegabytes * 1024L * 1024L}", timeout.Token);
             await WriteLine(process, $"INFO rule {(_rules == GomokuRuleSet.RenjuForbiddenMoves ? 2 : 0)}", timeout.Token);
+            await WriteLine(process, $"INFO thread_num {request.Threads}", timeout.Token);
+            if (request.MaxDepth > 0)
+                await WriteLine(process, $"INFO max_depth {request.MaxDepth}", timeout.Token);
+            await WriteLine(process, $"INFO strength {request.Strength}", timeout.Token);
 
             if (request.Position.Stones.Count == 0) await WriteLine(process, "BEGIN", timeout.Token);
             else
@@ -100,6 +102,44 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
             var point = ParsePoint(moveText, _boardSize);
             await EndProcess(process);
             return point;
+        }
+        finally { ClearActiveProcess(); _gate.Release(); }
+    }
+
+    public async ValueTask<GomokuAnalysisResult> AnalyzeAsync(GomokuAiSearchRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        request = request.Validate();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!IsReady) throw new InvalidOperationException("Rapfi 尚未初始化。");
+        if (request.Position.BoardSize != _boardSize || request.Position.Rules != _rules)
+            throw new ArgumentException("AI 请求与初始化棋盘配置不一致。", nameof(request));
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(request.ThinkMilliseconds + 10_000);
+            using var process = StartProcess();
+            using var registration = timeout.Token.Register(() => Kill(process));
+            await WriteLine(process, $"START {_boardSize}", timeout.Token);
+            var response = await ReadSignificantLine(process, timeout.Token);
+            if (!response.Equals("OK", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Piskvork 握手失败：{response}");
+            await WriteLine(process, $"INFO max_memory {request.MemoryMegabytes * 1024L * 1024L}", timeout.Token);
+            await WriteLine(process, $"INFO rule {(_rules == GomokuRuleSet.RenjuForbiddenMoves ? 2 : 0)}", timeout.Token);
+            await WriteLine(process, $"INFO thread_num {request.Threads}", timeout.Token);
+            await WriteLine(process, "YXBOARD", timeout.Token);
+            foreach (var stone in request.Position.Stones)
+            {
+                var player = stone.Color == StoneColor.Black ? 1 : 2;
+                await WriteLine(process, $"{stone.Point.Column},{stone.Point.Row},{player}", timeout.Token);
+            }
+            await WriteLine(process, "DONE", timeout.Token);
+            await WriteLine(process, "TRACESEARCH", timeout.Token);
+            var analysis = await ReadStaticEvaluation(process, timeout.Token);
+            await EndProcess(process);
+            return analysis;
         }
         finally { ClearActiveProcess(); _gate.Release(); }
     }
@@ -170,6 +210,29 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
         if (column < 0 || row < 0 || column >= boardSize || row >= boardSize)
             throw new InvalidDataException($"Rapfi 返回越界坐标：{value}");
         return point;
+    }
+
+    private static async Task<GomokuAnalysisResult> ReadStaticEvaluation(Process process,
+        CancellationToken cancellationToken)
+    {
+        const string marker = "Static Eval[Black]:";
+        while (true)
+        {
+            var line = await process.StandardOutput.ReadLineAsync(cancellationToken)
+                ?? throw new EndOfStreamException("Rapfi 在返回局面估值前退出。");
+            if (line.Length > MaximumLineLength) throw new InvalidDataException("Rapfi 输出行超过长度上限。");
+            var markerIndex = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0) continue;
+            var payload = line[(markerIndex + marker.Length)..].Trim();
+            var valueToken = payload.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            var wdlIndex = payload.IndexOf("WDL ", StringComparison.OrdinalIgnoreCase);
+            if (!int.TryParse(valueToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out var evaluation) || wdlIndex < 0)
+                throw new InvalidDataException($"Rapfi 局面估值格式无效：{line}");
+            var rateToken = payload[(wdlIndex + 4)..].Split([',', ')', ' '], StringSplitOptions.RemoveEmptyEntries)[0];
+            if (!float.TryParse(rateToken, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent) || !float.IsFinite(percent))
+                throw new InvalidDataException($"Rapfi 胜率格式无效：{line}");
+            return new GomokuAnalysisResult(Math.Clamp(percent / 100f, 0f, 1f), evaluation, 0);
+        }
     }
 
     private static async Task EndProcess(Process process)

@@ -34,7 +34,9 @@ var tests = new (string Name, Action Run)[]
     ("试下分支不修改权威棋局", TrialIsIsolated),
     ("试下着法复用权威会话的表现语义", TrialPresentationCues),
     ("复盘分析串行缓存并将评分归一到红方", ReplayAnalysis),
-    ("AI 着法经 GameSession 校验且可整回合悔棋", AiCoordinator)
+    ("AI 着法经 GameSession 校验且可整回合悔棋", AiCoordinator),
+    ("象棋低难度只从合法且分差受限的候选中选着", AiDifficultyCandidate),
+    ("象棋入门档使用规则合法着而不调用强引擎", AiBeginnerUsesLegalBaseline)
 };
 
 tests = tests.Concat(ThreeKingdomsTests.All).ToArray();
@@ -530,10 +532,14 @@ static void AiCoordinator()
     coordinator.InitializeAsync().AsTask().GetAwaiter().GetResult();
     True(engine.IsReady);
     True(coordinator.SubmitHumanMove(new BoardPosition(0, 3), new BoardPosition(0, 4)).IsSuccess);
-    var result = coordinator.PlayAiTurnAsync(100).AsTask().GetAwaiter().GetResult();
+    var profile = AiDifficultyProfiles.Xiangqi(AiDifficultyLevel.Medium);
+    True(profile.MaxDepth > 0); True(profile.VariationCount > 1);
+    var result = coordinator.PlayAiTurnAsync(new AiSearchRequest(100, 3, 7), 2, 100)
+        .AsTask().GetAwaiter().GetResult();
     True(result is { IsSuccess: true });
     Equal(2, session.Snapshot.PlyNumber);
     Equal(PieceSide.Red, session.Snapshot.SideToMove);
+    Equal(7, engine.LastMaxDepth);
 
     var analysis = coordinator.AnalyzeAsync(100, 3).AsTask().GetAwaiter().GetResult();
     Equal(aiMove, analysis.BestMove);
@@ -544,6 +550,35 @@ static void AiCoordinator()
     Equal(PieceSide.Red, session.Snapshot.SideToMove);
     coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
     True(engine.WasDisposed);
+}
+
+static void AiDifficultyCandidate()
+{
+    var session = new GameSession();
+    var best = new ChessMove(new BoardPosition(0, 6), new BoardPosition(0, 5));
+    var second = new ChessMove(new BoardPosition(2, 6), new BoardPosition(2, 5));
+    var coordinator = new AiGameCoordinator(session, new RankedFakeAiEngine(best, second), PieceSide.Red);
+    coordinator.InitializeAsync().AsTask().GetAwaiter().GetResult();
+    True(coordinator.SubmitHumanMove(new BoardPosition(0, 3), new BoardPosition(0, 4)).IsSuccess);
+    var result = coordinator.PlayAiTurnAsync(new AiSearchRequest(100, 2, 5), 2, 100)
+        .AsTask().GetAwaiter().GetResult();
+    True(result is { IsSuccess: true });
+    True(session.Snapshot.Pieces.Any(piece => piece.Position == second.To && piece.Piece.Side == PieceSide.Black));
+    coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+}
+
+static void AiBeginnerUsesLegalBaseline()
+{
+    var session = new GameSession();
+    var engine = new FakeAiEngine(new ChessMove(new BoardPosition(99, 99), new BoardPosition(99, 99)));
+    var coordinator = new AiGameCoordinator(session, engine, PieceSide.Red);
+    coordinator.InitializeAsync().AsTask().GetAwaiter().GetResult();
+    True(coordinator.SubmitHumanMove(new BoardPosition(0, 3), new BoardPosition(0, 4)).IsSuccess);
+    var result = coordinator.PlayAiTurnAsync(new AiSearchRequest(100), 1, 0, true)
+        .AsTask().GetAwaiter().GetResult();
+    True(result is { IsSuccess: true });
+    Equal(0, engine.LastVariationCount);
+    coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
 }
 
 static void RoundTrip<T>(T expected, MatchWireMessageType type) where T : struct
@@ -685,6 +720,7 @@ sealed class FakeAiEngine(ChessMove move) : IXiangqiAiEngine
     public bool IsReady { get; private set; }
     public bool WasDisposed { get; private set; }
     public int LastVariationCount { get; private set; }
+    public int LastMaxDepth { get; private set; }
 
     public ValueTask InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -706,6 +742,7 @@ sealed class FakeAiEngine(ChessMove move) : IXiangqiAiEngine
     {
         cancellationToken.ThrowIfCancellationRequested();
         LastVariationCount = request.VariationCount;
+        LastMaxDepth = request.MaxDepth;
         var variations = Enumerable.Range(1, request.VariationCount)
             .Select(rank => new AiVariation(rank, move, 8, 20 - rank, null, [move]))
             .ToArray();
@@ -735,4 +772,16 @@ sealed class FakeReplayEngine : IXiangqiAiEngine
         return ValueTask.FromResult(new AiSearchResult(move, [new AiVariation(1, move, 6, 25, null, [move])]));
     }
     public ValueTask DisposeAsync() { WasDisposed = true; IsReady = false; return ValueTask.CompletedTask; }
+}
+
+sealed class RankedFakeAiEngine(ChessMove best, ChessMove second) : IXiangqiAiEngine
+{
+    public string DisplayName => "Ranked fake";
+    public bool IsReady { get; private set; }
+    public ValueTask InitializeAsync(CancellationToken cancellationToken = default) { IsReady = true; return ValueTask.CompletedTask; }
+    public ValueTask NewGameAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    public ValueTask<AiSearchResult> SearchAsync(GameSnapshot position, AiSearchRequest request,
+        CancellationToken cancellationToken = default) => ValueTask.FromResult(new AiSearchResult(best,
+        [new AiVariation(1, best, 5, 100, null, [best]), new AiVariation(2, second, 5, 50, null, [second])]));
+    public ValueTask DisposeAsync() { IsReady = false; return ValueTask.CompletedTask; }
 }

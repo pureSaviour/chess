@@ -99,7 +99,7 @@ Main 创建 UciProcessAiEngine，Screen 创建 AiGameCoordinator 并把引擎 No
 
 1. InitializeAsync 完成 UCI 握手与就绪检查。
 2. SubmitHumanMove 使用同一 GameSession，记录人类落子后的 ply。
-3. Screen 在轮到 AI 且没有动画/活动搜索时调用 PlayAiTurnAsync。
+3. Screen 在轮到 AI 且没有动画/活动搜索时，以五档 profile 解析出的时间、可选深度、候选数和弱化上限调用 PlayAiTurnAsync。
 4. 引擎接收 GameSnapshot + AiSearchRequest，返回 AiSearchResult。
 5. Coordinator 验证返回时 ply、阵营、终局仍匹配，再通过 TryMove 复验 BestMove。
 6. StateChanged 驱动棋盘，不由引擎写棋局。

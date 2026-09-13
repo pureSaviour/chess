@@ -6,6 +6,15 @@ using Xiangqi.Core.Domain;
 
 namespace Xiangqi.Presentation.AI;
 
+public readonly record struct UciEngineResourceOptions(int Threads = 1, int HashMegabytes = 64)
+{
+    public UciEngineResourceOptions Validate() => Threads is < 1 or > 256
+        ? throw new ArgumentOutOfRangeException(nameof(Threads))
+        : HashMegabytes is < 16 or > 4096
+            ? throw new ArgumentOutOfRangeException(nameof(HashMegabytes))
+            : this;
+}
+
 /// <summary>
 /// Godot-owned adapter for UCI xiangqi engines such as Pikafish. A shell-free .NET child process
 /// runs in the executable directory so relative NNUE paths work even below Unicode user profiles.
@@ -18,6 +27,7 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
     private const int MaximumOutputLines = 4096;
     private const int MaximumLineLength = 8192;
     private readonly string _executablePath;
+    private readonly UciEngineResourceOptions _resources;
     private readonly SemaphoreSlim _searchGate = new(1, 1);
     private readonly Dictionary<int, AiVariation> _variations = [];
     private readonly ConcurrentQueue<OutputLine> _output = new();
@@ -30,9 +40,10 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
     private TaskCompletionSource<bool>? _readyWaiter;
     private TaskCompletionSource<AiSearchResult>? _searchWaiter;
 
-    public UciProcessAiEngine(string executablePath)
+    public UciProcessAiEngine(string executablePath, UciEngineResourceOptions resources = default)
     {
         _executablePath = executablePath.Trim();
+        _resources = (resources == default ? new UciEngineResourceOptions(1, 64) : resources).Validate();
         ProcessMode = ProcessModeEnum.Always;
     }
 
@@ -63,6 +74,8 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
         _uciWaiter = NewWaiter<bool>();
         Send("uci");
         await _uciWaiter.Task.WaitAsync(HandshakeTimeout, cancellationToken);
+        Send($"setoption name Threads value {_resources.Threads}");
+        Send($"setoption name Hash value {_resources.HashMegabytes}");
         await WaitUntilReadyAsync(cancellationToken);
         IsReady = true;
     }
@@ -102,7 +115,9 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
             _variations.Clear();
             _searchWaiter = NewWaiter<AiSearchResult>();
             Send($"position fen {XiangqiUciNotation.ToFen(position)}");
-            Send($"go movetime {request.MoveTimeMilliseconds}");
+            Send(request.MaxDepth > 0
+                ? $"go movetime {request.MoveTimeMilliseconds} depth {request.MaxDepth}"
+                : $"go movetime {request.MoveTimeMilliseconds}");
             try
             {
                 var timeout = TimeSpan.FromMilliseconds(request.MoveTimeMilliseconds + 5_000);

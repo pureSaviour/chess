@@ -41,6 +41,10 @@ public sealed class AppSettings
     public int AiGameSeconds { get; set; } = 20 * 60;
     public int AiMoveSeconds { get; set; } = 60;
     public int AiThinkMilliseconds { get; set; } = 1500;
+    public int AiDifficulty { get; set; } = (int)Xiangqi.Core.Application.AiDifficultyLevel.Medium;
+    public int AiMaxDepth { get; set; }
+    public int AiThreads { get; set; } = 1;
+    public int AiHashMegabytes { get; set; } = 64;
     public int AiAnalysisMilliseconds { get; set; } = 500;
     /// <summary>User-owned Rapfi/Piskvork executable; it is referenced but never copied into exports.</summary>
     public string GomokuAiEnginePath { get; set; } = string.Empty;
@@ -48,6 +52,11 @@ public sealed class AppSettings
     public int GomokuAiBoardSize { get; set; } = 15;
     public bool GomokuAiForbiddenMoves { get; set; }
     public int GomokuAiThinkMilliseconds { get; set; } = 1500;
+    public int GomokuAiDifficulty { get; set; } = (int)Xiangqi.Core.Application.AiDifficultyLevel.Medium;
+    public int GomokuAiMaxDepth { get; set; }
+    public int GomokuAiThreads { get; set; } = 1;
+    public int GomokuAiMemoryMegabytes { get; set; } = 256;
+    public int GomokuAiAnalysisMilliseconds { get; set; } = 500;
     /// <summary>
     /// Preferred gallery order by stable module ID. Missing modules are retained on disk by the
     /// catalog store but ignored while unavailable; newly discovered modules append deterministically.
@@ -83,12 +92,21 @@ public sealed class AppSettings
         result.AiGameSeconds = config.GetValue("ai", "game_seconds", 1200).AsInt32();
         result.AiMoveSeconds = config.GetValue("ai", "move_seconds", 60).AsInt32();
         result.AiThinkMilliseconds = config.GetValue("ai", "think_milliseconds", 1500).AsInt32();
+        result.AiDifficulty = config.GetValue("ai", "difficulty", result.AiDifficulty).AsInt32();
+        result.AiMaxDepth = config.GetValue("ai", "max_depth", 0).AsInt32();
+        result.AiThreads = config.GetValue("ai", "threads", 1).AsInt32();
+        result.AiHashMegabytes = config.GetValue("ai", "hash_megabytes", 64).AsInt32();
         result.AiAnalysisMilliseconds = config.GetValue("ai", "analysis_milliseconds", 500).AsInt32();
         result.GomokuAiEnginePath = config.GetValue("gomoku_ai", "engine_path", string.Empty).AsString();
         result.GomokuAiSideChoice = config.GetValue("gomoku_ai", "side", 0).AsInt32();
         result.GomokuAiBoardSize = config.GetValue("gomoku_ai", "board_size", 15).AsInt32();
         result.GomokuAiForbiddenMoves = config.GetValue("gomoku_ai", "forbidden_moves", false).AsBool();
         result.GomokuAiThinkMilliseconds = config.GetValue("gomoku_ai", "think_milliseconds", 1500).AsInt32();
+        result.GomokuAiDifficulty = config.GetValue("gomoku_ai", "difficulty", result.GomokuAiDifficulty).AsInt32();
+        result.GomokuAiMaxDepth = config.GetValue("gomoku_ai", "max_depth", 0).AsInt32();
+        result.GomokuAiThreads = config.GetValue("gomoku_ai", "threads", 1).AsInt32();
+        result.GomokuAiMemoryMegabytes = config.GetValue("gomoku_ai", "memory_megabytes", 256).AsInt32();
+        result.GomokuAiAnalysisMilliseconds = config.GetValue("gomoku_ai", "analysis_milliseconds", 500).AsInt32();
         result.GameModuleOrder = config.GetValue("gallery", "module_order", string.Empty).AsString()
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         result.Clamp();
@@ -121,12 +139,17 @@ public sealed class AppSettings
         AiGameSeconds = source.AiGameSeconds;
         AiMoveSeconds = source.AiMoveSeconds;
         AiThinkMilliseconds = source.AiThinkMilliseconds;
+        AiDifficulty = source.AiDifficulty; AiMaxDepth = source.AiMaxDepth;
+        AiThreads = source.AiThreads; AiHashMegabytes = source.AiHashMegabytes;
         AiAnalysisMilliseconds = source.AiAnalysisMilliseconds;
         GomokuAiEnginePath = source.GomokuAiEnginePath;
         GomokuAiSideChoice = source.GomokuAiSideChoice;
         GomokuAiBoardSize = source.GomokuAiBoardSize;
         GomokuAiForbiddenMoves = source.GomokuAiForbiddenMoves;
         GomokuAiThinkMilliseconds = source.GomokuAiThinkMilliseconds;
+        GomokuAiDifficulty = source.GomokuAiDifficulty; GomokuAiMaxDepth = source.GomokuAiMaxDepth;
+        GomokuAiThreads = source.GomokuAiThreads; GomokuAiMemoryMegabytes = source.GomokuAiMemoryMegabytes;
+        GomokuAiAnalysisMilliseconds = source.GomokuAiAnalysisMilliseconds;
         GameModuleOrder = [.. source.GameModuleOrder];
     }
 
@@ -151,12 +174,21 @@ public sealed class AppSettings
         config.SetValue("ai", "game_seconds", AiGameSeconds);
         config.SetValue("ai", "move_seconds", AiMoveSeconds);
         config.SetValue("ai", "think_milliseconds", AiThinkMilliseconds);
+        config.SetValue("ai", "difficulty", AiDifficulty);
+        config.SetValue("ai", "max_depth", AiMaxDepth);
+        config.SetValue("ai", "threads", AiThreads);
+        config.SetValue("ai", "hash_megabytes", AiHashMegabytes);
         config.SetValue("ai", "analysis_milliseconds", AiAnalysisMilliseconds);
         config.SetValue("gomoku_ai", "engine_path", GomokuAiEnginePath);
         config.SetValue("gomoku_ai", "side", GomokuAiSideChoice);
         config.SetValue("gomoku_ai", "board_size", GomokuAiBoardSize);
         config.SetValue("gomoku_ai", "forbidden_moves", GomokuAiForbiddenMoves);
         config.SetValue("gomoku_ai", "think_milliseconds", GomokuAiThinkMilliseconds);
+        config.SetValue("gomoku_ai", "difficulty", GomokuAiDifficulty);
+        config.SetValue("gomoku_ai", "max_depth", GomokuAiMaxDepth);
+        config.SetValue("gomoku_ai", "threads", GomokuAiThreads);
+        config.SetValue("gomoku_ai", "memory_megabytes", GomokuAiMemoryMegabytes);
+        config.SetValue("gomoku_ai", "analysis_milliseconds", GomokuAiAnalysisMilliseconds);
         config.SetValue("gallery", "module_order", string.Join(',', GameModuleOrder));
         var error = config.Save(SettingsPath);
         if (error != Error.Ok) GD.PushWarning($"无法保存设置：{error}");
@@ -195,11 +227,20 @@ public sealed class AppSettings
         AiGameSeconds = Math.Clamp(AiGameSeconds, 0, 180 * 60);
         AiMoveSeconds = Math.Clamp(AiMoveSeconds, 0, 300);
         AiThinkMilliseconds = Math.Clamp(AiThinkMilliseconds, 100, 120_000);
+        AiDifficulty = Math.Clamp(AiDifficulty, 0, (int)Xiangqi.Core.Application.AiDifficultyLevel.Custom);
+        AiMaxDepth = Math.Clamp(AiMaxDepth, 0, 128);
+        AiThreads = Math.Clamp(AiThreads, 1, 256);
+        AiHashMegabytes = Math.Clamp(AiHashMegabytes, 16, 4096);
         AiAnalysisMilliseconds = Math.Clamp(AiAnalysisMilliseconds, 100, 10_000);
         GomokuAiEnginePath = GomokuAiEnginePath.Trim();
         GomokuAiSideChoice = Math.Clamp(GomokuAiSideChoice, 0, 2);
         GomokuAiBoardSize = Math.Clamp(GomokuAiBoardSize, 9, 22);
         GomokuAiThinkMilliseconds = Math.Clamp(GomokuAiThinkMilliseconds, 100, 120_000);
+        GomokuAiDifficulty = Math.Clamp(GomokuAiDifficulty, 0, (int)Xiangqi.Core.Application.AiDifficultyLevel.Custom);
+        GomokuAiMaxDepth = Math.Clamp(GomokuAiMaxDepth, 0, 128);
+        GomokuAiThreads = Math.Clamp(GomokuAiThreads, 1, 256);
+        GomokuAiMemoryMegabytes = Math.Clamp(GomokuAiMemoryMegabytes, 16, 4096);
+        GomokuAiAnalysisMilliseconds = Math.Clamp(GomokuAiAnalysisMilliseconds, 100, 10_000);
         GameModuleOrder = GameModuleOrder.Take(256).Select(value =>
         {
             try { return new GameModuleId(value).Value; }

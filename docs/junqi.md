@@ -1,6 +1,8 @@
 # 军旗玩法、抽象与接入手册
 
-更新：2026-09-09。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)，共享传输端口见 [抽象层使用手册](abstractions.md)。规则基线参考 junqi.app 的双人军旗规则与 Luzhanqi 公开规则说明；棋谱采用中国大学生计算机博弈大赛棋谱标准说明书的 AC2 `INFO[1.0]` 双人军旗格式。
+更新：2026-09-13。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)，共享传输端口见 [抽象层使用手册](abstractions.md)。规则基线参考 junqi.app 的双人军旗规则与 Luzhanqi 公开规则说明；棋谱采用中国大学生计算机博弈大赛棋谱标准说明书的 AC2 `INFO[1.0]` 双人军旗格式。
+
+AI 状态：尚未接入可复用引擎，也未定义 `IJunqiAiEngine`。隐藏信息输入必须停留在玩家脱敏视图，不能把权威双方布阵泄露给搜索器；若批准自研，优先验证 ISMCTS/determinization MCTS 基线。评估、资源所有权和建议阶段见 [AI 难度与分析](ai-engines.md)。
 
 ## 1. 已实现规则
 

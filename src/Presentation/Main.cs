@@ -180,9 +180,9 @@ public partial class Main : Control
         TimeControl.Unlimited, options.HostColor==StoneColor.Black?PieceSide.Red:PieceSide.Black,
         TwoPlayerGameMode.Gomoku, options.BoardSize, (int)options.Rules));
     private void ShowGomokuRecords(bool saved)=>SwitchTo(new GomokuRecordScreen(saved,ShowGallery,
-        record=>SwitchTo(new GomokuReplayScreen(record,()=>ShowGomokuRecords(saved)))));
+        record=>SwitchTo(new GomokuReplayScreen(_settings,record,()=>ShowGomokuRecords(saved)))));
     private void ShowGomokuImport(bool position)=>SwitchTo(new GomokuImportScreen(position,ShowGallery,
-        record=>SwitchTo(new GomokuReplayScreen(record,ShowGallery))));
+        record=>SwitchTo(new GomokuReplayScreen(_settings,record,ShowGallery))));
     private void ShowGomokuAiSettings()=>SwitchTo(new GomokuAiSettingsScreen(_settings,_engineInstaller,saved=>{_settings=saved;_settings.SaveAndApply();ShowGallery();},ShowGallery));
     private void StartConfiguredGomokuAiMatch()
     {
@@ -193,7 +193,11 @@ public partial class Main : Control
         var human=_settings.GomokuAiSideChoice switch{1=>StoneColor.White,2=>Random.Shared.Next(2)==0?StoneColor.Black:StoneColor.White,_=>StoneColor.Black};
         var rules=_settings.GomokuAiForbiddenMoves?GomokuRuleSet.RenjuForbiddenMoves:GomokuRuleSet.Freestyle;
         var engine=new PiskvorkProcessGomokuAiEngine(_settings.GomokuAiEnginePath);
-        var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,_settings.GomokuAiThinkMilliseconds);
+        var profile=AiDifficultyProfiles.Gomoku((AiDifficultyLevel)_settings.GomokuAiDifficulty,
+            _settings.GomokuAiThinkMilliseconds,_settings.GomokuAiMaxDepth);
+        var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,
+            profile.ThinkMilliseconds,profile.MaxDepth,profile.Strength,_settings.GomokuAiThreads,
+            _settings.GomokuAiMemoryMegabytes,profile.UseDeterministicLegalMove);
         SwitchTo(new GomokuGameScreen(controller,$"人机对决 · Rapfi · 玩家执{(human==StoneColor.Black?"黑":"白")}",ShowGallery,
             profiles:CreateOfflineProfiles("AI 引擎")));
 #endif
@@ -214,9 +218,13 @@ public partial class Main : Control
             2 => Random.Shared.Next(2) == 0 ? PieceSide.Red : PieceSide.Black,
             _ => PieceSide.Red
         };
+        var profile = AiDifficultyProfiles.Xiangqi((AiDifficultyLevel)_settings.AiDifficulty,
+            _settings.AiThinkMilliseconds, _settings.AiMaxDepth);
         StartAiMatch(new AiMatchConfiguration(
             new TimeControl(_settings.AiGameSeconds, _settings.AiMoveSeconds), side,
-            _settings.AiThinkMilliseconds, _settings.AiEnginePath));
+            profile.MoveTimeMilliseconds, _settings.AiEnginePath, profile.MaxDepth,
+            profile.VariationCount, profile.CandidateRank, profile.MaximumCentipawnLoss,
+            profile.UseDeterministicLegalMove));
     }
 
     private void ShowClassicImport(bool puzzle) => SwitchTo(new ClassicImportScreen(
@@ -262,7 +270,8 @@ public partial class Main : Control
             configuration = configuration.Validate();
             if (!System.IO.File.Exists(configuration.EnginePath))
                 throw new FileNotFoundException("找不到所选 AI 引擎程序。", configuration.EnginePath);
-            var engine = new UciProcessAiEngine(configuration.EnginePath);
+            var engine = new UciProcessAiEngine(configuration.EnginePath,
+                new UciEngineResourceOptions(_settings.AiThreads, _settings.AiHashMegabytes));
             SwitchTo(new GameScreen(
                 _settings,
                 ShowGallery,
@@ -619,10 +628,12 @@ public partial class Main : Control
             }
             ShowAiSettings();
             await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not AiSettingsScreen) throw new InvalidOperationException("Classic AI settings failed to instantiate.");
+            if (_currentScreen is not AiSettingsScreen { AreAdvancedSettingsVisible: false })
+                throw new InvalidOperationException("Classic AI settings must instantiate with advanced settings collapsed.");
             ShowGomokuAiSettings();
             await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GomokuAiSettingsScreen) throw new InvalidOperationException("Gomoku AI settings failed to instantiate.");
+            if (_currentScreen is not GomokuAiSettingsScreen { AreAdvancedSettingsVisible: false })
+                throw new InvalidOperationException("Gomoku AI settings must instantiate with advanced settings collapsed.");
             StartLanHost(EnetMatchTransport.DefaultPort,
                 new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red));
             await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
@@ -689,6 +700,11 @@ public partial class Main : Control
             {
                 await using var engine = new PiskvorkProcessGomokuAiEngine(result.ExecutablePath);
                 await engine.InitializeAsync(15, GomokuRuleSet.RenjuForbiddenMoves);
+                var position = new GomokuGame(15, GomokuRuleSet.RenjuForbiddenMoves).Snapshot;
+                var analysis = await engine.AnalyzeAsync(new GomokuAiSearchRequest(position, 500, 4, 65, 1, 256));
+                if (!float.IsFinite(analysis.BlackWinRate) || analysis.BlackWinRate is < 0 or > 1)
+                    throw new InvalidOperationException("Rapfi returned an invalid black win rate.");
+                _ = await engine.FindMoveAsync(new GomokuAiSearchRequest(position, 500, 4, 65, 1, 256));
             }
             else
             {
@@ -696,7 +712,7 @@ public partial class Main : Control
                 try
                 {
                     await engine.InitializeAsync();
-                    var search = await engine.SearchAsync(new GameSession().Snapshot, new AiSearchRequest(250));
+                    var search = await engine.SearchAsync(new GameSession().Snapshot, new AiSearchRequest(250, 2, 4));
                     if (search.BestMove == default) throw new InvalidOperationException("Pikafish returned no move.");
                 }
                 finally { await engine.DisposeAsync(); engine.QueueFree(); }
