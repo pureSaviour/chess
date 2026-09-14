@@ -66,12 +66,14 @@ public readonly record struct ReplayAnalysisPoint(int PositionIndex, int RedCent
 /// Serializes replay analysis against one engine. Selecting a position cancels the prior sweep,
 /// analyzes that position first, then fills remaining uncached positions. Scores are normalized
 /// to Red's perspective; stale completions never publish after a newer selection. This class owns
-/// the engine and disposes it exactly once, but owns no UI nodes or authoritative game session.
+/// the engine and disposes it exactly once, but owns no UI nodes, settings storage or authoritative
+/// game session. The caller injects a validated 100..120000 ms wall-clock budget.
 /// </summary>
 public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
 {
     private readonly IXiangqiAiEngine _engine;
     private readonly IReadOnlyList<GameSnapshot> _positions;
+    private readonly int _thinkMilliseconds;
     private readonly Dictionary<int, ReplayAnalysisPoint> _cache = [];
     private CancellationTokenSource? _active;
     private long _generation;
@@ -79,11 +81,13 @@ public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
     public event Action<ReplayAnalysisPoint>? AnalysisAvailable;
     public IReadOnlyDictionary<int, ReplayAnalysisPoint> Cache => _cache;
 
-    public ReplayAnalysisCoordinator(IXiangqiAiEngine engine, IReadOnlyList<GameSnapshot> positions)
+    public ReplayAnalysisCoordinator(IXiangqiAiEngine engine, IReadOnlyList<GameSnapshot> positions,
+        int thinkMilliseconds = AiDifficultyProfiles.ReplayThinkMilliseconds)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _positions = positions ?? throw new ArgumentNullException(nameof(positions));
         if (positions.Count == 0) throw new ArgumentException("Replay has no positions.", nameof(positions));
+        _thinkMilliseconds = new AiSearchRequest(thinkMilliseconds).Validate().MoveTimeMilliseconds;
     }
 
     public async Task SelectAndSweepAsync(int selectedIndex)
@@ -101,7 +105,7 @@ public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
                 operation.Token.ThrowIfCancellationRequested();
                 if (_cache.ContainsKey(index) || _positions[index].IsFinished) continue;
                 var result = await _engine.SearchAsync(_positions[index],
-                    new AiSearchRequest(AiDifficultyProfiles.ReplayThinkMilliseconds, 1, 0), operation.Token);
+                    new AiSearchRequest(_thinkMilliseconds, 1, 0), operation.Token);
                 if (generation != _generation) return;
                 var verifier = ChessGame.FromPosition(_positions[index]);
                 var verified = verifier.TryMove(result.BestMove);

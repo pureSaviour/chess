@@ -52,7 +52,9 @@ public interface IGomokuAiEngine : IAsyncDisposable
 }
 
 /// <summary>Serial replay analyzer. The coordinator owns the engine, prioritizes the selected
-/// position, caches black-perspective win rates, and suppresses stale results after cancellation.</summary>
+/// position, caches black-perspective win rates, and suppresses stale results after cancellation.
+/// The caller may inject a validated replay wall-clock budget; all other replay strength and
+/// resource parameters remain fixed application policy.</summary>
 public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
 {
     private readonly IGomokuAiEngine _engine;
@@ -64,12 +66,13 @@ public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
     private bool _disposed;
 
     public GomokuReplayAnalysisCoordinator(IGomokuAiEngine engine,
-        IReadOnlyList<GomokuSnapshot> positions)
+        IReadOnlyList<GomokuSnapshot> positions,
+        int thinkMilliseconds = AiDifficultyProfiles.ReplayThinkMilliseconds)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _positions = positions ?? throw new ArgumentNullException(nameof(positions));
         if (positions.Count == 0) throw new ArgumentException("Replay has no positions.", nameof(positions));
-        _template = new GomokuAiSearchRequest(positions[0], AiDifficultyProfiles.ReplayThinkMilliseconds,
+        _template = new GomokuAiSearchRequest(positions[0], thinkMilliseconds,
             0, 100, AiDifficultyProfiles.ReplayThreads, AiDifficultyProfiles.ReplayMemoryMegabytes).Validate();
     }
 

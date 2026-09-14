@@ -1,5 +1,6 @@
 using Godot;
 using Xiangqi.GameHost;
+using Xiangqi.Core.Application;
 
 namespace Xiangqi.Presentation.Settings;
 
@@ -51,6 +52,9 @@ public sealed class AppSettings
     public int GomokuAiMaxDepth { get; set; }
     public int GomokuAiThreads { get; set; } = 1;
     public int GomokuAiMemoryMegabytes { get; set; } = 256;
+    /// <summary>Shared wall-clock budget for one classic or Gomoku replay position. Search
+    /// strength, depth policy and engine resources remain fixed by replay orchestration.</summary>
+    public int ReplayAnalysisMilliseconds { get; set; } = AiDifficultyProfiles.ReplayThinkMilliseconds;
     /// <summary>
     /// Preferred gallery order by stable module ID. Missing modules are retained on disk by the
     /// catalog store but ignored while unavailable; newly discovered modules append deterministically.
@@ -97,6 +101,8 @@ public sealed class AppSettings
         result.GomokuAiMaxDepth = config.GetValue("gomoku_ai", "max_depth", 0).AsInt32();
         result.GomokuAiThreads = config.GetValue("gomoku_ai", "threads", 1).AsInt32();
         result.GomokuAiMemoryMegabytes = config.GetValue("gomoku_ai", "memory_megabytes", 256).AsInt32();
+        result.ReplayAnalysisMilliseconds = config.GetValue("replay_analysis", "think_milliseconds",
+            AiDifficultyProfiles.ReplayThinkMilliseconds).AsInt32();
         result.GameModuleOrder = config.GetValue("gallery", "module_order", string.Empty).AsString()
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         result.Clamp();
@@ -136,6 +142,7 @@ public sealed class AppSettings
         GomokuAiThinkMilliseconds = source.GomokuAiThinkMilliseconds;
         GomokuAiDifficulty = source.GomokuAiDifficulty; GomokuAiMaxDepth = source.GomokuAiMaxDepth;
         GomokuAiThreads = source.GomokuAiThreads; GomokuAiMemoryMegabytes = source.GomokuAiMemoryMegabytes;
+        ReplayAnalysisMilliseconds = source.ReplayAnalysisMilliseconds;
         GameModuleOrder = [.. source.GameModuleOrder];
     }
 
@@ -171,6 +178,7 @@ public sealed class AppSettings
         config.SetValue("gomoku_ai", "max_depth", GomokuAiMaxDepth);
         config.SetValue("gomoku_ai", "threads", GomokuAiThreads);
         config.SetValue("gomoku_ai", "memory_megabytes", GomokuAiMemoryMegabytes);
+        config.SetValue("replay_analysis", "think_milliseconds", ReplayAnalysisMilliseconds);
         config.SetValue("gallery", "module_order", string.Join(',', GameModuleOrder));
         var error = config.Save(SettingsPath);
         if (error != Error.Ok) GD.PushWarning($"无法保存设置：{error}");
@@ -219,6 +227,7 @@ public sealed class AppSettings
         GomokuAiMaxDepth = Math.Clamp(GomokuAiMaxDepth, 0, 128);
         GomokuAiThreads = Math.Clamp(GomokuAiThreads, 1, 256);
         GomokuAiMemoryMegabytes = Math.Clamp(GomokuAiMemoryMegabytes, 16, 4096);
+        ReplayAnalysisMilliseconds = Math.Clamp(ReplayAnalysisMilliseconds, 100, 120_000);
         GameModuleOrder = GameModuleOrder.Take(256).Select(value =>
         {
             try { return new GameModuleId(value).Value; }

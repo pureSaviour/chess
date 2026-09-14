@@ -513,16 +513,19 @@ static void ReplayAnalysis()
     var move = new ChessMove(new BoardPosition(0, 3), new BoardPosition(0, 4));
     True(game.TryMove(move).IsSuccess);
     var engine = new FakeReplayEngine();
-    var coordinator = new ReplayAnalysisCoordinator(engine, [first, game.Snapshot]);
+    const int replayThinkMilliseconds = 300;
+    var coordinator = new ReplayAnalysisCoordinator(engine, [first, game.Snapshot], replayThinkMilliseconds);
     coordinator.SelectAndSweepAsync(1).GetAwaiter().GetResult();
     Equal(2, coordinator.Cache.Count);
     True(coordinator.Cache[0].RedCentipawns > 0);
     True(coordinator.Cache[1].RedCentipawns < 0);
-    Equal(AiDifficultyProfiles.ReplayThinkMilliseconds, engine.LastRequest.MoveTimeMilliseconds);
+    Equal(replayThinkMilliseconds, engine.LastRequest.MoveTimeMilliseconds);
     Equal(1, engine.LastRequest.VariationCount);
     Equal(0, engine.LastRequest.MaxDepth);
     coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
     True(engine.WasDisposed);
+    Throws<ArgumentOutOfRangeException>(() => new ReplayAnalysisCoordinator(
+        new FakeReplayEngine(), [first], 99));
 }
 
 static void AiCoordinator()

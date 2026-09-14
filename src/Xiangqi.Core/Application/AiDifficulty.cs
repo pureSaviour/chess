@@ -33,10 +33,9 @@ public readonly record struct GomokuDifficultyProfile(
 
 public static class AiDifficultyProfiles
 {
-    /// <summary>Fixed wall-clock budget per replay position. Replay analysis still uses the
-    /// engine's strongest mode within this budget: one best line, no depth cap, and (for Gomoku)
-    /// full native strength.</summary>
-    public const int ReplayThinkMilliseconds = 500;
+    /// <summary>Default wall-clock budget per replay position. The validated user preference may
+    /// override it; replay still uses one best line, no depth cap and full native strength.</summary>
+    public const int ReplayThinkMilliseconds = 200;
     /// <summary>Replay analysis is deliberately single-threaded so background sweeps do not
     /// contend with Godot rendering. This is an application policy, not a player setting.</summary>
     public const int ReplayThreads = 1;

@@ -130,7 +130,7 @@ public partial class ClassicReplayScreen : Control
             var engine = new UciProcessAiEngine(enginePath,
                 new UciEngineResourceOptions(AiDifficultyProfiles.ReplayThreads,
                     AiDifficultyProfiles.ReplayHashMegabytes)); AddChild(engine);
-            _analysis = new ReplayAnalysisCoordinator(engine, _positions);
+            _analysis = new ReplayAnalysisCoordinator(engine, _positions, settings.ReplayAnalysisMilliseconds);
             _analysis.AnalysisAvailable += OnAnalysisAvailable;
             _analysisDebounce = new Godot.Timer { OneShot = true, WaitTime = .15 };
             _analysisDebounce.Timeout += () => _ = AnalyzeAsync(_index);

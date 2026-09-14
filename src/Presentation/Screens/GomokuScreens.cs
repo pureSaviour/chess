@@ -90,7 +90,7 @@ public partial class GomokuReplayScreen : Control
             _graph=new ReplayEvaluationGraph();_graph.Configure(_positions.Count);_graph.SetLabels("黑优","白优");panel.AddChild(_graph);
             var hint=new Label{Text="曲线为 Rapfi 给出的黑方胜率 · 50% 为均衡",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(hint,13);panel.AddChild(hint);
             var engine=new PiskvorkProcessGomokuAiEngine(enginePath);
-            _analysis=new GomokuReplayAnalysisCoordinator(engine,_positions);_analysis.AnalysisAvailable+=OnAnalysisAvailable;
+            _analysis=new GomokuReplayAnalysisCoordinator(engine,_positions,settings.ReplayAnalysisMilliseconds);_analysis.AnalysisAvailable+=OnAnalysisAvailable;
             _analysisDebounce=new Godot.Timer{OneShot=true,WaitTime=.15};_analysisDebounce.Timeout+=()=>_ = AnalyzeAsync(_index);AddChild(_analysisDebounce);
         }
         var timeline=new HSlider{MinValue=0,MaxValue=Math.Max(0,_positions.Count-1),Step=1,SizeFlagsHorizontal=SizeFlags.ExpandFill};root.AddChild(timeline);
@@ -115,6 +115,7 @@ public partial class GomokuAiSettingsScreen : Control
     private readonly VBoxContainer _advancedSettings;
     public bool AreAdvancedSettingsVisible => _advancedSettings.Visible;
     public bool HasManualEnginePicker => FindChildren("*","FileDialog",true,false).Count>0;
+    public bool HasReplayAnalysisTimeControl => FindChildren("ReplayAnalysisThinkSeconds","SpinBox",true,false).Count==1;
 
     public GomokuAiSettingsScreen(AppSettings current,EnginePackageInstaller installer,Action<AppSettings> save,Action back)
     {
@@ -131,11 +132,12 @@ public partial class GomokuAiSettingsScreen : Control
         var installRow=new HBoxContainer();installRow.AddThemeConstantOverride("separation",12);_advancedSettings.AddChild(installRow);var install=UiStyle.CreateButton("一键下载并配置 Rapfi",true);installRow.AddChild(install);var installStatus=new Label{Text=installer.TryGetInstalled(EnginePackageKind.Rapfi,out var installed)?$"已配置 Rapfi {installed.Version}":"尚未配置",SizeFlagsHorizontal=SizeFlags.ExpandFill,AutowrapMode=TextServer.AutowrapMode.WordSmart};installRow.AddChild(installStatus);var consent=new ConfirmationDialog{Title="Rapfi 许可确认",DialogText=EnginePackageInstaller.LicenseNotice(EnginePackageKind.Rapfi),OkButtonText="同意并下载",CancelButtonText="取消"};AddChild(consent);var driver=new EngineInstallDriver(installer);AddChild(driver);
         var grid=new GridContainer{Columns=2};grid.AddThemeConstantOverride("h_separation",20);grid.AddThemeConstantOverride("v_separation",14);_advancedSettings.AddChild(grid);
         grid.AddChild(new Label{Text="自定义每步思考（秒）"});var think=new SpinBox{MinValue=.1,MaxValue=120,Value=draft.GomokuAiThinkMilliseconds/1000.0,Step=.1};grid.AddChild(think);
+        grid.AddChild(new Label{Text="复盘每局面思考（秒）"});var replayThink=new SpinBox{Name="ReplayAnalysisThinkSeconds",MinValue=.1,MaxValue=120,Value=draft.ReplayAnalysisMilliseconds/1000.0,Step=.1};grid.AddChild(replayThink);
         grid.AddChild(new Label{Text="最大深度（0=不限）"});var depth=new SpinBox{MinValue=0,MaxValue=128,Value=draft.GomokuAiMaxDepth,Step=1};grid.AddChild(depth);
         grid.AddChild(new Label{Text="线程数"});var threads=new SpinBox{MinValue=1,MaxValue=256,Value=draft.GomokuAiThreads,Step=1};grid.AddChild(threads);
         grid.AddChild(new Label{Text="内存（MB）"});var memory=new SpinBox{MinValue=16,MaxValue=4096,Value=draft.GomokuAiMemoryMegabytes,Step=16};grid.AddChild(memory);
         var note=new Label{Text="深度与时间会同时限制搜索；0 表示不限制深度。外部进程仅支持 Windows 桌面版。",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(note,13);_advancedSettings.AddChild(note);var saveButton=UiStyle.CreateButton("保存 Rapfi 设置",true);content.AddChild(saveButton);
-        void Capture(){draft.GomokuAiSideChoice=side.Selected;draft.GomokuAiDifficulty=difficulty.Selected;draft.GomokuAiBoardSize=(int)size.Value;draft.GomokuAiForbiddenMoves=rules.ButtonPressed;draft.GomokuAiThinkMilliseconds=(int)Math.Round(think.Value*1000);draft.GomokuAiMaxDepth=(int)depth.Value;draft.GomokuAiThreads=(int)threads.Value;draft.GomokuAiMemoryMegabytes=(int)memory.Value;}saveButton.Pressed+=()=>{Capture();save(draft);};
+        void Capture(){draft.GomokuAiSideChoice=side.Selected;draft.GomokuAiDifficulty=difficulty.Selected;draft.GomokuAiBoardSize=(int)size.Value;draft.GomokuAiForbiddenMoves=rules.ButtonPressed;draft.GomokuAiThinkMilliseconds=(int)Math.Round(think.Value*1000);draft.ReplayAnalysisMilliseconds=(int)Math.Round(replayThink.Value*1000);draft.GomokuAiMaxDepth=(int)depth.Value;draft.GomokuAiThreads=(int)threads.Value;draft.GomokuAiMemoryMegabytes=(int)memory.Value;}saveButton.Pressed+=()=>{Capture();save(draft);};
         install.Pressed+=()=>consent.PopupCentered(new Vector2I(650,260));consent.Confirmed+=()=>{Capture();install.Disabled=saveButton.Disabled=true;installStatus.Text="准备下载…";driver.Start(EnginePackageKind.Rapfi);};driver.ProgressChanged+=value=>installStatus.Text=value.TotalBytes is>0?$"{value.Stage} {Math.Clamp(value.CompletedBytes*100/value.TotalBytes.Value,0,100)}%":value.Stage;driver.Completed+=result=>{installStatus.Text=$"已配置 Rapfi {result.Version}";save(draft);};driver.Failed+=error=>{install.Disabled=saveButton.Disabled=false;installStatus.Text=$"安装失败：{error}";};
 #if GODOT_ANDROID
         install.Disabled=true;install.TooltipText="Android 当前不支持外部进程引擎。";

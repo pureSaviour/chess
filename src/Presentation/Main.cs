@@ -638,11 +638,11 @@ public partial class Main : Control
             }
             ShowAiSettings();
             await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not AiSettingsScreen { AreAdvancedSettingsVisible: false, HasManualEnginePicker: false })
+            if (_currentScreen is not AiSettingsScreen { AreAdvancedSettingsVisible: false, HasManualEnginePicker: false, HasReplayAnalysisTimeControl: true })
                 throw new InvalidOperationException("Classic AI settings must be collapsed and reject manual engine selection.");
             ShowGomokuAiSettings();
             await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GomokuAiSettingsScreen { AreAdvancedSettingsVisible: false, HasManualEnginePicker: false })
+            if (_currentScreen is not GomokuAiSettingsScreen { AreAdvancedSettingsVisible: false, HasManualEnginePicker: false, HasReplayAnalysisTimeControl: true })
                 throw new InvalidOperationException("Gomoku AI settings must be collapsed and reject manual engine selection.");
             StartLanHost(EnetMatchTransport.DefaultPort,
                 new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red));

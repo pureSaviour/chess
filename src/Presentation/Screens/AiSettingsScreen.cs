@@ -15,6 +15,7 @@ public partial class AiSettingsScreen : Control
     private readonly VBoxContainer _advancedSettings;
     public bool AreAdvancedSettingsVisible => _advancedSettings.Visible;
     public bool HasManualEnginePicker => FindChildren("*", "FileDialog", true, false).Count > 0;
+    public bool HasReplayAnalysisTimeControl => FindChildren("ReplayAnalysisThinkSeconds", "SpinBox", true, false).Count == 1;
 
     public AiSettingsScreen(AppSettings current, Action<AppSettings> save, Action back, EnginePackageInstaller installer)
     {
@@ -47,6 +48,7 @@ public partial class AiSettingsScreen : Control
         var driver = new EngineInstallDriver(installer); AddChild(driver);
         var grid = new GridContainer { Columns = 2 }; grid.AddThemeConstantOverride("h_separation", 20); grid.AddThemeConstantOverride("v_separation", 14); _advancedSettings.AddChild(grid);
         grid.AddChild(new Label { Text = "自定义每步思考（秒）" }); var think = new SpinBox { MinValue = .1, MaxValue = 120, Value = draft.AiThinkMilliseconds / 1000.0, Step = .1 }; grid.AddChild(think);
+        grid.AddChild(new Label { Text = "复盘每局面思考（秒）" }); var replayThink = new SpinBox { Name = "ReplayAnalysisThinkSeconds", MinValue = .1, MaxValue = 120, Value = draft.ReplayAnalysisMilliseconds / 1000.0, Step = .1 }; grid.AddChild(replayThink);
         grid.AddChild(new Label { Text = "最大深度（0=不限）" }); var depth = new SpinBox { MinValue = 0, MaxValue = 128, Value = draft.AiMaxDepth, Step = 1 }; grid.AddChild(depth);
         grid.AddChild(new Label { Text = "线程数" }); var threads = new SpinBox { MinValue = 1, MaxValue = 256, Value = draft.AiThreads, Step = 1 }; grid.AddChild(threads);
         grid.AddChild(new Label { Text = "哈希内存（MB）" }); var hash = new SpinBox { MinValue = 16, MaxValue = 4096, Value = draft.AiHashMegabytes, Step = 16 }; grid.AddChild(hash);
@@ -56,6 +58,7 @@ public partial class AiSettingsScreen : Control
             draft.AiSideChoice = side.Selected;
             draft.AiGameSeconds = (int)Math.Round(game.Value * 60); draft.AiMoveSeconds = (int)move.Value;
             draft.AiThinkMilliseconds = (int)Math.Round(think.Value * 1000);
+            draft.ReplayAnalysisMilliseconds = (int)Math.Round(replayThink.Value * 1000);
             draft.AiDifficulty = difficulty.Selected; draft.AiMaxDepth = (int)depth.Value;
             draft.AiThreads = (int)threads.Value; draft.AiHashMegabytes = (int)hash.Value;
         }
