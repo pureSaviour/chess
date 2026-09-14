@@ -135,15 +135,15 @@ internal static class GomokuTests
     {
         var position = new GomokuGame(15).Snapshot;
         var engine = new FakeAiEngine(new(7, 7));
-        var coordinator = new GomokuReplayAnalysisCoordinator(engine, [position], 2, 512);
+        var coordinator = new GomokuReplayAnalysisCoordinator(engine, [position]);
         coordinator.SelectAndSweepAsync(0).GetAwaiter().GetResult();
         Equal(.7f, coordinator.Cache[0].BlackWinRate);
         Equal(new GridPoint(7, 7), coordinator.Cache[0].BestMove);
         Equal(AiDifficultyProfiles.ReplayThinkMilliseconds, engine.LastAnalysisRequest.ThinkMilliseconds);
         Equal(0, engine.LastAnalysisRequest.MaxDepth);
         Equal(100, engine.LastAnalysisRequest.Strength);
-        Equal(2, engine.LastAnalysisRequest.Threads);
-        Equal(512, engine.LastAnalysisRequest.MemoryMegabytes);
+        Equal(AiDifficultyProfiles.ReplayThreads, engine.LastAnalysisRequest.Threads);
+        Equal(AiDifficultyProfiles.ReplayMemoryMegabytes, engine.LastAnalysisRequest.MemoryMegabytes);
         coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Equal(1, engine.DisposeCount);
     }

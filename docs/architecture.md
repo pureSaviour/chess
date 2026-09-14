@@ -108,7 +108,7 @@ XiangqiUciNotation 输出 FEN（从 Rank=9 向 Rank=0）及 a0..i9 坐标；它�
 
 当前聊天询问触发 AnalyzeAsync/MultiPV，返回候选线路、深度和评分，不将聊天自由文本发送给棋力引擎。分析期间变化的局面按版本拒绝。
 
-复盘使用独立 ReplayAnalysisCoordinator，不复用 AiGameCoordinator 的落子职责。它固定以每局面 10 秒、无限深度、单一最佳线路按当前步优先顺序串行搜索，不读取人机难度或玩家参数；它缓存分数与最佳着法、取消旧选择的扫描，把 UCI 的行棋方分数换算为红方视角，并通过临时 ChessGame 拒绝非法 BestMove。Replay Screen 将结果显示为右侧折线、随步数移动的竖线、分数文字和棋盘箭头；上/下一步按钮与带刻度 HSlider 共同修改同一个当前步索引，SetValueNoSignal 防止渲染反向触发跳转。这些表现状态不写回记录或会话。
+复盘使用独立 ReplayAnalysisCoordinator，不复用 AiGameCoordinator 的落子职责。它固定以每局面 500ms、无限深度、单线程和单一最佳线路按当前步优先顺序串行搜索，不读取人机难度或玩家参数；“最高程度”表示不施加降级、候选随机或深度上限，而不是无界占用 CPU。它缓存分数与最佳着法、取消旧选择的扫描，每个未缓存局面后让出 50ms，把 UCI 的行棋方分数换算为红方视角，并通过临时 ChessGame 拒绝非法 BestMove。Replay Screen 将结果显示为右侧折线、随步数移动的竖线、分数文字和棋盘箭头；上/下一步按钮与带刻度 HSlider 共同修改同一个当前步索引，SetValueNoSignal 防止渲染反向触发跳转，选择稳定 150ms 后才启动或重排分析。这些表现状态不写回记录或会话。UCI 适配器每帧最多派发 128 行引擎输出，剩余内容留到后续帧，避免高频 `info` 突发独占主线程。
 
 UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回复；CanUndoHumanTurn 在 IsThinking 时为 false。NewGame/Dispose 会取消当前操作，不能把这一点描述成“思考中已支持悔棋”。GameScreen 还依赖引擎为 Node、AiMatchConfiguration 要求 EnginePath；远程/自然语言模型尚需配置和生命周期抽象。
 

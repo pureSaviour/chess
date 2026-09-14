@@ -26,7 +26,7 @@
 
 ## 已实现：五子棋复盘胜率图
 
-`IGomokuAiEngine.AnalyzeAsync` 返回黑方胜率、原始估值、深度和当前局面的最佳落点，不返回可写棋局。Rapfi 适配器先以 10 秒、无限深度、strength 100 执行正常搜索取得最佳落点，再用 `YXBOARD + TRACESEARCH` 读取 `Static Eval[Black]` 与 WDL 百分比，限制行长、有限数值和 0..100% 范围。`GomokuReplayAnalysisCoordinator` 复验最佳落点，串行分析、优先当前选中手、缓存结果、取消旧扫描并抑制陈旧完成；终局按赢家直接映射 100%/0%/50% 且不标注下一着。它拥有并且只释放引擎一次。
+`IGomokuAiEngine.AnalyzeAsync` 返回黑方胜率、原始估值、深度和当前局面的最佳落点，不返回可写棋局。Rapfi 适配器在同一个短生命周期进程内，以 500ms、无限深度、单线程和 strength 100 执行正常搜索取得最佳落点，再把进程重置到原局面并用 `YXBOARD + TRACESEARCH` 读取 `Static Eval[Black]` 与 WDL 百分比，避免每个局面重复启动两次进程；它限制行长、有限数值和 0..100% 范围。`GomokuReplayAnalysisCoordinator` 复验最佳落点，串行分析、优先当前选中手、缓存结果、取消旧扫描并抑制陈旧完成，每个未缓存局面后让出 50ms；终局按赢家直接映射 100%/0%/50% 且不标注下一着。它拥有并且只释放引擎一次。
 
 复盘 UI 复用 `ReplayEvaluationGraph`：中线是 50%，上方黑优、下方白优，金色竖线为当前手；棋盘以金色圆环和叉号标注当前局面的最优落点。图表和标记只消费分析结果，不修改 SGF、快照或棋盘。胜率仍是 Rapfi 的静态 NNUE/规则估值，与用于选取最佳落点的完整搜索是两个结果；不同棋盘尺寸和规则的数值不可直接横向比较。
 
@@ -44,4 +44,4 @@
 
 ## 测试入口与限制
 
-核心入口是 `dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`，覆盖难度映射、范围错误、搜索参数传递、候选本地复验、五子棋黑方胜率缓存和幂等释放。2026-09-13 的 Windows 构建、无头 UI smoke、固定官方 Pikafish 的 depth/MultiPV smoke，以及固定官方 Rapfi 的 max_depth/strength/着法/胜率解析 smoke 均通过。尚未完成：各档长期棋力标定、复盘长局性能、图表有窗口视觉验收、Android 原生引擎，以及军旗/三国任何 AI 实现。
+核心入口是 `dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`，覆盖难度映射、范围错误、搜索参数传递、候选本地复验、五子棋黑方胜率缓存和幂等释放。2026-09-14 将复盘恢复为每局面 500ms，并增加固定单线程/内存、时间轴防抖、局面间让步、UCI 每帧输出预算及 Rapfi 单进程分析；90 项核心测试、Windows/Android 条件编译、无头 UI smoke，以及固定官方 Pikafish 与 Rapfi 的真实搜索 smoke 均通过。尚未完成：各档长期棋力标定、图表有窗口视觉和长棋谱帧率验收、Android 原生引擎，以及军旗/三国任何 AI 实现。

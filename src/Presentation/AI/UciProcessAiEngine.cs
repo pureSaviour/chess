@@ -26,6 +26,7 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(8);
     private const int MaximumOutputLines = 4096;
     private const int MaximumLineLength = 8192;
+    private const int MaximumLinesPerFrame = 128;
     private readonly string _executablePath;
     private readonly UciEngineResourceOptions _resources;
     private readonly SemaphoreSlim _searchGate = new(1, 1);
@@ -54,7 +55,8 @@ public partial class UciProcessAiEngine : Node, IXiangqiAiEngine
     {
         if (Interlocked.Exchange(ref _outputOverflow, 0) != 0)
             FailAll(new InvalidDataException("AI 引擎输出队列超过上限。"));
-        while (_output.TryDequeue(out var item))
+        var processed = 0;
+        while (processed++ < MaximumLinesPerFrame && _output.TryDequeue(out var item))
         {
             Interlocked.Decrement(ref _queuedLines);
             if (item.Text.Length > MaximumLineLength) { FailAll(new InvalidDataException("AI 引擎输出行超过长度上限。")); continue; }

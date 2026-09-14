@@ -64,13 +64,13 @@ public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
     private bool _disposed;
 
     public GomokuReplayAnalysisCoordinator(IGomokuAiEngine engine,
-        IReadOnlyList<GomokuSnapshot> positions, int threads = 1, int memoryMegabytes = 256)
+        IReadOnlyList<GomokuSnapshot> positions)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _positions = positions ?? throw new ArgumentNullException(nameof(positions));
         if (positions.Count == 0) throw new ArgumentException("Replay has no positions.", nameof(positions));
         _template = new GomokuAiSearchRequest(positions[0], AiDifficultyProfiles.ReplayThinkMilliseconds,
-            0, 100, threads, memoryMegabytes).Validate();
+            0, 100, AiDifficultyProfiles.ReplayThreads, AiDifficultyProfiles.ReplayMemoryMegabytes).Validate();
     }
 
     public event Action<GomokuReplayAnalysisPoint>? AnalysisAvailable;
@@ -114,6 +114,7 @@ public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
                     analysis.Depth, analysis.BestMove);
                 _cache[index] = point;
                 AnalysisAvailable?.Invoke(point);
+                await Task.Delay(AiDifficultyProfiles.ReplaySweepYieldMilliseconds, operation.Token);
             }
         }
         catch (OperationCanceledException) when (operation.IsCancellationRequested) { }

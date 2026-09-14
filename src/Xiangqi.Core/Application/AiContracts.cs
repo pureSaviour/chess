@@ -113,6 +113,7 @@ public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
                 var point = new ReplayAnalysisPoint(index, redScore, result.BestMove, variation.Depth, variation.MateIn is not null);
                 _cache[index] = point;
                 AnalysisAvailable?.Invoke(point);
+                await Task.Delay(AiDifficultyProfiles.ReplaySweepYieldMilliseconds, operation.Token);
             }
         }
         catch (OperationCanceledException) when (operation.IsCancellationRequested) { }

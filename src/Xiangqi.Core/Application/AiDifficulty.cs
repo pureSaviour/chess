@@ -33,9 +33,20 @@ public readonly record struct GomokuDifficultyProfile(
 
 public static class AiDifficultyProfiles
 {
-    /// <summary>Fixed replay budget. Replay analysis always uses the engine's strongest mode:
-    /// one best line, no depth cap, and (for Gomoku) full native strength.</summary>
-    public const int ReplayThinkMilliseconds = 10_000;
+    /// <summary>Fixed wall-clock budget per replay position. Replay analysis still uses the
+    /// engine's strongest mode within this budget: one best line, no depth cap, and (for Gomoku)
+    /// full native strength.</summary>
+    public const int ReplayThinkMilliseconds = 500;
+    /// <summary>Replay analysis is deliberately single-threaded so background sweeps do not
+    /// contend with Godot rendering. This is an application policy, not a player setting.</summary>
+    public const int ReplayThreads = 1;
+    /// <summary>Fixed transposition-table budget for classic replay analysis.</summary>
+    public const int ReplayHashMegabytes = 64;
+    /// <summary>Fixed engine memory budget for Gomoku replay analysis.</summary>
+    public const int ReplayMemoryMegabytes = 256;
+    /// <summary>Delay between uncached replay positions. It yields CPU time to rendering and input;
+    /// it is not included in the engine's per-position search budget.</summary>
+    public const int ReplaySweepYieldMilliseconds = 50;
 
     public static XiangqiDifficultyProfile Xiangqi(AiDifficultyLevel level,
         int customMilliseconds = 1500, int customDepth = 0) => level switch

@@ -103,6 +103,7 @@ public partial class ClassicReplayScreen : Control
     private readonly ReplayAnalysisCoordinator? _analysis;
     private readonly ReplayEvaluationGraph? _graph;
     private readonly Label? _score;
+    private readonly Godot.Timer? _analysisDebounce;
     private readonly IReadOnlyList<GameSnapshot> _positions;
     private readonly HSlider _timeline;
     private int _index;
@@ -127,9 +128,13 @@ public partial class ClassicReplayScreen : Control
             _graph = new ReplayEvaluationGraph(); _graph.Configure(_positions.Count); analysisPanel.AddChild(_graph);
             var hint = new Label { Text = "红色：红方优势  ·  蓝色：黑方优势\n金色竖线：当前复盘步", AutowrapMode = TextServer.AutowrapMode.WordSmart }; UiStyle.SetMuted(hint, 13); analysisPanel.AddChild(hint);
             var engine = new UciProcessAiEngine(enginePath,
-                new UciEngineResourceOptions(settings.AiThreads, settings.AiHashMegabytes)); AddChild(engine);
+                new UciEngineResourceOptions(AiDifficultyProfiles.ReplayThreads,
+                    AiDifficultyProfiles.ReplayHashMegabytes)); AddChild(engine);
             _analysis = new ReplayAnalysisCoordinator(engine, _positions);
             _analysis.AnalysisAvailable += OnAnalysisAvailable;
+            _analysisDebounce = new Godot.Timer { OneShot = true, WaitTime = .15 };
+            _analysisDebounce.Timeout += () => _ = AnalyzeAsync(_index);
+            AddChild(_analysisDebounce);
         }
         _timeline = new HSlider
         {
@@ -148,7 +153,7 @@ public partial class ClassicReplayScreen : Control
             previous.Disabled = _index == 0; next.Disabled = _index == _positions.Count - 1; _graph?.SetCurrent(_index);
             if (_analysis?.Cache.TryGetValue(_index, out var point) == true) ApplyCurrentAnalysis(point);
             else { _board.SetAnalysisMove(null); if (_score is not null) _score.Text = _positions[_index].IsFinished ? "终局" : "正在计算…"; }
-            if (requestAnalysis && _analysis is not null) _ = AnalyzeAsync(_index);
+            if (requestAnalysis && _analysisDebounce is not null) _analysisDebounce.Start();
         }
         previous.Pressed += () => { if (_index > 0) _index--; Render(true); }; next.Pressed += () => { if (_index + 1 < _positions.Count) _index++; Render(true); };
         _timeline.ValueChanged += value => { _index = Math.Clamp((int)Math.Round(value), 0, _positions.Count - 1); Render(true); };

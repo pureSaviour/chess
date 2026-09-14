@@ -23,7 +23,7 @@
 
 已实现 `IGomokuAiEngine` 和 `AiGomokuMatchController`。端口职责仅为初始化指定棋盘/规则并为不可变 `GomokuSnapshot` 返回一个候选 `GridPoint`；它不拥有棋局、不判断胜负、不落子，也不操作 Godot。输入前置条件是 9..25 路、已定义规则和 100..120000 ms 思考预算；同一实现只允许一个搜索。输出始终不可信，协调器检查局面手数和行棋方，再调用 `GomokuGame.TryPlace` 复验越界、占用和禁手；失败只发布消息，不修改权威局面。
 
-`PiskvorkProcessGomokuAiEngine` 是 Presentation/AI 中的基础设施适配器。每次探测、搜索或分析启动一个短生命周期、无 shell、隐藏窗口的外部进程，通过重定向 stdin/stdout 发送 `START`、`INFO rule/max_depth/strength/thread_num/max_memory`、`BEGIN/BOARD`，或分析用 `YXBOARD + TRACESEARCH`。着法只接受零基 `x,y`；分析只接受有界的黑方静态估值与 WDL 百分比。无禁手映射 Piskvork rule 0，连珠禁手映射 rule 2。协议错误、提前退出、超长行、非有限数值和越界坐标均失败关闭；思考预算外另给 10 秒启动/模型加载余量。取消或释放会终止整个子进程树，释放幂等。适配器不会把后台回调送进 UI。五档映射和胜率图限制见 [AI 难度与分析](ai-engines.md)。
+`PiskvorkProcessGomokuAiEngine` 是 Presentation/AI 中的基础设施适配器。每次探测或搜索启动一个短生命周期、无 shell、隐藏窗口的外部进程；一次复盘分析则在同一进程中先以 `BEGIN/BOARD` 搜索最佳落点，再用 `YXBOARD + TRACESEARCH` 重置到原局面并读取评分，避免重复进程启动。协议通过重定向 stdin/stdout 发送 `START`、`INFO rule/max_depth/strength/thread_num/max_memory` 等命令。着法只接受零基 `x,y`；分析只接受有界的黑方静态估值与 WDL 百分比。无禁手映射 Piskvork rule 0，连珠禁手映射 rule 2。协议错误、提前退出、超长行、非有限数值和越界坐标均失败关闭；500ms 复盘思考预算外另给 10 秒启动/模型加载余量。复盘固定单线程、无限深度和 strength 100；协调器在局面间让出 50ms，屏幕对时间轴变化防抖 150ms。取消或释放会终止整个子进程树，释放幂等。适配器不会把后台回调送进 UI。五档映射和胜率图限制见 [AI 难度与分析](ai-engines.md)。
 
 组合根从 `AppSettings` 注入玩家执色、路数、规则和对局搜索参数，引擎路径只由 `EnginePackageInstaller.TryGetInstalled` 从应用管理目录的固定 Rapfi 版本解析。设置页不提供文件浏览或路径输入；玩家确认 GPLv3 后，一键配置会下载固定官方包、核对 SHA-256、安全解压并写入安装清单。项目不提交、不导出 Rapfi 文件，也不支持任意 Piskvork 可执行文件。若将来随产品分发二进制，必须另行落实对应许可证与完整对应源码义务。
 
@@ -33,6 +33,6 @@
 
 `GomokuSgfCodec` 读写 SGF FF[4]/GM[4]，使用 `SZ/RU/AB/AW/PL/B/W` 主线。解析最多 1,000,000 字符，未知属性/变例不进入主线，返回前必须通过领域重放。`GomokuRecordStore` 通过共享作用域存储拥有 `user://games/gomoku.standard/records`，recent 保留十局，saved 不自动清理；首次访问只复制并保留旧目录记录。当前小文件 I/O 同步发生在主线程。
 
-画廊提供与经典象棋同构的 9 个叶子：本地/LAN/Steam，最近/保存，SGF/局面导入，人机对决/设置。九个入口均已接通；AI 设置页外层只显示难度、执子、棋盘和规则，固定引擎的一键配置、自定义时间/深度、线程和内存位于默认收起的“高级设置”。复盘在固定引擎可用时，以不可调的最高分析档显示黑/白优势胜率曲线，并在棋盘标注经领域复验的最佳落点。
+画廊提供与经典象棋同构的 9 个叶子：本地/LAN/Steam，最近/保存，SGF/局面导入，人机对决/设置。九个入口均已接通；AI 设置页外层只显示难度、执子、棋盘和规则，固定引擎的一键配置、自定义时间/深度、线程和内存位于默认收起的“高级设置”。复盘在固定引擎可用时，以不可调的最高强度、单线程、500ms 时间预算显示黑/白优势胜率曲线，并在棋盘标注经领域复验的最佳落点；这里的最高强度是不降级搜索结果，并非无界思考。
 
 核心自运行测试覆盖几何、规则、禁手、SGF、fake transport，以及 AI 正常落子、非法输出和幂等释放。真实 Rapfi 协议采用临时官方包烟测；真实双机 LAN、Steam 双账号、Android 触控、多分辨率、Android AI 与复杂禁手棋库对拍尚未验收。

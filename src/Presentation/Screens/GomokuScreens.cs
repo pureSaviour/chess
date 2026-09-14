@@ -69,6 +69,7 @@ public partial class GomokuReplayScreen : Control
     private readonly Label? _score;
     private readonly ReplayEvaluationGraph? _graph;
     private readonly GomokuReplayAnalysisCoordinator? _analysis;
+    private readonly Godot.Timer? _analysisDebounce;
     private int _index;
 
     public GomokuReplayScreen(AppSettings settings,GomokuGameRecord record,Action back,string? enginePath=null)
@@ -89,12 +90,12 @@ public partial class GomokuReplayScreen : Control
             _graph=new ReplayEvaluationGraph();_graph.Configure(_positions.Count);_graph.SetLabels("黑优","白优");panel.AddChild(_graph);
             var hint=new Label{Text="曲线为 Rapfi 给出的黑方胜率 · 50% 为均衡",AutowrapMode=TextServer.AutowrapMode.WordSmart};UiStyle.SetMuted(hint,13);panel.AddChild(hint);
             var engine=new PiskvorkProcessGomokuAiEngine(enginePath);
-            _analysis=new GomokuReplayAnalysisCoordinator(engine,_positions,settings.GomokuAiThreads,
-                settings.GomokuAiMemoryMegabytes);_analysis.AnalysisAvailable+=OnAnalysisAvailable;
+            _analysis=new GomokuReplayAnalysisCoordinator(engine,_positions);_analysis.AnalysisAvailable+=OnAnalysisAvailable;
+            _analysisDebounce=new Godot.Timer{OneShot=true,WaitTime=.15};_analysisDebounce.Timeout+=()=>_ = AnalyzeAsync(_index);AddChild(_analysisDebounce);
         }
         var timeline=new HSlider{MinValue=0,MaxValue=Math.Max(0,_positions.Count-1),Step=1,SizeFlagsHorizontal=SizeFlags.ExpandFill};root.AddChild(timeline);
         var controls=new HBoxContainer{Alignment=BoxContainer.AlignmentMode.Center};root.AddChild(controls);var previous=UiStyle.CreateButton("◀ 上一步");var next=UiStyle.CreateButton("下一步 ▶");controls.AddChild(previous);controls.AddChild(next);
-        void Render(bool analyze=true){_board.SetPosition(_positions[_index]);_ply.Text=$"第 {_index}/{_positions.Count-1} 手";timeline.SetValueNoSignal(_index);previous.Disabled=_index==0;next.Disabled=_index==_positions.Count-1;_graph?.SetCurrent(_index);if(_analysis?.Cache.TryGetValue(_index,out var point)==true)Apply(point);else{_board.SetAnalysisPoint(null);if(_score is not null)_score.Text=_positions[_index].IsFinished?"终局":"正在计算…";}if(analyze&&_analysis is not null)_ = AnalyzeAsync(_index);}
+        void Render(bool analyze=true){_board.SetPosition(_positions[_index]);_ply.Text=$"第 {_index}/{_positions.Count-1} 手";timeline.SetValueNoSignal(_index);previous.Disabled=_index==0;next.Disabled=_index==_positions.Count-1;_graph?.SetCurrent(_index);if(_analysis?.Cache.TryGetValue(_index,out var point)==true)Apply(point);else{_board.SetAnalysisPoint(null);if(_score is not null)_score.Text=_positions[_index].IsFinished?"终局":"正在计算…";}if(analyze&&_analysisDebounce is not null)_analysisDebounce.Start();}
         previous.Pressed+=()=>{if(_index>0)_index--;Render();};next.Pressed+=()=>{if(_index+1<_positions.Count)_index++;Render();};timeline.ValueChanged+=value=>{_index=Math.Clamp((int)Math.Round(value),0,_positions.Count-1);Render();};Render();
     }
     private async Task AnalyzeAsync(int index){try{if(_analysis is not null)await _analysis.SelectAndSweepAsync(index);}catch(Exception error){if(_score is not null)_score.Text=$"引擎错误：{error.Message}";}}

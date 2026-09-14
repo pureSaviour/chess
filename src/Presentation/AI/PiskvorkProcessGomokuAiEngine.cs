@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using Xiangqi.Core.Application;
 using Xiangqi.Core.Application.Gomoku;
 using Xiangqi.Core.Domain.Gomoku;
 using Xiangqi.Core.Domain.Grid;
@@ -115,11 +116,6 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
         if (request.Position.BoardSize != _boardSize || request.Position.Rules != _rules)
             throw new ArgumentException("AI 请求与初始化棋盘配置不一致。", nameof(request));
 
-        // A replay result must include an actually searched best move. TRACESEARCH exposes Rapfi's
-        // static WDL evaluation only, so run the strongest normal search before reading that score.
-        var strongest = request with { MaxDepth = 0, Strength = 100 };
-        var bestMove = await FindMoveAsync(strongest, cancellationToken);
-
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -131,9 +127,26 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
             var response = await ReadSignificantLine(process, timeout.Token);
             if (!response.Equals("OK", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"Piskvork 握手失败：{response}");
+            await WriteLine(process, $"INFO timeout_turn {request.ThinkMilliseconds}", timeout.Token);
+            await WriteLine(process, $"INFO time_left {Math.Max(request.ThinkMilliseconds * 10L, request.ThinkMilliseconds)}", timeout.Token);
             await WriteLine(process, $"INFO max_memory {request.MemoryMegabytes * 1024L * 1024L}", timeout.Token);
             await WriteLine(process, $"INFO rule {(_rules == GomokuRuleSet.RenjuForbiddenMoves ? 2 : 0)}", timeout.Token);
-            await WriteLine(process, $"INFO thread_num {request.Threads}", timeout.Token);
+            await WriteLine(process, $"INFO thread_num {AiDifficultyProfiles.ReplayThreads}", timeout.Token);
+            await WriteLine(process, "INFO strength 100", timeout.Token);
+            if (request.Position.Stones.Count == 0) await WriteLine(process, "BEGIN", timeout.Token);
+            else
+            {
+                await WriteLine(process, "BOARD", timeout.Token);
+                foreach (var stone in request.Position.Stones)
+                {
+                    var player = stone.Color == StoneColor.Black ? 1 : 2;
+                    await WriteLine(process, $"{stone.Point.Column},{stone.Point.Row},{player}", timeout.Token);
+                }
+                await WriteLine(process, "DONE", timeout.Token);
+            }
+            var bestMove = ParsePoint(await ReadSignificantLine(process, timeout.Token), _boardSize);
+
+            // Reset to the analyzed position in the same process before asking for Rapfi's static WDL.
             await WriteLine(process, "YXBOARD", timeout.Token);
             foreach (var stone in request.Position.Stones)
             {

@@ -180,7 +180,7 @@ AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子�
 
 定义：[GomokuAi.cs](../src/Xiangqi.Core/Application/Gomoku/GomokuAi.cs)；桌面适配器：[PiskvorkProcessGomokuAiEngine.cs](../src/Presentation/AI/PiskvorkProcessGomokuAiEngine.cs)。
 
-`IGomokuAiEngine` 的输入是不可变局面及有界的时间、最大深度、强度、线程、内存，着法输出只是候选交叉点。`AnalyzeAsync` 另返回黑方视角的有限胜率/原始估值和搜索得到的最佳落点，不返回可写棋局。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是对局消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。`GomokuReplayAnalysisCoordinator` 则固定使用 10 秒、无限深度和 100 强度，串行分析、复验最佳落点、优先当前选择、缓存并抑制取消后的陈旧完成。屏幕退出释放 controller/coordinator，后者取消搜索并幂等释放 engine。
+`IGomokuAiEngine` 的输入是不可变局面及有界的时间、最大深度、强度、线程、内存，着法输出只是候选交叉点。`AnalyzeAsync` 另返回黑方视角的有限胜率/原始估值和搜索得到的最佳落点，不返回可写棋局。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是对局消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。`GomokuReplayAnalysisCoordinator` 固定使用每局面 500ms、无限深度、单线程和 100 强度，串行分析、复验最佳落点、优先当前选择、缓存并抑制取消后的陈旧完成；未缓存局面之间让出 50ms。屏幕对连续时间轴变化防抖 150ms，退出时释放 controller/coordinator，后者取消搜索并幂等释放 engine。
 
 新增实现应复用这一端口并说明线程、取消和资源所有权。Piskvork 适配器每次搜索/分析拥有子进程，禁用 shell，限制协议行，取消时终止进程树。常见误用包括：UI 直接采用引擎坐标、把静态估值称为固定深度搜索胜率、把 Rapfi 模型复制进导出包、从后台任务触碰 Godot 节点、或者把 rule 2 当成所有五子棋规则。测试入口为核心自运行测试中的 fake engine；真实适配器另做官方引擎烟测。当前 Android 没有外部进程实现。五档映射、协议翻译、兼容策略和军旗/三国的未实现边界见 [AI 难度与分析](ai-engines.md)。
 
@@ -234,7 +234,7 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 `GameSession.BeginTrial()` 和 `ThreeMatchSession.BeginTrial()` 返回一次性的隔离分支。输入是调用时的只读权威局面，输出是副本快照和经同一棋规验证的 `TryMove`；它们不含玩家权限、时钟、聊天、协商、网络发送或提交/合并。经典界面将推演前后快照与成功 `MoveResult` 交给 `GameSession.DescribeMove`，按权威对局相同顺序获取移动/吃子、将军/终局和注册 detector 提示，再播放平移、淡出、音效与落子效果；`DescribeMove` 不写入任何局面，并拒绝失败结果。分支由界面持有，退出推演后解除引用即可。
 
-`ReplayAnalysisCoordinator` 输入一个 IXiangqiAiEngine 和不可变复盘局面序列；搜索策略固定为每局面 10 秒、无限深度、单一最佳线路，不读取对局难度或玩家设置。`SelectAndSweepAsync(index)` 取消上一代操作、先算 index，再按距离补齐缓存；AnalysisAvailable 在调用上下文连续发布，UI 仍必须在 Godot 主线程调用。BestMove 经临时 ChessGame 重验，非法输出以 InvalidDataException 失败；分数约定为 UCI 行棋方视角并归一为红方视角，mate 映射到有界哨兵值。协调器拥有引擎，DisposeAsync 取消活动操作并释放进程；消费者不得再单独释放同一引擎。
+`ReplayAnalysisCoordinator` 输入一个 IXiangqiAiEngine 和不可变复盘局面序列；搜索策略固定为每局面 500ms、无限深度、单线程和单一最佳线路，不读取对局难度或玩家设置。“最强”在这里表示不主动降级搜索结果，不表示无限时间。`SelectAndSweepAsync(index)` 取消上一代操作、先算 index，再按距离补齐缓存，并在未缓存局面之间让出 50ms；AnalysisAvailable 在调用上下文连续发布，UI 仍必须在 Godot 主线程调用。屏幕等待时间轴选择稳定 150ms 后才调用协调器。BestMove 经临时 ChessGame 重验，非法输出以 InvalidDataException 失败；分数约定为 UCI 行棋方视角并归一为红方视角，mate 映射到有界哨兵值。协调器拥有引擎，DisposeAsync 取消活动操作并释放进程；消费者不得再单独释放同一引擎。UCI 适配器把后台输出放入有界队列，Godot 每帧最多派发 128 行，避免引擎输出突发拖慢渲染；队列溢出仍按不可信外部输入失败关闭。
 
 测试入口：核心自运行测试覆盖经典 FEN/PGN 往返、非法主线、两种推演隔离、三国扩展 PGN 重放，以及复盘评分归一/缓存/引擎释放。2026-09-09 使用 `GODOT_NEW_PATH` 下 Godot 4.7.2 .NET 执行 `--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均通过，并检查了兼容渲染器 GPU 截图；真实 Pikafish 长棋谱性能、头像跨重启显示、动画手感和不同分辨率仍需人工视觉验收。
 
