@@ -105,7 +105,7 @@ public partial class SettingsScreen : Control
 
         AddSection(grid, "玩家资料", "仅自定义内容会发给对局中的另一位玩家");
         _playerId.Text = _draft.CustomPlayerId;
-        AddRow(grid, "自定义 ID", _playerId);
+        AddRow(grid, "自定义昵称", _playerId);
         var avatarRow = new HBoxContainer();
         _avatarPath.Text = string.IsNullOrWhiteSpace(_draft.CustomAvatarPath)
             ? "使用平台默认头像" : Path.GetFileName(_draft.CustomAvatarPath);

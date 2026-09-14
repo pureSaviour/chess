@@ -22,24 +22,26 @@ public partial class Main
         record => SwitchTo(new ThreeReplayScreen(_settings, _themes, record, () => ShowThreeRecords(saved))),
         record => SwitchTo(new ThreeGameScreen(_settings, ShowGallery,
             new LocalThreeMatchController(TimeControl.Unlimited,
-                ThreeKingdomsGame.FromPosition(record.InitialPosition, record.AdvisorPolicy)), themes: _themes))));
+                ThreeKingdomsGame.FromPosition(record.InitialPosition, record.AdvisorPolicy),
+                CreateThreePlayerProfile()), themes: _themes))));
     private void StartThreeLocal(TimeControl time, AdvisorConquestPolicy policy)
     {
         CancelWaitingSteamLobby();
         SwitchTo(new ThreeGameScreen(_settings, ShowGallery,
-            new LocalThreeMatchController(time, policy), themes: _themes));
+            new LocalThreeMatchController(time, policy, CreateThreePlayerProfile()), themes: _themes));
     }
     private string ThreePlayerName => string.IsNullOrWhiteSpace(_settings.CustomPlayerId) ? $"棋手 {System.Environment.ProcessId}" : _settings.CustomPlayerId;
     private PlayerProfileCommand CreateThreePlayerProfile(PlayerProfileSnapshot? platformProfile = null)
     {
-        var custom = CustomPlayerProfileFactory.Create(_settings, platformProfile?.DisplayName ?? ThreePlayerName);
-        var profile = custom ?? platformProfile ??
-            new PlayerProfileSnapshot("本地", $"local:{System.Environment.ProcessId}", ThreePlayerName);
+        var fallback = platformProfile ?? CreateDefaultLocalProfile(ThreePlayerName);
+        var profile = _settings.HasCustomProfile
+            ? CustomPlayerProfileFactory.ApplyOverrides(_settings, fallback)
+            : fallback;
         try { return CustomPlayerProfileFactory.ToCommand(profile); }
         finally
         {
-            profile.Avatar?.Dispose();
-            if (!ReferenceEquals(profile.Avatar, platformProfile?.Avatar)) platformProfile?.Avatar?.Dispose();
+            if (!ReferenceEquals(profile.Avatar, fallback.Avatar)) profile.Avatar?.Dispose();
+            fallback.Avatar?.Dispose();
         }
     }
     private void StartThreeLanHost(int port, TimeControl time, AdvisorConquestPolicy policy)

@@ -6,8 +6,9 @@ using Xiangqi.GameHost;
 namespace Xiangqi.Presentation.Records;
 
 /// <summary>
-/// Owns local PGN files below user://records/classic. Recent records are capped at ten; saved
-/// records are user-owned and never evicted. Writes are atomic within the same directory.
+/// Owns validated UTF-8 PGN/ICCS files below the classic module record root. Recent records are
+/// capped at ten; saved records and user-selected exports are never evicted. Export validates and
+/// reserializes the source record but does not copy display-only sidecars.
 /// </summary>
 public static class ClassicRecordStore
 {
@@ -15,12 +16,14 @@ public static class ClassicRecordStore
     private static readonly GameRecordStorage Storage = new(
         ProjectSettings.GlobalizePath("user://games"), new("xiangqi.classic"), ".pgn", "xiangqi",
         ProjectSettings.GlobalizePath("user://records/classic"));
-    public sealed record Player(string Name, bool IsLocal, int AvatarWidth = 0, int AvatarHeight = 0, byte[]? AvatarRgba = null);
-    public sealed record Presentation(DateTimeOffset PlayedAt, string Mode, Player Red, Player Black, string Result);
-    public sealed record Entry(string PgnPath, Presentation Presentation);
+    private sealed record LegacyPlayer(string Name, bool IsLocal, int AvatarWidth = 0,
+        int AvatarHeight = 0, byte[]? AvatarRgba = null);
+    private sealed record LegacyPresentation(DateTimeOffset PlayedAt, string Mode,
+        LegacyPlayer Red, LegacyPlayer Black, string Result);
+    public sealed record Entry(string RecordPath, MatchRecordPresentation Presentation);
 
-    public static string SaveRecent(ClassicGameRecord record, Presentation? presentation = null) => Save(record, false, presentation);
-    public static string SavePermanent(ClassicGameRecord record, Presentation? presentation = null) => Save(record, true, presentation);
+    public static string SaveRecent(ClassicGameRecord record, MatchRecordPresentation? presentation = null) => Save(record, false, presentation);
+    public static string SavePermanent(ClassicGameRecord record, MatchRecordPresentation? presentation = null) => Save(record, true, presentation);
 
     public static IReadOnlyList<string> List(bool saved)
     {
@@ -38,48 +41,65 @@ public static class ClassicRecordStore
         return record!;
     }
 
-    private static string Save(ClassicGameRecord record, bool permanent, Presentation? presentation)
+    /// <summary>Revalidates a recent entry and writes a new saved record plus shared sidecar.</summary>
+    public static string SavePermanent(Entry entry) =>
+        SavePermanent(Load(entry.RecordPath), entry.Presentation);
+
+    /// <summary>
+    /// Revalidates a store-owned source and writes only the standard PGN/ICCS payload to the
+    /// caller-selected .pgn destination. The source and its display sidecar remain unchanged.
+    /// </summary>
+    public static void Export(string recordPath, string destinationPath)
+    {
+        RecordFileExporter.WriteUtf8(destinationPath, ".pgn",
+            XiangqiPgnCodec.Serialize(Load(recordPath)));
+    }
+
+    private static string Save(ClassicGameRecord record, bool permanent, MatchRecordPresentation? presentation)
     {
         var path = Storage.CreatePath(permanent);
         Storage.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(XiangqiPgnCodec.Serialize(record)));
-        if (presentation is not null)
-            File.WriteAllText(MetadataPath(path), JsonSerializer.Serialize(Validate(presentation)));
-        if (!permanent) Storage.PruneRecent(RecentLimit, stale =>
-        {
-            var metadata = MetadataPath(stale); if (File.Exists(metadata)) File.Delete(metadata);
-        });
+        if (presentation is not null) MatchRecordPresentationStore.Save(path, presentation);
+        if (!permanent) Storage.PruneRecent(RecentLimit, MatchRecordPresentationStore.DeleteSidecar);
         return path;
     }
 
-    private static Presentation LoadPresentation(string pgnPath)
+    private static MatchRecordPresentation LoadPresentation(string pgnPath)
     {
+        // Releases before the shared sidecar schema stored Red/Black explicitly. Read that shape
+        // first so existing user records retain which side was local.
         try
         {
             var metadata = MetadataPath(pgnPath);
             if (File.Exists(metadata) && new FileInfo(metadata).Length <= 256 * 1024)
-                return Validate(JsonSerializer.Deserialize<Presentation>(File.ReadAllText(metadata))!);
+            {
+                var legacy = JsonSerializer.Deserialize<LegacyPresentation>(File.ReadAllText(metadata));
+                if (legacy?.Red is not null && legacy.Black is not null)
+                {
+                    static RecordPlayer Convert(LegacyPlayer player) => new(player.Name, player.IsLocal,
+                        player.AvatarWidth, player.AvatarHeight, player.AvatarRgba);
+                    var local = legacy.Red.IsLocal ? Convert(legacy.Red) : Convert(legacy.Black);
+                    var opponent = legacy.Red.IsLocal ? Convert(legacy.Black) : Convert(legacy.Red);
+                    var redWon = legacy.Result.Contains("红方胜", StringComparison.Ordinal) || legacy.Result == "1-0";
+                    var blackWon = legacy.Result.Contains("黑方胜", StringComparison.Ordinal) || legacy.Result == "0-1";
+                    var draw = legacy.Result.Contains('和') || legacy.Result == "1/2-1/2";
+                    var localWon = legacy.Red.IsLocal ? redWon : blackWon;
+                    return new(legacy.PlayedAt, legacy.Mode, local, [opponent],
+                        draw ? "和" : localWon ? "胜" : "败");
+                }
+            }
         }
         catch (Exception error) { GD.PushWarning($"忽略损坏的棋谱展示信息：{error.Message}"); }
-        var record = Load(pgnPath);
-        var red = record.Tags.GetValueOrDefault("Red", "红方"); var black = record.Tags.GetValueOrDefault("Black", "黑方");
-        var mode = record.Tags.GetValueOrDefault("Event", "经典象棋"); var result = record.Tags.GetValueOrDefault("Result", "*");
-        return new Presentation(File.GetLastWriteTime(pgnPath), mode, new(red, true), new(black, false), result);
-    }
-
-    private static Presentation Validate(Presentation value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        Player Check(Player player)
+        return MatchRecordPresentationStore.Load(pgnPath, () =>
         {
-            if (string.IsNullOrWhiteSpace(player.Name) || player.Name.Length > 64) throw new InvalidDataException("玩家名称无效。");
-            var pixels = player.AvatarRgba ?? [];
-            if (player.AvatarWidth is < 0 or > 64 || player.AvatarHeight is < 0 or > 64 ||
-                pixels.Length > 64 * 64 * 4 || (pixels.Length > 0 && pixels.Length != player.AvatarWidth * player.AvatarHeight * 4))
-                throw new InvalidDataException("头像数据无效。");
-            return player with { Name = player.Name.Trim(), AvatarRgba = pixels };
-        }
-        if (value.Mode.Length > 64 || value.Result.Length > 32) throw new InvalidDataException("记录展示字段过长。");
-        return value with { Red = Check(value.Red), Black = Check(value.Black) };
+            var record = Load(pgnPath);
+            var red = record.Tags.GetValueOrDefault("Red", "红方");
+            var black = record.Tags.GetValueOrDefault("Black", "黑方");
+            var result = record.Tags.GetValueOrDefault("Result", "*");
+            return new(File.GetLastWriteTime(pgnPath),
+                record.Tags.GetValueOrDefault("Event", "经典象棋"), new(red, true), [new(black, false)],
+                result == "1-0" ? "胜" : result == "1/2-1/2" ? "和" : result == "0-1" ? "败" : "未决");
+        });
     }
     private static string MetadataPath(string pgnPath) => pgnPath + ".meta.json";
 

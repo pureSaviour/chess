@@ -13,6 +13,8 @@ public static class JieqiRecordStore
     public sealed record Entry(string RecordPath, MatchRecordPresentation Presentation);
     public static string SaveRecent(JieqiGameRecord record, MatchRecordPresentation? presentation = null) => Save(record, false, presentation);
     public static string SavePermanent(JieqiGameRecord record, MatchRecordPresentation? presentation = null) => Save(record, true, presentation);
+    /// <summary>Revalidates a recent entry and writes a new saved record plus shared sidecar.</summary>
+    public static string SavePermanent(Entry entry) => SavePermanent(Load(entry.RecordPath), entry.Presentation);
     public static IReadOnlyList<string> List(bool saved)
     {
         return Storage.List(saved);

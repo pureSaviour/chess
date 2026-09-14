@@ -17,6 +17,8 @@
 
 `JieqiPgnCodec.TryParse` 限制输入为 4 MiB，验证变体、算法、种子和坐标，并通过 `JieqiGame` 逐手重放。未知算法拒绝导入，避免同一种子在未来悄然产生另一盘棋。`JieqiRecordStore` 通过共享作用域存储原子写入 `user://games/xiangqi.jieqi/records`，recent 最多十局，saved 不淘汰；首次访问只复制并保留旧目录记录。
 
+终局自动落入 recent 后，玩家可在最近记录页将其追加到 saved；Store 会重新校验 Seed/Shuffle 和全部着法，不删除 recent 原件。
+
 ## 表现与所有权
 
 `JieqiGameScreen` 通过 `JieqiGameSession` 提交意图；Session 的 Snapshot/StateChanged/MoveCommitted 只发布脱敏 `GameSnapshot`，不把权威 `JieqiSnapshot` 交给直播 UI。页面复用经典 `BoardView` 的选中、合法落点和位移动画。暗子使用双方一致、无文字的木质背面（同心饰环与环形纹点），不占用 semantic-v1 七列正面 atlas。`BoardView.AnimateMove` 只在提交前后同一稳定棋子 ID 从 `covered` 变为具体棋种时，让位置插值与横向翻面共享同一条 0..1 时间线：棋子离开起点时开始收窄，中途切换为正面，并在到达终点时完全展开；普通移动不翻面。揭子移动总时长取普通移动时长和主题 `landing` 时长的较大值，后者限制为 180..420 ms、未配置时为 280 ms，因此不会在落点后追加停顿。动画结束后才发出 `MoveAnimationFinished`。这些状态都由 BoardView 持有，在主线程 `_Process` 推进；SetPosition、重同步或退出节点会丢弃瞬态动画，不写回 Session。

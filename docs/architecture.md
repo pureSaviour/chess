@@ -138,6 +138,8 @@ UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回�
 
 MatchPlayerProfiles 持有本局双方 PlayerProfileSnapshot/PlayerAvatarPixels；平台或自定义提供器只产出名称/ID/像素。Steam Persona Name 是玩家可见名称，Steam64 仍保留为内部身份字段但玩家卡不再默认显示它。GameScreen 创建 ImageTexture，释放时先断开控件纹理再 Dispose；本机头像路径不发给对手。当前 UI 断线后释放资料并显示释放状态。
 
+本机资料的组合顺序是 Steam 昵称/头像→本地默认→按字段应用自定义昵称/头像，因此只自定义其中一项不会丢失另一项的 Steam 默认值。经典最近与保存记录页都可将已校验记录导出为 UTF-8 `.pgn`，内容固定使用 PGN 容器和 ICCS 着法；最近记录还可在记录页追加到 saved，不删除 recent 原件。
+
 BoardView.BottomSide 只改变投影。路数按当前朝向显示，红方中文、黑方阿拉伯数字。IBoardThemeCatalog 由 BoardView 构造注入，主题统一控制棋盘、棋子、合法点与 BoardFeedbackLayer；默认春日主题使用更浅底色、较低装饰强度和更多春季细节。完整契约见抽象手册。BoardView 仍是固定经典棋盘，不实现三国的 IBoardProjection。
 
 选中红环/悬浮及最近落点白环/起点角标与棋规无关。新着法开始隐藏旧标记，动画落地显示新标记；同局面刷新保留，悔棋/重开清除。关闭动态特效保留静态提示。

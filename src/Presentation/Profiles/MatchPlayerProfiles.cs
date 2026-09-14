@@ -72,14 +72,14 @@ public sealed class MatchPlayerProfiles : IDisposable
     public void ReplaceLocal(PlayerProfileSnapshot profile)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Local.Avatar?.Dispose();
+        if (!ReferenceEquals(Local.Avatar, profile.Avatar)) Local.Avatar?.Dispose();
         Local = profile;
     }
 
     public void ReplaceOpponent(PlayerProfileSnapshot profile)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Opponent.Avatar?.Dispose();
+        if (!ReferenceEquals(Opponent.Avatar, profile.Avatar)) Opponent.Avatar?.Dispose();
         Opponent = profile;
     }
 
@@ -99,24 +99,45 @@ public sealed class MatchPlayerProfiles : IDisposable
 /// </summary>
 public static class CustomPlayerProfileFactory
 {
+    /// <summary>
+    /// Applies independently configured nickname/avatar overrides to a caller-owned fallback
+    /// profile. Missing or unreadable override fields retain the fallback Steam/local value. The
+    /// returned snapshot may share the fallback avatar; the caller must transfer it to one profile
+    /// lease or dispose it. Image decoding is synchronous and the source path is never transmitted.
+    /// </summary>
+    public static PlayerProfileSnapshot ApplyOverrides(AppSettings settings, PlayerProfileSnapshot fallback)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(fallback);
+        if (!settings.HasCustomProfile) return fallback;
+
+        var displayName = string.IsNullOrWhiteSpace(settings.CustomPlayerId)
+            ? fallback.DisplayName
+            : settings.CustomPlayerId.Trim();
+        var avatar = TryLoadCustomAvatar(settings.CustomAvatarPath) ?? fallback.Avatar;
+        return fallback with { Platform = $"自定义/{fallback.Platform}", DisplayName = displayName, Avatar = avatar };
+    }
+
     public static PlayerProfileSnapshot? Create(AppSettings settings, string fallbackName)
     {
         if (!settings.HasCustomProfile) return null;
-        PlayerAvatarPixels? avatar = null;
-        if (!string.IsNullOrWhiteSpace(settings.CustomAvatarPath))
+        return ApplyOverrides(settings,
+            new PlayerProfileSnapshot("本地", "本地棋手", fallbackName));
+    }
+
+    private static PlayerAvatarPixels? TryLoadCustomAvatar(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        using var image = new Image();
+        if (image.Load(path) != Error.Ok)
         {
-            using var image = new Image();
-            if (image.Load(settings.CustomAvatarPath) == Error.Ok)
-            {
-                image.Convert(Image.Format.Rgba8);
-                image.Resize(MatchWireProtocol.MaximumAvatarSide,
-                    MatchWireProtocol.MaximumAvatarSide, Image.Interpolation.Lanczos);
-                avatar = new PlayerAvatarPixels(image.GetWidth(), image.GetHeight(), image.GetData());
-            }
-            else GD.PushWarning($"无法读取自定义头像：{settings.CustomAvatarPath}");
+            GD.PushWarning($"无法读取自定义头像：{path}");
+            return null;
         }
-        var id = string.IsNullOrWhiteSpace(settings.CustomPlayerId) ? "本地棋手" : settings.CustomPlayerId.Trim();
-        return new PlayerProfileSnapshot("自定义", id, fallbackName, avatar);
+        image.Convert(Image.Format.Rgba8);
+        image.Resize(MatchWireProtocol.MaximumAvatarSide,
+            MatchWireProtocol.MaximumAvatarSide, Image.Interpolation.Lanczos);
+        return new PlayerAvatarPixels(image.GetWidth(), image.GetHeight(), image.GetData());
     }
 
     public static PlayerProfileCommand ToCommand(PlayerProfileSnapshot profile)

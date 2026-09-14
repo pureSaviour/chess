@@ -417,8 +417,9 @@ public partial class Main : Control
 
     private void OnSteamMatchReady(SteamMatchReady match)
     {
-        var custom = CustomPlayerProfileFactory.Create(_settings, match.Profiles.Local.DisplayName);
-        if (custom is not null) match.Profiles.ReplaceLocal(custom);
+        var hasCustomProfile = _settings.HasCustomProfile;
+        if (hasCustomProfile)
+            match.Profiles.ReplaceLocal(CustomPlayerProfileFactory.ApplyOverrides(_settings, match.Profiles.Local));
         if (match.Configuration.Mode == TwoPlayerGameMode.Jieqi)
         {
             var controller = new NetworkJieqiMatchController(match.Transport, match.Configuration.HostSide,
@@ -452,7 +453,7 @@ public partial class Main : Control
             _debugNetworkSmoke,
             _debugTimeoutSmoke,
             match.Profiles,
-            custom is not null,
+            hasCustomProfile,
             themes: _themes));
     }
 #endif
@@ -602,6 +603,16 @@ public partial class Main : Control
     {
         try
         {
+            var profileSettings = _settings.Copy();
+            profileSettings.CustomPlayerId = "烟测昵称";
+            profileSettings.CustomAvatarPath = string.Empty;
+            var fallbackProfile = new PlayerProfileSnapshot("测试", "local-smoke", "Steam 默认",
+                CreateSmokeAvatar(142, 59, 53));
+            var mergedProfile = CustomPlayerProfileFactory.ApplyOverrides(profileSettings, fallbackProfile);
+            if (mergedProfile.DisplayName != "烟测昵称" ||
+                !ReferenceEquals(mergedProfile.Avatar, fallbackProfile.Avatar))
+                throw new InvalidOperationException("Custom nickname must retain the platform default avatar.");
+            mergedProfile.Avatar?.Dispose();
             ShowGallery();
             await ToSignal(GetTree().CreateTimer(0.35), SceneTreeTimer.SignalName.Timeout);
             var smokeModules = CreateAvailableGameModules();
@@ -803,19 +814,31 @@ public partial class Main : Control
 
     private MatchPlayerProfiles CreateLanProfiles()
     {
-        var displayName = string.IsNullOrWhiteSpace(_settings.CustomPlayerId) ? "本地玩家" : _settings.CustomPlayerId;
-        var local = new PlayerProfileSnapshot("本地", "本地棋手", displayName);
-        var custom = CustomPlayerProfileFactory.Create(_settings, local.DisplayName);
-        return new MatchPlayerProfiles(custom ?? local,
+        var profiles = new MatchPlayerProfiles(CreateDefaultLocalProfile(),
             new PlayerProfileSnapshot("联机", "远端棋手", "联机对手"));
+        if (_settings.HasCustomProfile)
+            profiles.ReplaceLocal(CustomPlayerProfileFactory.ApplyOverrides(_settings, profiles.Local));
+        return profiles;
     }
 
     private MatchPlayerProfiles CreateOfflineProfiles(string opponentName)
     {
-        var displayName = string.IsNullOrWhiteSpace(_settings.CustomPlayerId) ? "本地玩家" : _settings.CustomPlayerId;
-        var local = new PlayerProfileSnapshot("本地", "本地棋手", displayName);
-        var custom = CustomPlayerProfileFactory.Create(_settings, local.DisplayName);
-        return new MatchPlayerProfiles(custom ?? local,
+        var profiles = new MatchPlayerProfiles(CreateDefaultLocalProfile(),
             new PlayerProfileSnapshot("本地", opponentName, opponentName));
+        if (_settings.HasCustomProfile)
+            profiles.ReplaceLocal(CustomPlayerProfileFactory.ApplyOverrides(_settings, profiles.Local));
+        return profiles;
+    }
+
+    /// <summary>
+    /// Returns a caller-owned local profile. Steam identity is the default when available; the
+    /// match composition path may then apply independently configured nickname/avatar overrides.
+    /// </summary>
+    private PlayerProfileSnapshot CreateDefaultLocalProfile(string fallbackName = "本地玩家")
+    {
+#if GODOT_WINDOWS
+        if (_steam is not null && _steam.TryGetLocalPlayerProfile(out var steamProfile)) return steamProfile;
+#endif
+        return new PlayerProfileSnapshot("本地", "本地棋手", fallbackName);
     }
 }

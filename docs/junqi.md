@@ -48,6 +48,8 @@ AI 状态：尚未接入可复用引擎，也未定义 `IJunqiAiEngine`。隐藏
 
 `JunqiRecordStore` 是格式与落盘时机所有者，通过共享作用域存储在 `user://games/junqi.standard/records/recent|saved` 以 GB2312（代码页 936）和 `.ac2` 原子写入。recent 最多十局，saved 不自动淘汰；路径加载严格限制在该玩法目录。首次访问只复制并保留旧目录记录。编码失败、磁盘失败只提示/记录，不反向修改胜负。实时双方布阵不得写盘，控制器只在终局且赛后布局齐备时创建记录。
 
+最近记录页允许将已有 recent 追加到 saved；操作前会再次执行 AC2 解码和领域重放，仅在成功后写入新文件及展示 sidecar，原 recent 保留。
+
 ## 5. 测试与当前验收状态
 
 运行 `dotnet run --project tests/Xiangqi.Core.Tests/Xiangqi.Core.Tests.csproj`。现有测试覆盖布阵/脱敏、道路与铁路、工兵转弯、行营/大本营、军衔/炸弹/地雷、司令亮旗/夺旗、越界和非法布阵、SL=31、AC2 往返/篡改结果拒绝，以及房主裁决与双方玩家视图。

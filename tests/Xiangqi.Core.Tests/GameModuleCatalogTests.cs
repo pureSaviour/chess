@@ -15,6 +15,7 @@ internal static class GameModuleCatalogTests
         ("玩法目录拒绝重复模块和未声明能力", RejectInvalidModules),
         ("玩法记录存储隔离路径并原子写入和淘汰", RecordStorageIsolation),
         ("玩法记录存储无损且幂等导入旧目录", LegacyRecordImport),
+        ("棋谱导出原子覆盖并限定标准扩展名", RecordExport),
         ("混合信任策略区分沙箱与完全信任代码", PackageTrustPolicy),
         ("玩法包严格扫描并原子安装已确认内容", PackageInspectionAndInstall),
         ("玩法包验证发布者签名并绑定信任证据", SignedPackageInspection),
@@ -99,6 +100,25 @@ internal static class GameModuleCatalogTests
             Equal("legacy-sidecar", File.ReadAllText(imported[0] + ".meta.json"));
             Equal(true, File.Exists(source));
             Equal(1, new GameRecordStorage(Path.Combine(root, "games"), new("games.first"), ".pgn", "first", legacy).List(false).Count);
+        }
+        finally { DeleteTemporaryRoot(root); }
+    }
+
+    private static void RecordExport()
+    {
+        var root = NewTemporaryRoot();
+        try
+        {
+            var destination = Path.Combine(root, "match.pgn");
+            RecordFileExporter.WriteUtf8(destination, ".pgn", "第一版");
+            Equal("第一版", File.ReadAllText(destination));
+            RecordFileExporter.WriteUtf8(destination, ".pgn", "第二版");
+            Equal("第二版", File.ReadAllText(destination));
+            Equal(0, Directory.GetFiles(root, "*.tmp", SearchOption.TopDirectoryOnly).Length);
+            Throws<InvalidDataException>(() =>
+                RecordFileExporter.WriteUtf8(Path.Combine(root, "match.txt"), ".pgn", "bad"));
+            Throws<DirectoryNotFoundException>(() => RecordFileExporter.WriteUtf8(
+                Path.Combine(root, "missing", "match.pgn"), ".pgn", "bad"));
         }
         finally { DeleteTemporaryRoot(root); }
     }

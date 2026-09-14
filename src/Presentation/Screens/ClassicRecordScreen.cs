@@ -11,61 +11,40 @@ namespace Xiangqi.Presentation.Screens;
 public partial class ClassicRecordScreen : Control
 {
     private readonly List<ImageTexture> _textures = [];
+    private readonly RecordExportDialog _exportDialog;
+    private readonly AcceptDialog _errorDialog = new() { Title = "记录操作失败" };
+
     public ClassicRecordScreen(bool saved, Action back, Action<ClassicGameRecord> replay)
     {
+        _exportDialog = new RecordExportDialog(".pgn", "PGN / ICCS", ClassicRecordStore.Export);
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(60, 36); AddChild(margin);
         var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 12); margin.AddChild(root);
         var header = new HBoxContainer(); root.AddChild(header);
-        var title = UiStyle.CreateTitle(saved ? "保存对局" : "最近对局"); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
+        var title = UiStyle.CreateTitle(saved ? "经典象棋 · 保存对局" : "经典象棋 · 最近对局"); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         var backButton = UiStyle.CreateButton("返回画廊"); backButton.Pressed += back; header.AddChild(backButton);
-        var headings = new HBoxContainer(); root.AddChild(headings);
-        headings.AddChild(new Label { Text = "日期与时间", CustomMinimumSize = new(235, 0) });
-        headings.AddChild(new Label { Text = "对弈双方与结果", SizeFlagsHorizontal = SizeFlags.ExpandFill });
-        headings.AddChild(new Label { Text = "对局方式", CustomMinimumSize = new(150, 0) });
+        root.AddChild(RecordEntryRow.CreateHeadings(true));
         var scroll = new ScrollContainer { SizeFlagsVertical = SizeFlags.ExpandFill, CustomMinimumSize = new(900, 360) }; root.AddChild(scroll);
         var rows = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill }; rows.AddThemeConstantOverride("separation", 10); scroll.AddChild(rows);
-        foreach (var entry in ClassicRecordStore.ListEntries(saved)) rows.AddChild(CreateEntry(entry, replay));
+        AddChild(_exportDialog);
+        AddChild(_errorDialog);
+        foreach (var entry in ClassicRecordStore.ListEntries(saved))
+        {
+            bool SaveEntry()
+            {
+                try { ClassicRecordStore.SavePermanent(entry); return true; }
+                catch (Exception error) { ShowError(error); return false; }
+            }
+            rows.AddChild(RecordEntryRow.Create(entry.Presentation,
+                () => replay(ClassicRecordStore.Load(entry.RecordPath)), _textures,
+                saved ? null : SaveEntry, () => _exportDialog.Open(entry.RecordPath)));
+        }
     }
 
-    private Control CreateEntry(ClassicRecordStore.Entry entry, Action<ClassicGameRecord> replay)
+    private void ShowError(Exception error)
     {
-        var button = UiStyle.CreateButton(string.Empty); button.CustomMinimumSize = new(0, 104); button.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        button.Pressed += () => replay(ClassicRecordStore.Load(entry.PgnPath));
-        var row = new HBoxContainer { MouseFilter = MouseFilterEnum.Ignore }; row.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect, LayoutPresetMode.Minsize, 18); row.AddThemeConstantOverride("separation", 16); button.AddChild(row);
-        var time = new Label { Text = entry.Presentation.PlayedAt.LocalDateTime.ToString("yyyy-MM-dd\nHH-mm"), CustomMinimumSize = new(200, 0), VerticalAlignment = VerticalAlignment.Center };
-        time.AddThemeFontSizeOverride("font_size", 18); row.AddChild(time);
-        var local = entry.Presentation.Red.IsLocal ? entry.Presentation.Red : entry.Presentation.Black;
-        var opponent = entry.Presentation.Red.IsLocal ? entry.Presentation.Black : entry.Presentation.Red;
-        row.AddChild(CreatePlayer(local, true));
-        var redWon = entry.Presentation.Result.Contains("红方胜", StringComparison.Ordinal) || entry.Presentation.Result == "1-0";
-        var blackWon = entry.Presentation.Result.Contains("黑方胜", StringComparison.Ordinal) || entry.Presentation.Result == "0-1";
-        var localWon = entry.Presentation.Red.IsLocal ? redWon : blackWon;
-        var draw = entry.Presentation.Result.Contains("和", StringComparison.Ordinal) || entry.Presentation.Result == "1/2-1/2";
-        var result = new Label { Text = draw ? "和" : localWon ? "胜" : "败", HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center, CustomMinimumSize = new(62, 46) };
-        result.AddThemeFontSizeOverride("font_size", 22); result.AddThemeColorOverride("font_color", localWon ? UiStyle.Gold : new Color("#D7C3A5")); row.AddChild(result);
-        row.AddChild(CreatePlayer(opponent, false));
-        var mode = new Label { Text = entry.Presentation.Mode, HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center, CustomMinimumSize = new(145, 0) }; UiStyle.SetMuted(mode, 15); row.AddChild(mode);
-        return button;
-    }
-    private Control CreatePlayer(ClassicRecordStore.Player player, bool local)
-    {
-        var group = new HBoxContainer { CustomMinimumSize = new(245, 0), MouseFilter = MouseFilterEnum.Ignore }; group.AddThemeConstantOverride("separation", 10);
-        var avatarRoot = new Control { CustomMinimumSize = new(58, 58), MouseFilter = MouseFilterEnum.Ignore };
-        var color = new ColorRect { Color = local ? new Color("#A9473E") : new Color("#48535F"), MouseFilter = MouseFilterEnum.Ignore }; color.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect); avatarRoot.AddChild(color);
-        var initial = new Label { Text = string.IsNullOrEmpty(player.Name) ? "棋" : player.Name[..1], HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MouseFilter = MouseFilterEnum.Ignore }; initial.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect); avatarRoot.AddChild(initial);
-        if (player.AvatarRgba is { Length: > 0 })
-        {
-            using var image = Image.CreateFromData(player.AvatarWidth, player.AvatarHeight, false, Image.Format.Rgba8, player.AvatarRgba);
-            var texture = ImageTexture.CreateFromImage(image); _textures.Add(texture);
-            var view = new TextureRect { Texture = texture, ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize, StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered, MouseFilter = MouseFilterEnum.Ignore };
-            view.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect); avatarRoot.AddChild(view);
-        }
-        group.AddChild(avatarRoot); group.AddChild(new Label { Text = local ? $"{player.Name}（我）" : player.Name,
-            VerticalAlignment = VerticalAlignment.Center, SizeFlagsHorizontal = SizeFlags.ExpandFill, MouseFilter = MouseFilterEnum.Ignore });
-        return group;
+        _errorDialog.DialogText = error.Message;
+        _errorDialog.PopupCentered(new Vector2I(620, 170));
     }
     public override void _ExitTree() { foreach (var texture in _textures) texture.Dispose(); _textures.Clear(); }
 }

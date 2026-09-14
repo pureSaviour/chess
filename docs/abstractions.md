@@ -224,13 +224,15 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 `ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` / `JunqiRecordStore` / `GomokuRecordStore` 是玩法 codec 与落盘时机的所有者；共享 `GameRecordStorage` 把文件限制在 `user://games/<game-id>/records/recent|saved`，负责原子写、唯一命名、路径/重解析点检查和 recent 淘汰。首次访问会把旧 `user://records/<mode>` 的记录与 sidecar 幂等复制到新根且保留源文件。recent 的容量策略为每玩法十局，saved 永久保留。经典/三国/揭棋为 UTF-8 PGN 扩展，军旗按 AC2 规范使用 GB2312 `.ac2`，五子棋使用 SGF。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
 
+记录页的“保存对局”是从 recent 到 saved 的显式用户操作：Store 先通过对应 codec 重新加载并重放校验，再使用新名称写入 saved 并携带同一份展示 sidecar；原 recent 不删除，失败不改动任何记录。`RecordEntryRow` 只组合复盘/保存/导出回调，不解析棋谱。`RecordExportDialog` 由记录页持有，只在用户选定文件系统目标后同步调用 Store；经典 Store 复验后写 UTF-8 `.pgn`（PGN 容器、ICCS 着法），五子棋 Store 复验后写 UTF-8 `.sgf`（FF[4]/GM[4]）。当前两个玩法各只实现一种可完整重放的导出格式；新增第二格式时应在界面显式选择，并为新 codec 补往返、非法输入和扩展名测试。导出不包含 `.meta.json`，因为它不是棋谱标准的一部分。
+
 揭棋使用 `Variant=Jieqi`、`Format=ICCS`、十六进制 `Seed` 与 `Shuffle=splitmix64-fy-v1`。`JieqiSnapshot.ToPublicPosition` 是直播脱敏边界；`HiddenIdentityHints` 只允许赛后复盘。未知随机算法必须拒绝，联机中不得把 Seed 或 hints 发给非权威端。详细契约见 [揭棋玩法](jieqi.md)。
 
 军旗使用 AC2 `INFO[1.0]`，A-L/0-4 坐标、a-l 棋子码，以及 AA/AB、MA/MB、RA/RB、FA/FB、EA/EB 属性；`JunqiGameRecord.Replay` 复验声明战果和亮旗，不信任文本。`JunqiSnapshot.ForPlayer` 是直播脱敏边界，`ForReplay` 只供赛后。完整映射与限制见 [军旗玩法](junqi.md)。
 
 五子棋使用 SGF FF[4]/GM[4] 的 `SZ/RU/AB/AW/PL/B/W` 主线，必须通过 `GomokuGameRecord.Replay` 重放验证。`GomokuRecordStore` 保存 UTF-8 `.sgf`；详见 [五子棋玩法](gomoku.md)。
 
-所有玩法记录额外使用同名 `.meta.json` sidecar 保存纯展示信息；棋谱仍是独立、可重放的事实来源。`MatchRecordPresentation` 包含 PlayedAt、Mode、本地玩家、1..2 名对手和本地视角结果；玩家名称限制 64 字，头像限制为 64×64 RGBA8，不保存原头像路径、平台句柄或凭证。双人原始包玩法用 `RawMatchProfileExchange` 复用受限 PlayerProfile 帧，三国 v3 以认证席位同步同一载荷；资料交换不拥有 transport，Screen 在控制器前解绑并释放像素。sidecar 损坏时回退棋谱标签/默认席位名。各记录页共用 `RecordEntryRow`，其标题、104px 行高、时间/双方/结果/模式列与经典相同；页面持有所建 `ImageTexture` 并在 `_ExitTree` 释放。
+所有玩法记录额外使用同名 `.meta.json` sidecar 保存纯展示信息；棋谱仍是独立、可重放的事实来源。`MatchRecordPresentation` 包含 PlayedAt、Mode、本地玩家、1..2 名对手和本地视角结果；玩家名称限制 64 字，头像限制为 64×64 RGBA8，不保存原头像路径、平台句柄或凭证。组合根先获取 Steam 本机昵称/头像（不可用时为本地默认），`CustomPlayerProfileFactory.ApplyOverrides` 再分别覆盖已配置的自定义昵称和头像；未配置或头像读取失败的字段保留平台默认值。返回快照可与 fallback 共享头像缓冲，必须交给唯一 `MatchPlayerProfiles` 租约；`ReplaceLocal/ReplaceOpponent` 仅在新旧头像不同时释放旧缓冲。双人原始包玩法用 `RawMatchProfileExchange` 复用受限 PlayerProfile 帧，三国 v3 以认证席位同步同一载荷；资料交换不拥有 transport，Screen 在控制器前解绑并释放像素。sidecar 损坏时回退棋谱标签/默认席位名。经典旧版 Red/Black sidecar 仍可读取，新记录统一写共享结构。各记录页共用 `RecordEntryRow`，其标题、104px 行高、时间/双方/结果/模式列与经典相同；页面持有所建 `ImageTexture` 并在 `_ExitTree` 释放。
 
 `GameSession.BeginTrial()` 和 `ThreeMatchSession.BeginTrial()` 返回一次性的隔离分支。输入是调用时的只读权威局面，输出是副本快照和经同一棋规验证的 `TryMove`；它们不含玩家权限、时钟、聊天、协商、网络发送或提交/合并。经典界面将推演前后快照与成功 `MoveResult` 交给 `GameSession.DescribeMove`，按权威对局相同顺序获取移动/吃子、将军/终局和注册 detector 提示，再播放平移、淡出、音效与落子效果；`DescribeMove` 不写入任何局面，并拒绝失败结果。分支由界面持有，退出推演后解除引用即可。
 

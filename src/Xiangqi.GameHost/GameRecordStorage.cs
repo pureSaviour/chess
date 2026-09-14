@@ -204,3 +204,43 @@ public sealed class GameRecordStorage
         return value;
     }
 }
+
+/// <summary>
+/// Writes validated text supplied by a gameplay codec through a same-directory temporary file.
+/// It enforces the selected format extension, creates no directories, parses no records and copies
+/// no display sidecars. Replacing an existing destination must already have been authorized by the
+/// caller's save-file UI. Failures remove only the private temporary file.
+/// </summary>
+public static class RecordFileExporter
+{
+    public static void WriteUtf8(string destinationPath, string extension, string content)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(extension);
+        ArgumentNullException.ThrowIfNull(content);
+        if (!Path.GetExtension(destinationPath).Equals(extension, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"导出文件必须使用 {extension} 扩展名。");
+        var destination = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(destination) ??
+            throw new InvalidDataException("导出目标缺少有效目录。");
+        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("导出目录不存在。");
+        var temporary = Path.Combine(directory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
+                       FileShare.None, 81920, FileOptions.WriteThrough))
+            using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)))
+            {
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(true);
+            }
+            File.Move(temporary, destination, true);
+        }
+        catch
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+            throw;
+        }
+    }
+}

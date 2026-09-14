@@ -1,3 +1,5 @@
+using Xiangqi.Core.Application;
+using Xiangqi.Core.Application.ThreeKingdoms;
 using Xiangqi.Core.Domain.ThreeKingdoms;
 using Xiangqi.Core.Domain.Topology;
 
@@ -9,7 +11,8 @@ static class ThreeKingdomsTests
         ("三国拓扑135点243边完整连通且无重边", Connectivity),
         ("三国中心为三个五邻接点且射线可逆无回环", Rays),
         ("三国马腿和象眼保留国内日田字规则", Jumps),
-        ("三国拓扑国界桥接与旋转对称", Symmetry)
+        ("三国拓扑国界桥接与旋转对称", Symmetry),
+        ("本地三国控制器保留己方受限玩家资料", LocalProfile)
     };
     private static BoardCellId C(int k, int f, int r) => new KingdomSquare((Kingdom)k, f, r).Cell;
     private static void Check(bool value, string message)
@@ -55,5 +58,19 @@ static class ThreeKingdomsTests
             Check(Board.HorseJumps(cell).Select(p => new JumpPattern(Rotate(p.Destination), Rotate(p.Leg)))
                 .ToHashSet().SetEquals(Board.HorseJumps(Rotate(cell))), "Rotation changed horse paths.");
         }
+    }
+
+    private static void LocalProfile()
+    {
+        var profile = new PlayerProfileCommand("local-1", "自定义棋手", 1, 1, [1, 2, 3, 255]);
+        using var controller = new LocalThreeMatchController(TimeControl.Unlimited,
+            AdvisorConquestPolicy.SharedTerritory, profile);
+        Check(controller.PlayerNames[0] == "自定义棋手", "Local display name was not applied.");
+        Check(controller.PlayerProfiles[0] is { } stored &&
+              stored.DisplayName == profile.DisplayName &&
+              stored.AvatarRgba.SequenceEqual(profile.AvatarRgba), "Local profile was not retained.");
+        profile.AvatarRgba[0] = 99;
+        Check(controller.PlayerProfiles[0]!.Value.AvatarRgba[0] == 1,
+            "Controller must defensively copy profile pixels.");
     }
 }

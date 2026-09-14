@@ -59,26 +59,48 @@ public static class ThreeCommands
     }
 }
 
+/// <summary>
+/// Synchronous hot-seat controller. It owns one session but no platform, file, thread, or native
+/// resource. An optional already-bounded profile identifies the first (Wei) seat for display and
+/// record sidecars only; it never grants command authority, and avatar bytes are defensively copied.
+/// All commands and events run on the caller's thread. Dispose only detaches session events.
+/// </summary>
 public sealed class LocalThreeMatchController : IThreeMatchController
 {
     public ThreeMatchSession Session { get; }
     public Kingdom? LocalKingdom => null;
-    public IReadOnlyList<string> PlayerNames { get; } = Array.AsReadOnly(new[] { "玩家 1", "玩家 2", "玩家 3" });
-    public IReadOnlyList<PlayerProfileCommand?> PlayerProfiles { get; } =
-        Array.AsReadOnly(new PlayerProfileCommand?[] { null, null, null });
+    public IReadOnlyList<string> PlayerNames { get; }
+    public IReadOnlyList<PlayerProfileCommand?> PlayerProfiles { get; }
     public string Status => "本地三人 · 魏 → 吴 → 蜀";
     public RoomChatManager Chat { get; } = new(3);
     public event Action? Changed;
     public event Action<Kingdom?, string>? Message;
-    public LocalThreeMatchController(TimeControl time, AdvisorConquestPolicy policy)
+    public LocalThreeMatchController(TimeControl time, AdvisorConquestPolicy policy,
+        PlayerProfileCommand? localProfile = null)
     {
+        (PlayerNames, PlayerProfiles) = CreateProfiles(localProfile);
         Session = new(time, policy);
         Session.Changed += OnChanged; Session.Message += OnMessage;
     }
-    public LocalThreeMatchController(TimeControl time, ThreeKingdomsGame game)
+    public LocalThreeMatchController(TimeControl time, ThreeKingdomsGame game,
+        PlayerProfileCommand? localProfile = null)
     {
+        (PlayerNames, PlayerProfiles) = CreateProfiles(localProfile);
         Session = new(game, time);
         Session.Changed += OnChanged; Session.Message += OnMessage;
+    }
+
+    private static (IReadOnlyList<string>, IReadOnlyList<PlayerProfileCommand?>) CreateProfiles(
+        PlayerProfileCommand? localProfile)
+    {
+        var names = new[] { localProfile?.DisplayName ?? "玩家 1", "玩家 2", "玩家 3" };
+        var profiles = new PlayerProfileCommand?[]
+        {
+            localProfile is { } profile ? profile with { AvatarRgba = profile.AvatarRgba.ToArray() } : null,
+            null,
+            null
+        };
+        return (Array.AsReadOnly(names), Array.AsReadOnly(profiles));
     }
     public string? Submit(ThreeCommand c) => ThreeCommands.IsPlayerCommand(c) ? ThreeCommands.Apply(Session, c) : "无权发送内部命令。";
     public string? SendChat(Kingdom actor, Kingdom? target, string text) =>

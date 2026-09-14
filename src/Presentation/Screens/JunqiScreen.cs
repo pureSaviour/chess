@@ -156,19 +156,26 @@ public partial class JunqiGameScreen : Control
 public partial class JunqiRecordScreen : Control
 {
     private readonly List<ImageTexture> _textures = [];
+    private readonly AcceptDialog _actionError = new() { Title = "保存对局失败" };
     public JunqiRecordScreen(bool saved, Action back, Action<JunqiGameRecord> replay)
     {
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         var margin = UiStyle.CreatePageMargin(60, 36); AddChild(margin); var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 12); margin.AddChild(root);
         var header = new HBoxContainer(); root.AddChild(header); var title = UiStyle.CreateTitle(saved ? "军旗 · 保存对局" : "军旗 · 最近对局"); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
-        root.AddChild(RecordEntryRow.CreateHeadings());
+        root.AddChild(RecordEntryRow.CreateHeadings(!saved));
         var scroll = new ScrollContainer { SizeFlagsVertical = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(900, 360) }; root.AddChild(scroll);
         var rows = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill }; rows.AddThemeConstantOverride("separation", 10); scroll.AddChild(rows);
+        AddChild(_actionError);
         foreach (var entry in JunqiRecordStore.ListEntries(saved))
         {
+            bool SaveEntry()
+            {
+                try { JunqiRecordStore.SavePermanent(entry); return true; }
+                catch (Exception error) { _actionError.DialogText = error.Message; _actionError.PopupCentered(new(620, 170)); return false; }
+            }
             rows.AddChild(RecordEntryRow.Create(entry.Presentation,
-                () => replay(JunqiRecordStore.Load(entry.RecordPath)), _textures));
+                () => replay(JunqiRecordStore.Load(entry.RecordPath)), _textures, saved ? null : SaveEntry));
         }
     }
     public override void _ExitTree() { foreach (var texture in _textures) texture.Dispose(); _textures.Clear(); }

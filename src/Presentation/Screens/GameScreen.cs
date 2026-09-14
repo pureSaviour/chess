@@ -579,25 +579,29 @@ public partial class GameScreen : Control
         var result = snapshot.EndReason == GameEndReason.Draw ? "1/2-1/2" : snapshot.Winner switch
         { PieceSide.Red => "1-0", PieceSide.Black => "0-1", _ => "*" };
         var presentation = BuildRecordPresentation(snapshot);
+        var localSide = _localSide ?? PieceSide.Red;
+        var opponent = presentation.Opponents[0];
+        var redName = localSide == PieceSide.Red ? presentation.Local.Name : opponent.Name;
+        var blackName = localSide == PieceSide.Black ? presentation.Local.Name : opponent.Name;
         return _session.CreateRecord(new Dictionary<string, string>
         {
             ["Event"] = _matchLabel,
             ["Date"] = DateTime.Now.ToString("yyyy.MM.dd"),
             ["Result"] = result,
             ["Termination"] = snapshot.EndReason.ToString(),
-            ["Red"] = presentation.Red.Name,
-            ["Black"] = presentation.Black.Name
+            ["Red"] = redName,
+            ["Black"] = blackName
         });
     }
 
-    private ClassicRecordStore.Presentation BuildRecordPresentation(GameSnapshot snapshot)
+    private MatchRecordPresentation BuildRecordPresentation(GameSnapshot snapshot)
     {
         var localSide = _localSide ?? PieceSide.Red;
-        ClassicRecordStore.Player FromProfile(PlayerProfileSnapshot profile, bool local) => new(
+        RecordPlayer FromProfile(PlayerProfileSnapshot profile, bool local) => new(
             profile.DisplayName, local, profile.Avatar?.Width ?? 0, profile.Avatar?.Height ?? 0,
             profile.Avatar?.CopyRgba());
-        ClassicRecordStore.Player local;
-        ClassicRecordStore.Player opponent;
+        RecordPlayer local;
+        RecordPlayer opponent;
         if (_playerProfiles is not null)
         {
             local = FromProfile(_playerProfiles.Local, true);
@@ -608,12 +612,10 @@ public partial class GameScreen : Control
             local = new(_bottomPlayerName.Text, true);
             opponent = new(_topPlayerName.Text, false);
         }
-        var red = localSide == PieceSide.Red ? local : opponent;
-        var black = localSide == PieceSide.Black ? local : opponent;
-        var result = snapshot.EndReason == GameEndReason.Draw ? "和棋" : snapshot.Winner == PieceSide.Red ? "红方胜" : "黑方胜";
+        var result = snapshot.EndReason == GameEndReason.Draw ? "和" : snapshot.Winner == localSide ? "胜" : "败";
         var mode = _ai is not null ? "人机对战" : _matchLabel.StartsWith("Steam", StringComparison.OrdinalIgnoreCase)
             ? "Steam 好友" : _transport is not null ? "局域网联机" : "本地联机";
-        return new(DateTimeOffset.Now, mode, red, black, result);
+        return new(DateTimeOffset.Now, mode, local, [opponent], result);
     }
 
     private void SaveRecord()
