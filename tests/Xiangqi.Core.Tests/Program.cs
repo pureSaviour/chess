@@ -513,11 +513,14 @@ static void ReplayAnalysis()
     var move = new ChessMove(new BoardPosition(0, 3), new BoardPosition(0, 4));
     True(game.TryMove(move).IsSuccess);
     var engine = new FakeReplayEngine();
-    var coordinator = new ReplayAnalysisCoordinator(engine, [first, game.Snapshot], 100);
+    var coordinator = new ReplayAnalysisCoordinator(engine, [first, game.Snapshot]);
     coordinator.SelectAndSweepAsync(1).GetAwaiter().GetResult();
     Equal(2, coordinator.Cache.Count);
     True(coordinator.Cache[0].RedCentipawns > 0);
     True(coordinator.Cache[1].RedCentipawns < 0);
+    Equal(AiDifficultyProfiles.ReplayThinkMilliseconds, engine.LastRequest.MoveTimeMilliseconds);
+    Equal(1, engine.LastRequest.VariationCount);
+    Equal(0, engine.LastRequest.MaxDepth);
     coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
     True(engine.WasDisposed);
 }
@@ -762,10 +765,12 @@ sealed class FakeReplayEngine : IXiangqiAiEngine
     public string DisplayName => "Replay test";
     public bool IsReady { get; private set; }
     public bool WasDisposed { get; private set; }
+    public AiSearchRequest LastRequest { get; private set; }
     public ValueTask InitializeAsync(CancellationToken cancellationToken = default) { IsReady = true; return ValueTask.CompletedTask; }
     public ValueTask NewGameAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
     public ValueTask<AiSearchResult> SearchAsync(GameSnapshot position, AiSearchRequest request, CancellationToken cancellationToken = default)
     {
+        LastRequest = request;
         var game = ChessGame.FromPosition(position);
         var source = position.Pieces.First(p => p.Piece.Side == position.SideToMove && game.GetLegalDestinations(p.Position).Count > 0).Position;
         var move = new ChessMove(source, game.GetLegalDestinations(source)[0]);

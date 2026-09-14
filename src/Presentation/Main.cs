@@ -180,19 +180,22 @@ public partial class Main : Control
         TimeControl.Unlimited, options.HostColor==StoneColor.Black?PieceSide.Red:PieceSide.Black,
         TwoPlayerGameMode.Gomoku, options.BoardSize, (int)options.Rules));
     private void ShowGomokuRecords(bool saved)=>SwitchTo(new GomokuRecordScreen(saved,ShowGallery,
-        record=>SwitchTo(new GomokuReplayScreen(_settings,record,()=>ShowGomokuRecords(saved)))));
+        record=>SwitchTo(new GomokuReplayScreen(_settings,record,()=>ShowGomokuRecords(saved),
+            InstalledEnginePath(EnginePackageKind.Rapfi)))));
     private void ShowGomokuImport(bool position)=>SwitchTo(new GomokuImportScreen(position,ShowGallery,
-        record=>SwitchTo(new GomokuReplayScreen(_settings,record,ShowGallery))));
+        record=>SwitchTo(new GomokuReplayScreen(_settings,record,ShowGallery,
+            InstalledEnginePath(EnginePackageKind.Rapfi)))));
     private void ShowGomokuAiSettings()=>SwitchTo(new GomokuAiSettingsScreen(_settings,_engineInstaller,saved=>{_settings=saved;_settings.SaveAndApply();ShowGallery();},ShowGallery));
     private void StartConfiguredGomokuAiMatch()
     {
 #if GODOT_ANDROID
         ShowError("Android 当前不能启动外部 Rapfi 进程；移动端原生引擎尚未接入。");
 #else
-        if(string.IsNullOrWhiteSpace(_settings.GomokuAiEnginePath)||!File.Exists(_settings.GomokuAiEnginePath)){ShowError("请先在五子棋人机设置中选择 Rapfi 可执行文件。");return;}
+        var enginePath=InstalledEnginePath(EnginePackageKind.Rapfi);
+        if(enginePath is null){ShowError("请先在五子棋人机设置中一键配置 Rapfi。");return;}
         var human=_settings.GomokuAiSideChoice switch{1=>StoneColor.White,2=>Random.Shared.Next(2)==0?StoneColor.Black:StoneColor.White,_=>StoneColor.Black};
         var rules=_settings.GomokuAiForbiddenMoves?GomokuRuleSet.RenjuForbiddenMoves:GomokuRuleSet.Freestyle;
-        var engine=new PiskvorkProcessGomokuAiEngine(_settings.GomokuAiEnginePath);
+        var engine=new PiskvorkProcessGomokuAiEngine(enginePath);
         var profile=AiDifficultyProfiles.Gomoku((AiDifficultyLevel)_settings.GomokuAiDifficulty,
             _settings.GomokuAiThinkMilliseconds,_settings.GomokuAiMaxDepth);
         var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,
@@ -212,6 +215,8 @@ public partial class Main : Control
 
     private void StartConfiguredAiMatch()
     {
+        var enginePath = InstalledEnginePath(EnginePackageKind.Pikafish);
+        if (enginePath is null) { ShowError("请先在人机设置中一键配置皮卡鱼。"); return; }
         var side = _settings.AiSideChoice switch
         {
             1 => PieceSide.Black,
@@ -222,19 +227,24 @@ public partial class Main : Control
             _settings.AiThinkMilliseconds, _settings.AiMaxDepth);
         StartAiMatch(new AiMatchConfiguration(
             new TimeControl(_settings.AiGameSeconds, _settings.AiMoveSeconds), side,
-            profile.MoveTimeMilliseconds, _settings.AiEnginePath, profile.MaxDepth,
+            profile.MoveTimeMilliseconds, enginePath, profile.MaxDepth,
             profile.VariationCount, profile.CandidateRank, profile.MaximumCentipawnLoss,
             profile.UseDeterministicLegalMove));
     }
 
     private void ShowClassicImport(bool puzzle) => SwitchTo(new ClassicImportScreen(
         puzzle, ShowGallery,
-        record => SwitchTo(new ClassicReplayScreen(_settings, _themes, record, ShowGallery)),
+        record => SwitchTo(new ClassicReplayScreen(_settings, _themes, record, ShowGallery,
+            InstalledEnginePath(EnginePackageKind.Pikafish))),
         session => SwitchTo(new GameScreen(_settings, ShowGallery, "残局", localTimeControl: TimeControl.Unlimited,
             themes: _themes, session: session))));
 
     private void ShowClassicRecords(bool saved) => SwitchTo(new ClassicRecordScreen(saved, ShowGallery,
-        record => SwitchTo(new ClassicReplayScreen(_settings, _themes, record, () => ShowClassicRecords(saved)))));
+        record => SwitchTo(new ClassicReplayScreen(_settings, _themes, record, () => ShowClassicRecords(saved),
+            InstalledEnginePath(EnginePackageKind.Pikafish)))));
+
+    private string? InstalledEnginePath(EnginePackageKind kind) =>
+        _engineInstaller.TryGetInstalled(kind, out var installed) ? installed.ExecutablePath : null;
 
     private void ShowClassicGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
         ShowGallery,
@@ -628,12 +638,12 @@ public partial class Main : Control
             }
             ShowAiSettings();
             await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not AiSettingsScreen { AreAdvancedSettingsVisible: false })
-                throw new InvalidOperationException("Classic AI settings must instantiate with advanced settings collapsed.");
+            if (_currentScreen is not AiSettingsScreen { AreAdvancedSettingsVisible: false, HasManualEnginePicker: false })
+                throw new InvalidOperationException("Classic AI settings must be collapsed and reject manual engine selection.");
             ShowGomokuAiSettings();
             await ToSignal(GetTree().CreateTimer(0.1), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GomokuAiSettingsScreen { AreAdvancedSettingsVisible: false })
-                throw new InvalidOperationException("Gomoku AI settings must instantiate with advanced settings collapsed.");
+            if (_currentScreen is not GomokuAiSettingsScreen { AreAdvancedSettingsVisible: false, HasManualEnginePicker: false })
+                throw new InvalidOperationException("Gomoku AI settings must be collapsed and reject manual engine selection.");
             StartLanHost(EnetMatchTransport.DefaultPort,
                 new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red));
             await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
@@ -676,6 +686,8 @@ public partial class Main : Control
             smokeSettings.ShowBoardCoordinates = true;
             SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GameScreen { TrialActionText: "推演" })
+                throw new InvalidOperationException("Classic trial action must use the 推演 label.");
             GD.Print("[Xiangqi.UI.Smoke] Validated module catalog, Junqi, Gomoku, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }
@@ -696,14 +708,18 @@ public partial class Main : Control
             var result = await installer.InstallAsync(kind);
             if (!File.Exists(result.ExecutablePath) || !Path.GetFullPath(result.ExecutablePath).StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Installer returned an invalid executable path.");
+            if (!installer.TryGetInstalled(kind, out var resolved) ||
+                !Path.GetFullPath(resolved.ExecutablePath).Equals(Path.GetFullPath(result.ExecutablePath), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Pinned engine could not be resolved from the managed install directory.");
             if (kind == EnginePackageKind.Rapfi)
             {
                 await using var engine = new PiskvorkProcessGomokuAiEngine(result.ExecutablePath);
                 await engine.InitializeAsync(15, GomokuRuleSet.RenjuForbiddenMoves);
                 var position = new GomokuGame(15, GomokuRuleSet.RenjuForbiddenMoves).Snapshot;
                 var analysis = await engine.AnalyzeAsync(new GomokuAiSearchRequest(position, 500, 4, 65, 1, 256));
-                if (!float.IsFinite(analysis.BlackWinRate) || analysis.BlackWinRate is < 0 or > 1)
-                    throw new InvalidOperationException("Rapfi returned an invalid black win rate.");
+                if (!float.IsFinite(analysis.BlackWinRate) || analysis.BlackWinRate is < 0 or > 1 ||
+                    analysis.BestMove is not { } bestMove || bestMove.Column < 0 || bestMove.Row < 0)
+                    throw new InvalidOperationException("Rapfi returned an invalid analysis or best move.");
                 _ = await engine.FindMoveAsync(new GomokuAiSearchRequest(position, 500, 4, 65, 1, 256));
             }
             else

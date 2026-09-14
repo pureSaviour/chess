@@ -1,6 +1,6 @@
 # 抽象层使用手册
 
-更新：2026-09-10。总架构与玩法路由见 [根文档](../TECHNICAL_ARCHITECTURE.md)，本次检查证据见 [架构检查](architecture-review.md)。本文说明当前接口如何使用，不声称未完成的注入链已经可替换。
+更新：2026-09-14。总架构与玩法路由见 [根文档](../TECHNICAL_ARCHITECTURE.md)，本次检查证据见 [架构检查](architecture-review.md)。本文说明当前接口如何使用，不声称未完成的注入链已经可替换。
 
 ## 1. 先选择正确边界
 
@@ -174,13 +174,13 @@ InitializeAsync/NewGameAsync/SearchAsync/DisposeAsync 是后端生命周期；Se
 
 AiGameCoordinator 负责单个活动操作、局面版本验证、最终落子复验和人类决策轮撤销。较低难度允许从有界 MultiPV 中选择非首选着，但候选先逐个经领域规则复验，并受相对最佳着分差限制；失败即回退最佳合法着。测试用 FakeAiEngine 隔离真实进程；新适配器仍必须验证非法输出、过期结果、取消、释放和重新开局。
 
-端口面向经典棋力分析，不适用于三国，也没有自然语言聊天方法。当前 UI 配置必须有 EnginePath，且 GameScreen 要求实现为 Node。远程实现应先补独立的后端配置与驱动/生命周期注入，不应伪造一个无用本地路径来绕过约束。
+端口面向经典棋力分析，不适用于三国，也没有自然语言聊天方法。当前 GameScreen 配置内部仍携带 EnginePath 且要求实现为 Node，但该路径只能由固定版本安装器解析，UI 不接受玩家输入。远程实现应先补独立的后端配置与驱动/生命周期注入，不应伪造一个无用本地路径来绕过约束。
 
 ### 五子棋：IGomokuAiEngine
 
 定义：[GomokuAi.cs](../src/Xiangqi.Core/Application/Gomoku/GomokuAi.cs)；桌面适配器：[PiskvorkProcessGomokuAiEngine.cs](../src/Presentation/AI/PiskvorkProcessGomokuAiEngine.cs)。
 
-`IGomokuAiEngine` 的输入是不可变局面及有界的时间、最大深度、强度、线程、内存，着法输出只是候选交叉点。`AnalyzeAsync` 另返回黑方视角的有限胜率/原始估值，不返回可写棋局。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是对局消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。`GomokuReplayAnalysisCoordinator` 则串行分析、优先当前选择、缓存并抑制取消后的陈旧完成。屏幕退出释放 controller/coordinator，后者取消搜索并幂等释放 engine。
+`IGomokuAiEngine` 的输入是不可变局面及有界的时间、最大深度、强度、线程、内存，着法输出只是候选交叉点。`AnalyzeAsync` 另返回黑方视角的有限胜率/原始估值和搜索得到的最佳落点，不返回可写棋局。它不拥有或写入 `GomokuGame`，也不发布 UI 事件。`AiGomokuMatchController` 是对局消费者和资源所有者：初始化后仅在人机轮次启动一个搜索，后台结果排队，由屏幕主线程 `Poll` 后按预期手数、行棋方和领域规则复验。过期/非法/异常输出保持棋局不变。`GomokuReplayAnalysisCoordinator` 则固定使用 10 秒、无限深度和 100 强度，串行分析、复验最佳落点、优先当前选择、缓存并抑制取消后的陈旧完成。屏幕退出释放 controller/coordinator，后者取消搜索并幂等释放 engine。
 
 新增实现应复用这一端口并说明线程、取消和资源所有权。Piskvork 适配器每次搜索/分析拥有子进程，禁用 shell，限制协议行，取消时终止进程树。常见误用包括：UI 直接采用引擎坐标、把静态估值称为固定深度搜索胜率、把 Rapfi 模型复制进导出包、从后台任务触碰 Godot 节点、或者把 rule 2 当成所有五子棋规则。测试入口为核心自运行测试中的 fake engine；真实适配器另做官方引擎烟测。当前 Android 没有外部进程实现。五档映射、协议翻译、兼容策略和军旗/三国的未实现边界见 [AI 难度与分析](ai-engines.md)。
 
@@ -216,7 +216,7 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 兼容与测试：BoardSkinKind/`board/skin` 保留一个发布周期，映射 0→classic、1→spring；新键是 `board/theme_id`。主题不进入协议/局面哈希。BoardFeedbackSmoke 覆盖双目录、实际第二目录注入、DTD 拒绝、semantic atlas、shader/材质生命周期与经典动效；ThreeBoardSmoke 覆盖三国消费、投影和命中。Android shader/内存仍需真机验收。
 
-## 11. 棋谱与试下抽象
+## 11. 棋谱与推演抽象
 
 `ClassicGameRecord` / `ThreeGameRecord` / `JieqiGameRecord` / `JunqiGameRecord` / `GomokuGameRecord` 是不可变初始状态、主线着法和标签的快照，不拥有文件，也不允许消费者修改权威会话。`Replay()` 每次创建新聚合并逐手验证；非法着法以 `InvalidDataException` 失败，不返回部分可信结果。五子棋导入入口是 `GomokuSgfCodec.TryParse`，其余保持原有 PGN/AC2 codec；它们同步、无 I/O，调用者负责读取有界文本并展示错误。
 
@@ -232,11 +232,11 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 所有玩法记录额外使用同名 `.meta.json` sidecar 保存纯展示信息；棋谱仍是独立、可重放的事实来源。`MatchRecordPresentation` 包含 PlayedAt、Mode、本地玩家、1..2 名对手和本地视角结果；玩家名称限制 64 字，头像限制为 64×64 RGBA8，不保存原头像路径、平台句柄或凭证。双人原始包玩法用 `RawMatchProfileExchange` 复用受限 PlayerProfile 帧，三国 v3 以认证席位同步同一载荷；资料交换不拥有 transport，Screen 在控制器前解绑并释放像素。sidecar 损坏时回退棋谱标签/默认席位名。各记录页共用 `RecordEntryRow`，其标题、104px 行高、时间/双方/结果/模式列与经典相同；页面持有所建 `ImageTexture` 并在 `_ExitTree` 释放。
 
-`GameSession.BeginTrial()` 和 `ThreeMatchSession.BeginTrial()` 返回一次性的隔离分支。输入是调用时的只读权威局面，输出是副本快照和经同一棋规验证的 `TryMove`；它们不含玩家权限、时钟、聊天、协商、网络发送或提交/合并。经典界面将试下前后快照与成功 `MoveResult` 交给 `GameSession.DescribeMove`，按权威对局相同顺序获取移动/吃子、将军/终局和注册 detector 提示，再播放平移、淡出、音效与落子效果；`DescribeMove` 不写入任何局面，并拒绝失败结果。分支由界面持有，退出试下后解除引用即可。
+`GameSession.BeginTrial()` 和 `ThreeMatchSession.BeginTrial()` 返回一次性的隔离分支。输入是调用时的只读权威局面，输出是副本快照和经同一棋规验证的 `TryMove`；它们不含玩家权限、时钟、聊天、协商、网络发送或提交/合并。经典界面将推演前后快照与成功 `MoveResult` 交给 `GameSession.DescribeMove`，按权威对局相同顺序获取移动/吃子、将军/终局和注册 detector 提示，再播放平移、淡出、音效与落子效果；`DescribeMove` 不写入任何局面，并拒绝失败结果。分支由界面持有，退出推演后解除引用即可。
 
-`ReplayAnalysisCoordinator` 输入一个 IXiangqiAiEngine、不可变复盘局面序列和 100..10000 ms 搜索时长。`SelectAndSweepAsync(index)` 取消上一代操作、先算 index，再按距离补齐缓存；AnalysisAvailable 在调用上下文连续发布，UI 仍必须在 Godot 主线程调用。BestMove 经临时 ChessGame 重验，非法输出以 InvalidDataException 失败；分数约定为 UCI 行棋方视角并归一为红方视角，mate 映射到有界哨兵值。协调器拥有引擎，DisposeAsync 取消活动操作并释放进程；消费者不得再单独释放同一引擎。
+`ReplayAnalysisCoordinator` 输入一个 IXiangqiAiEngine 和不可变复盘局面序列；搜索策略固定为每局面 10 秒、无限深度、单一最佳线路，不读取对局难度或玩家设置。`SelectAndSweepAsync(index)` 取消上一代操作、先算 index，再按距离补齐缓存；AnalysisAvailable 在调用上下文连续发布，UI 仍必须在 Godot 主线程调用。BestMove 经临时 ChessGame 重验，非法输出以 InvalidDataException 失败；分数约定为 UCI 行棋方视角并归一为红方视角，mate 映射到有界哨兵值。协调器拥有引擎，DisposeAsync 取消活动操作并释放进程；消费者不得再单独释放同一引擎。
 
-测试入口：核心自运行测试覆盖经典 FEN/PGN 往返、非法主线、两种试下隔离、三国扩展 PGN 重放，以及复盘评分归一/缓存/引擎释放。2026-09-09 使用 `GODOT_NEW_PATH` 下 Godot 4.7.2 .NET 执行 `--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均通过，并检查了兼容渲染器 GPU 截图；真实 Pikafish 长棋谱性能、头像跨重启显示、动画手感和不同分辨率仍需人工视觉验收。
+测试入口：核心自运行测试覆盖经典 FEN/PGN 往返、非法主线、两种推演隔离、三国扩展 PGN 重放，以及复盘评分归一/缓存/引擎释放。2026-09-09 使用 `GODOT_NEW_PATH` 下 Godot 4.7.2 .NET 执行 `--smoke-ui`、`--smoke-feedback`、`--smoke-three` 均通过，并检查了兼容渲染器 GPU 截图；真实 Pikafish 长棋谱性能、头像跨重启显示、动画手感和不同分辨率仍需人工视觉验收。
 
 ## 12. 新增抽象的验收清单
 

@@ -7,13 +7,14 @@ using Xiangqi.Presentation.UI;
 namespace Xiangqi.Presentation.Screens;
 
 /// <summary>
-/// Edits a detached AppSettings copy. It owns only the picker node; it neither starts nor probes
-/// an engine. The composition root validates the saved path immediately before a match/replay.
+/// Edits a detached AppSettings copy. Engine executables are only supplied by the pinned package
+/// installer; this screen never accepts or persists an arbitrary player-selected path.
 /// </summary>
 public partial class AiSettingsScreen : Control
 {
     private readonly VBoxContainer _advancedSettings;
     public bool AreAdvancedSettingsVisible => _advancedSettings.Visible;
+    public bool HasManualEnginePicker => FindChildren("*", "FileDialog", true, false).Count > 0;
 
     public AiSettingsScreen(AppSettings current, Action<AppSettings> save, Action back, EnginePackageInstaller installer)
     {
@@ -36,16 +37,12 @@ public partial class AiSettingsScreen : Control
         var advancedToggle = new CheckButton { Text = "高级设置" }; content.AddChild(advancedToggle);
         _advancedSettings = new VBoxContainer { Visible = false, SizeFlagsHorizontal = SizeFlags.ExpandFill }; _advancedSettings.AddThemeConstantOverride("separation", 12); content.AddChild(_advancedSettings);
         advancedToggle.Toggled += visible => _advancedSettings.Visible = visible;
-        _advancedSettings.AddChild(new Label { Text = "UCI 象棋引擎路径（对局与复盘共用）" });
-        var pathRow = new HBoxContainer(); _advancedSettings.AddChild(pathRow);
-        var path = new LineEdit { Text = draft.AiEnginePath, Editable = false, SizeFlagsHorizontal = SizeFlags.ExpandFill, PlaceholderText = "例如 pikafish.exe" }; pathRow.AddChild(path);
-        var browse = UiStyle.CreateButton("浏览…"); pathRow.AddChild(browse);
-        var picker = new FileDialog { Title = "选择 UCI 象棋引擎", FileMode = FileDialog.FileModeEnum.OpenFile,
-            Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Filters = ["*.exe ; Windows 可执行文件", "* ; 所有文件"] };
-        picker.FileSelected += selected => path.Text = selected; browse.Pressed += () => picker.PopupCenteredRatio(0.75f); AddChild(picker);
+        _advancedSettings.AddChild(new Label { Text = "应用仅使用一键配置的固定皮卡鱼版本，不支持选择其他引擎程序。", AutowrapMode = TextServer.AutowrapMode.WordSmart });
         var installRow = new HBoxContainer(); installRow.AddThemeConstantOverride("separation", 12); _advancedSettings.AddChild(installRow);
         var install = UiStyle.CreateButton("一键下载并配置皮卡鱼", true); installRow.AddChild(install);
-        var installStatus = new Label { SizeFlagsHorizontal = SizeFlags.ExpandFill, AutowrapMode = TextServer.AutowrapMode.WordSmart }; installRow.AddChild(installStatus);
+        var installStatus = new Label { Text = installer.TryGetInstalled(EnginePackageKind.Pikafish, out var installed)
+            ? $"已配置皮卡鱼 {installed.Version}" : "尚未配置", SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart }; installRow.AddChild(installStatus);
         var consent = new ConfirmationDialog { Title = "皮卡鱼许可确认", DialogText = EnginePackageInstaller.LicenseNotice(EnginePackageKind.Pikafish), OkButtonText = "同意并下载", CancelButtonText = "取消" }; AddChild(consent);
         var driver = new EngineInstallDriver(installer); AddChild(driver);
         var grid = new GridContainer { Columns = 2 }; grid.AddThemeConstantOverride("h_separation", 20); grid.AddThemeConstantOverride("v_separation", 14); _advancedSettings.AddChild(grid);
@@ -53,23 +50,22 @@ public partial class AiSettingsScreen : Control
         grid.AddChild(new Label { Text = "最大深度（0=不限）" }); var depth = new SpinBox { MinValue = 0, MaxValue = 128, Value = draft.AiMaxDepth, Step = 1 }; grid.AddChild(depth);
         grid.AddChild(new Label { Text = "线程数" }); var threads = new SpinBox { MinValue = 1, MaxValue = 256, Value = draft.AiThreads, Step = 1 }; grid.AddChild(threads);
         grid.AddChild(new Label { Text = "哈希内存（MB）" }); var hash = new SpinBox { MinValue = 16, MaxValue = 4096, Value = draft.AiHashMegabytes, Step = 16 }; grid.AddChild(hash);
-        grid.AddChild(new Label { Text = "复盘每步分析（秒）" }); var analysis = new SpinBox { MinValue = .1, MaxValue = 10, Value = draft.AiAnalysisMilliseconds / 1000.0, Step = .1 }; grid.AddChild(analysis);
         var saveButton = UiStyle.CreateButton("保存人机设置", true); content.AddChild(saveButton);
         void Capture()
         {
-            draft.AiEnginePath = path.Text; draft.AiSideChoice = side.Selected;
+            draft.AiSideChoice = side.Selected;
             draft.AiGameSeconds = (int)Math.Round(game.Value * 60); draft.AiMoveSeconds = (int)move.Value;
-            draft.AiThinkMilliseconds = (int)Math.Round(think.Value * 1000); draft.AiAnalysisMilliseconds = (int)Math.Round(analysis.Value * 1000);
+            draft.AiThinkMilliseconds = (int)Math.Round(think.Value * 1000);
             draft.AiDifficulty = difficulty.Selected; draft.AiMaxDepth = (int)depth.Value;
             draft.AiThreads = (int)threads.Value; draft.AiHashMegabytes = (int)hash.Value;
         }
         saveButton.Pressed += () => { Capture(); save(draft); };
         install.Pressed += () => consent.PopupCentered(new Vector2I(650, 300));
-        consent.Confirmed += () => { Capture(); install.Disabled = browse.Disabled = saveButton.Disabled = true; installStatus.Text = "准备下载…"; driver.Start(EnginePackageKind.Pikafish); };
+        consent.Confirmed += () => { Capture(); install.Disabled = saveButton.Disabled = true; installStatus.Text = "准备下载…"; driver.Start(EnginePackageKind.Pikafish); };
         driver.ProgressChanged += value => installStatus.Text = value.TotalBytes is > 0
             ? $"{value.Stage} {Math.Clamp(value.CompletedBytes * 100 / value.TotalBytes.Value, 0, 100)}%" : value.Stage;
-        driver.Completed += result => { draft.AiEnginePath = result.ExecutablePath; path.Text = result.ExecutablePath; installStatus.Text = $"已配置皮卡鱼 {result.Version}"; save(draft); };
-        driver.Failed += error => { install.Disabled = browse.Disabled = saveButton.Disabled = false; installStatus.Text = $"安装失败：{error}"; };
+        driver.Completed += result => { installStatus.Text = $"已配置皮卡鱼 {result.Version}"; save(draft); };
+        driver.Failed += error => { install.Disabled = saveButton.Disabled = false; installStatus.Text = $"安装失败：{error}"; };
 #if GODOT_ANDROID
         install.Disabled = true; install.TooltipText = "Android 当前不支持外部进程引擎。";
 #endif

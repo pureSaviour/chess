@@ -1,6 +1,6 @@
 # AI 难度、分析与后续玩法接入
 
-更新：2026-09-13。本文记录已经落地的经典象棋/五子棋 AI 配置，以及军旗/三国象棋仍处于评估阶段的边界。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)，端口契约见 [抽象层使用手册](abstractions.md)。
+更新：2026-09-14。本文记录已经落地的经典象棋/五子棋 AI 配置，以及军旗/三国象棋仍处于评估阶段的边界。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)，端口契约见 [抽象层使用手册](abstractions.md)。
 
 ## 已实现：统一难度与高级搜索
 
@@ -20,15 +20,15 @@
 
 五子棋的 `GomokuAiSearchRequest` 输出时间、最大深度、strength、线程和内存。Rapfi 适配器翻译为对应 `INFO` 参数；Application 只知道有界数值。入门档同样从当前规则逐点复验出的合法落点中稳定选取，不调用 Rapfi；其余档位才使用搜索。引擎坐标仍由 `AiGomokuMatchController.Poll` 在调用线程按当前手数、行棋方、占位、越界和禁手重新执行。进程每次搜索独占，取消/退出杀死进程树，释放幂等。
 
-设置页默认只显示难度及执子、棋钟、棋盘和规则等对局常用项。引擎路径/安装、时间、深度、线程、内存或哈希、复盘分析时间全部放在默认收起的“高级设置”中；自定义档才直接采用高级区保存的对局时间与深度。
+设置页默认只显示难度及执子、棋钟、棋盘和规则等对局常用项。固定引擎的一键配置、时间、深度、线程、内存或哈希放在默认收起的“高级设置”中；不提供路径输入、文件浏览或替代引擎入口，自定义档才直接采用高级区保存的对局时间与深度。
 
-兼容策略：旧设置没有 difficulty 键时读取“适中”，原有 think_milliseconds 保留为自定义档数值。未知或越界设置在 `AppSettings.Clamp` 收敛。当前仅面向固定 Pikafish 2026-01-02 和 Rapfi 2025-06-15；换引擎时高级选项仍需真实握手测试。
+兼容策略：旧设置没有 difficulty 键时读取“适中”，原有 think_milliseconds 保留为自定义档数值。旧版保存的 engine_path 和 analysis_milliseconds 不再读取，并在下次保存设置时移除。运行时只接受安装器管理目录中的 Pikafish 2026-01-02 和 Rapfi 2025-06-15；缺失时引导玩家一键配置。
 
 ## 已实现：五子棋复盘胜率图
 
-`IGomokuAiEngine.AnalyzeAsync` 返回黑方胜率、原始估值和深度，不返回可写棋局。Rapfi 适配器用 `YXBOARD + TRACESEARCH` 读取引擎的 `Static Eval[Black]` 与 WDL 百分比，限制行长、有限数值和 0..100% 范围。`GomokuReplayAnalysisCoordinator` 串行分析、优先当前选中手、缓存结果、取消旧扫描并抑制陈旧完成；终局按赢家直接映射 100%/0%/50%。它拥有并且只释放引擎一次。
+`IGomokuAiEngine.AnalyzeAsync` 返回黑方胜率、原始估值、深度和当前局面的最佳落点，不返回可写棋局。Rapfi 适配器先以 10 秒、无限深度、strength 100 执行正常搜索取得最佳落点，再用 `YXBOARD + TRACESEARCH` 读取 `Static Eval[Black]` 与 WDL 百分比，限制行长、有限数值和 0..100% 范围。`GomokuReplayAnalysisCoordinator` 复验最佳落点，串行分析、优先当前选中手、缓存结果、取消旧扫描并抑制陈旧完成；终局按赢家直接映射 100%/0%/50% 且不标注下一着。它拥有并且只释放引擎一次。
 
-复盘 UI 复用 `ReplayEvaluationGraph`：中线是 50%，上方黑优、下方白优，金色竖线为当前手。图表只消费归一化值，不修改 SGF、快照或棋盘。当前显示的是 Rapfi 的静态 NNUE/规则估值，不等同于固定深度完整搜索胜率；不同模型、棋盘尺寸和规则的数值不可直接横向比较。
+复盘 UI 复用 `ReplayEvaluationGraph`：中线是 50%，上方黑优、下方白优，金色竖线为当前手；棋盘以金色圆环和叉号标注当前局面的最优落点。图表和标记只消费分析结果，不修改 SGF、快照或棋盘。胜率仍是 Rapfi 的静态 NNUE/规则估值，与用于选取最佳落点的完整搜索是两个结果；不同棋盘尺寸和规则的数值不可直接横向比较。
 
 ## 尚未实现：军旗 AI
 

@@ -16,8 +16,8 @@ public readonly record struct EngineInstallResult(string ExecutablePath, string 
 /// <summary>Installs one of two pinned official AI archives into a caller-provided application-data
 /// root. It streams with size limits, verifies SHA-256 before extraction, rejects traversal and
 /// oversized entries, and publishes a completed version directory only after all required files
-/// exist. It never edits game settings or starts an engine; callers own consent, cancellation and
-/// persisting the returned path. Failed staging directories are removed, while completed installs
+/// exist. It never edits game settings or starts an engine; callers own consent and cancellation,
+/// and later resolve only this installer's pinned package. Failed staging directories are removed, while completed installs
 /// are reused and never overwritten.</summary>
 public sealed class EnginePackageInstaller : IDisposable
 {
@@ -46,7 +46,8 @@ public sealed class EnginePackageInstaller : IDisposable
         Directory.CreateDirectory(_root);
         var final = Path.Combine(_root, package.Id, package.Version);
         var existing = FindExecutable(final, package);
-        if (existing is not null && package.RequiredFiles.All(relative => File.Exists(Path.Combine(final, relative))))
+        if (existing is not null && File.Exists(Path.Combine(final, "installation.json")) &&
+            package.RequiredFiles.All(relative => File.Exists(Path.Combine(final, relative))))
             return new(existing, package.Version, final);
 
         var parent = Path.GetDirectoryName(final)!;
@@ -91,6 +92,24 @@ public sealed class EnginePackageInstaller : IDisposable
             catch (UnauthorizedAccessException) { }
             throw;
         }
+    }
+
+    /// <summary>Resolves only the pinned package installed below this installer's managed root.
+    /// Arbitrary executable paths and older/unverified package directories are never returned.</summary>
+    public bool TryGetInstalled(EnginePackageKind kind, out EngineInstallResult result)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var package = Describe(kind);
+        var directory = Path.Combine(_root, package.Id, package.Version);
+        var executable = FindExecutable(directory, package);
+        if (executable is null || !File.Exists(Path.Combine(directory, "installation.json")) ||
+            package.RequiredFiles.Any(relative => !File.Exists(Path.Combine(directory, relative))))
+        {
+            result = default;
+            return false;
+        }
+        result = new(executable, package.Version, directory);
+        return true;
     }
 
     public void Dispose() { if (_disposed) return; _disposed = true; _http.Dispose(); }

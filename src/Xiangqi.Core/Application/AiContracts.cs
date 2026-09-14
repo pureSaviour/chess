@@ -72,7 +72,6 @@ public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
 {
     private readonly IXiangqiAiEngine _engine;
     private readonly IReadOnlyList<GameSnapshot> _positions;
-    private readonly int _milliseconds;
     private readonly Dictionary<int, ReplayAnalysisPoint> _cache = [];
     private CancellationTokenSource? _active;
     private long _generation;
@@ -80,12 +79,11 @@ public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
     public event Action<ReplayAnalysisPoint>? AnalysisAvailable;
     public IReadOnlyDictionary<int, ReplayAnalysisPoint> Cache => _cache;
 
-    public ReplayAnalysisCoordinator(IXiangqiAiEngine engine, IReadOnlyList<GameSnapshot> positions, int milliseconds)
+    public ReplayAnalysisCoordinator(IXiangqiAiEngine engine, IReadOnlyList<GameSnapshot> positions)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _positions = positions ?? throw new ArgumentNullException(nameof(positions));
         if (positions.Count == 0) throw new ArgumentException("Replay has no positions.", nameof(positions));
-        _milliseconds = Math.Clamp(milliseconds, 100, 10_000);
     }
 
     public async Task SelectAndSweepAsync(int selectedIndex)
@@ -102,7 +100,8 @@ public sealed class ReplayAnalysisCoordinator : IAsyncDisposable
             {
                 operation.Token.ThrowIfCancellationRequested();
                 if (_cache.ContainsKey(index) || _positions[index].IsFinished) continue;
-                var result = await _engine.SearchAsync(_positions[index], new(_milliseconds), operation.Token);
+                var result = await _engine.SearchAsync(_positions[index],
+                    new AiSearchRequest(AiDifficultyProfiles.ReplayThinkMilliseconds, 1, 0), operation.Token);
                 if (generation != _generation) return;
                 var verifier = ChessGame.FromPosition(_positions[index]);
                 var verified = verifier.TryMove(result.BestMove);

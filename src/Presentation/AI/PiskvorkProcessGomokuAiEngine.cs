@@ -115,6 +115,11 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
         if (request.Position.BoardSize != _boardSize || request.Position.Rules != _rules)
             throw new ArgumentException("AI 请求与初始化棋盘配置不一致。", nameof(request));
 
+        // A replay result must include an actually searched best move. TRACESEARCH exposes Rapfi's
+        // static WDL evaluation only, so run the strongest normal search before reading that score.
+        var strongest = request with { MaxDepth = 0, Strength = 100 };
+        var bestMove = await FindMoveAsync(strongest, cancellationToken);
+
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -139,7 +144,7 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
             await WriteLine(process, "TRACESEARCH", timeout.Token);
             var analysis = await ReadStaticEvaluation(process, timeout.Token);
             await EndProcess(process);
-            return analysis;
+            return analysis with { BestMove = bestMove };
         }
         finally { ClearActiveProcess(); _gate.Release(); }
     }
@@ -231,7 +236,7 @@ public sealed class PiskvorkProcessGomokuAiEngine : IGomokuAiEngine
             var rateToken = payload[(wdlIndex + 4)..].Split([',', ')', ' '], StringSplitOptions.RemoveEmptyEntries)[0];
             if (!float.TryParse(rateToken, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent) || !float.IsFinite(percent))
                 throw new InvalidDataException($"Rapfi 胜率格式无效：{line}");
-            return new GomokuAnalysisResult(Math.Clamp(percent / 100f, 0f, 1f), evaluation, 0);
+            return new GomokuAnalysisResult(Math.Clamp(percent / 100f, 0f, 1f), evaluation, 0, null);
         }
     }
 

@@ -18,7 +18,8 @@ internal static class GomokuTests
         ("五子棋 AI 协调器释放引擎且释放幂等", AiDisposal),
         ("五子棋难度映射深度与原生强度", DifficultyProfiles),
         ("五子棋入门档使用规则合法落点而不调用强引擎", BeginnerUsesLegalBaseline),
-        ("五子棋复盘分析缓存黑方胜率", ReplayAnalysis)
+        ("五子棋复盘分析缓存黑方胜率和最佳着", ReplayAnalysis),
+        ("五子棋复盘分析拒绝非法最佳着", ReplayRejectsInvalidBestMove)
     ];
 
     private static void GridGeometry()
@@ -134,11 +135,25 @@ internal static class GomokuTests
     {
         var position = new GomokuGame(15).Snapshot;
         var engine = new FakeAiEngine(new(7, 7));
-        var coordinator = new GomokuReplayAnalysisCoordinator(engine, [position], new(position, 250));
+        var coordinator = new GomokuReplayAnalysisCoordinator(engine, [position], 2, 512);
         coordinator.SelectAndSweepAsync(0).GetAwaiter().GetResult();
         Equal(.7f, coordinator.Cache[0].BlackWinRate);
+        Equal(new GridPoint(7, 7), coordinator.Cache[0].BestMove);
+        Equal(AiDifficultyProfiles.ReplayThinkMilliseconds, engine.LastAnalysisRequest.ThinkMilliseconds);
+        Equal(0, engine.LastAnalysisRequest.MaxDepth);
+        Equal(100, engine.LastAnalysisRequest.Strength);
+        Equal(2, engine.LastAnalysisRequest.Threads);
+        Equal(512, engine.LastAnalysisRequest.MemoryMegabytes);
         coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Equal(1, engine.DisposeCount);
+    }
+    private static void ReplayRejectsInvalidBestMove()
+    {
+        var position = new GomokuGame(15).Snapshot;
+        var engine = new FakeAiEngine(new(99, 99));
+        var coordinator = new GomokuReplayAnalysisCoordinator(engine, [position]);
+        Throws<InvalidDataException>(() => coordinator.SelectAndSweepAsync(0).GetAwaiter().GetResult());
+        coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     private sealed class FakePacketTransport(bool host) : ITwoPlayerPacketTransport
@@ -162,12 +177,13 @@ internal static class GomokuTests
         public bool IsReady { get; private set; }
         public int SearchCount => _searchCount;
         public int DisposeCount { get; private set; }
+        public GomokuAiSearchRequest LastAnalysisRequest { get; private set; }
         public ValueTask InitializeAsync(int boardSize, GomokuRuleSet rules, CancellationToken cancellationToken = default)
         { cancellationToken.ThrowIfCancellationRequested(); IsReady = true; return ValueTask.CompletedTask; }
         public ValueTask<GridPoint> FindMoveAsync(GomokuAiSearchRequest request, CancellationToken cancellationToken = default)
         { cancellationToken.ThrowIfCancellationRequested(); Interlocked.Increment(ref _searchCount); return ValueTask.FromResult(move); }
         public ValueTask<GomokuAnalysisResult> AnalyzeAsync(GomokuAiSearchRequest request, CancellationToken cancellationToken = default)
-        { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(new GomokuAnalysisResult(.7f, 120, 8)); }
+        { cancellationToken.ThrowIfCancellationRequested(); LastAnalysisRequest = request; return ValueTask.FromResult(new GomokuAnalysisResult(.7f, 120, 8, move)); }
         public ValueTask DisposeAsync() { DisposeCount++; IsReady = false; return ValueTask.CompletedTask; }
     }
     private static void Success(GomokuMoveResult result) { if (!result.IsSuccess) throw new InvalidOperationException(result.Rejection.ToString()); }

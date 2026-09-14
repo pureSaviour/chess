@@ -26,18 +26,21 @@ public readonly record struct GomokuAiSearchRequest(
     }
 }
 
-public readonly record struct GomokuAnalysisResult(float BlackWinRate, int Evaluation, int Depth)
+/// <summary>Black-perspective evaluation plus the searched best move. BestMove is null only for
+/// terminal positions synthesized by replay orchestration; engine results for live positions require it.</summary>
+public readonly record struct GomokuAnalysisResult(float BlackWinRate, int Evaluation, int Depth,
+    GridPoint? BestMove)
 {
     public GomokuAnalysisResult Validate() => !float.IsFinite(BlackWinRate) || BlackWinRate is < 0 or > 1
         ? throw new ArgumentOutOfRangeException(nameof(BlackWinRate)) : this;
 }
 
 public readonly record struct GomokuReplayAnalysisPoint(int PositionIndex, float BlackWinRate,
-    int Evaluation, int Depth);
+    int Evaluation, int Depth, GridPoint? BestMove);
 
-/// <summary>Replaceable Gomoku analysis port. Implementations own their worker/process resources,
-/// accept only one search at a time, honor cancellation, and return an untrusted candidate point.
-/// The match controller always validates that point again through <see cref="GomokuGame"/>.</summary>
+/// <summary>Replaceable Gomoku search and analysis port. Implementations own their worker/process
+/// resources, accept only one search at a time, honor cancellation, and return untrusted moves.
+/// Match and replay coordinators validate every returned point through <see cref="GomokuGame"/>.</summary>
 public interface IGomokuAiEngine : IAsyncDisposable
 {
     string DisplayName { get; }
@@ -61,12 +64,13 @@ public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
     private bool _disposed;
 
     public GomokuReplayAnalysisCoordinator(IGomokuAiEngine engine,
-        IReadOnlyList<GomokuSnapshot> positions, GomokuAiSearchRequest template)
+        IReadOnlyList<GomokuSnapshot> positions, int threads = 1, int memoryMegabytes = 256)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _positions = positions ?? throw new ArgumentNullException(nameof(positions));
         if (positions.Count == 0) throw new ArgumentException("Replay has no positions.", nameof(positions));
-        _template = template.Validate();
+        _template = new GomokuAiSearchRequest(positions[0], AiDifficultyProfiles.ReplayThinkMilliseconds,
+            0, 100, threads, memoryMegabytes).Validate();
     }
 
     public event Action<GomokuReplayAnalysisPoint>? AnalysisAvailable;
@@ -92,11 +96,22 @@ public sealed class GomokuReplayAnalysisCoordinator : IAsyncDisposable
                 GomokuAnalysisResult analysis;
                 if (position.IsFinished)
                     analysis = new(position.Winner == StoneColor.Black ? 1f : position.Winner == StoneColor.White ? 0f : .5f,
-                        position.Winner == StoneColor.Black ? 30_000 : position.Winner == StoneColor.White ? -30_000 : 0, 0);
+                        position.Winner == StoneColor.Black ? 30_000 : position.Winner == StoneColor.White ? -30_000 : 0, 0, null);
                 else
                     analysis = (await _engine.AnalyzeAsync(_template with { Position = position }, operation.Token)).Validate();
+                if (!position.IsFinished)
+                {
+                    if (analysis.BestMove is not { } bestMove)
+                        throw new InvalidDataException("五子棋引擎未返回复盘局面的最佳着法。");
+                    var verifier = new GomokuGame(position.BoardSize, position.Rules,
+                        position.Stones, position.SideToMove);
+                    var verified = verifier.TryPlace(bestMove, position.SideToMove);
+                    if (!verified.IsSuccess)
+                        throw new InvalidDataException($"五子棋引擎返回非法复盘着法：{verified.Rejection}。");
+                }
                 if (generation != _generation) return;
-                var point = new GomokuReplayAnalysisPoint(index, analysis.BlackWinRate, analysis.Evaluation, analysis.Depth);
+                var point = new GomokuReplayAnalysisPoint(index, analysis.BlackWinRate, analysis.Evaluation,
+                    analysis.Depth, analysis.BestMove);
                 _cache[index] = point;
                 AnalysisAvailable?.Invoke(point);
             }

@@ -33,6 +33,10 @@ public readonly record struct GomokuDifficultyProfile(
 
 public static class AiDifficultyProfiles
 {
+    /// <summary>Fixed replay budget. Replay analysis always uses the engine's strongest mode:
+    /// one best line, no depth cap, and (for Gomoku) full native strength.</summary>
+    public const int ReplayThinkMilliseconds = 10_000;
+
     public static XiangqiDifficultyProfile Xiangqi(AiDifficultyLevel level,
         int customMilliseconds = 1500, int customDepth = 0) => level switch
     {

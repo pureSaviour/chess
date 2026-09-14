@@ -94,6 +94,7 @@ public partial class GameScreen : Control
                    rect.End.X <= viewport.End.X + 0.5f && rect.End.Y <= viewport.End.Y + 0.5f;
         }
     }
+    internal string TrialActionText => _trialButton.Text;
     internal string MessagePanelBounds => _messageSidePanel is null ? "missing" :
         $"panel={_messageSidePanel.GetGlobalRect()} viewport={GetViewportRect()} screen={GetGlobalRect()}";
 
@@ -271,7 +272,7 @@ public partial class GameScreen : Control
         settingsButton.CustomMinimumSize = new Vector2(70, 41);
         settingsButton.Pressed += () => _settingsDialog.PopupFor(_settings);
         header.AddChild(settingsButton);
-        _trialButton = UiStyle.CreateButton("试下");
+        _trialButton = UiStyle.CreateButton("推演");
         _trialButton.CustomMinimumSize = new Vector2(76, 41);
         _trialButton.Pressed += ToggleTrial;
         header.AddChild(_trialButton);
@@ -501,8 +502,8 @@ public partial class GameScreen : Control
             if (!_trialOpponentMoveNotified && snapshot.PlyNumber > _trial.BasePly)
             {
                 _trialOpponentMoveNotified = true;
-                AppendChat("系统", "真实对局已有新着法；退出试下后将回到最新局面。", true);
-                _connectionLabel.Text = $"{_matchLabel} · 试下中（真实对局已更新）";
+                AppendChat("系统", "真实对局已有新着法；退出推演后将回到最新局面。", true);
+                _connectionLabel.Text = $"{_matchLabel} · 推演中（真实对局已更新）";
             }
             UpdateNetworkControls();
             return;
@@ -638,14 +639,14 @@ public partial class GameScreen : Control
         {
             _trial = _session.BeginTrial();
             _trialOpponentMoveNotified = false;
-            _trialButton.Text = "退出试下";
-            _connectionLabel.Text = $"{_matchLabel} · 试下分支";
+            _trialButton.Text = "退出推演";
+            _connectionLabel.Text = $"{_matchLabel} · 推演分支";
             _board.SetPosition(_trial.Snapshot);
             _displayedSnapshot = _trial.Snapshot;
             return;
         }
         _trial = null;
-        _trialButton.Text = "试下";
+        _trialButton.Text = "推演";
         _connectionLabel.Text = _matchLabel;
         _displayedSnapshot = _session.Snapshot;
         _board.SetPosition(_session.Snapshot);

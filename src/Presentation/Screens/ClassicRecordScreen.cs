@@ -106,7 +106,8 @@ public partial class ClassicReplayScreen : Control
     private readonly IReadOnlyList<GameSnapshot> _positions;
     private readonly HSlider _timeline;
     private int _index;
-    public ClassicReplayScreen(AppSettings settings, IBoardThemeCatalog themes, ClassicGameRecord record, Action back)
+    public ClassicReplayScreen(AppSettings settings, IBoardThemeCatalog themes, ClassicGameRecord record,
+        Action back, string? enginePath = null)
     {
         _positions = record.Replay();
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
@@ -119,14 +120,15 @@ public partial class ClassicReplayScreen : Control
         var body = new HBoxContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; body.AddThemeConstantOverride("separation", 16); root.AddChild(body);
         var center = new CenterContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill }; body.AddChild(center);
         _board = new BoardView(themes) { MouseFilter = MouseFilterEnum.Ignore }; _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates); center.AddChild(_board);
-        if (!string.IsNullOrWhiteSpace(settings.AiEnginePath) && File.Exists(settings.AiEnginePath))
+        if (!string.IsNullOrWhiteSpace(enginePath) && File.Exists(enginePath))
         {
             var analysisPanel = new VBoxContainer { CustomMinimumSize = new(350, 0) }; analysisPanel.AddThemeConstantOverride("separation", 10); body.AddChild(analysisPanel);
             analysisPanel.AddChild(new Label { Text = "引擎局势分析" }); _score = new Label { Text = "正在计算…", HorizontalAlignment = HorizontalAlignment.Right }; _score.AddThemeFontSizeOverride("font_size", 20); analysisPanel.AddChild(_score);
             _graph = new ReplayEvaluationGraph(); _graph.Configure(_positions.Count); analysisPanel.AddChild(_graph);
             var hint = new Label { Text = "红色：红方优势  ·  蓝色：黑方优势\n金色竖线：当前复盘步", AutowrapMode = TextServer.AutowrapMode.WordSmart }; UiStyle.SetMuted(hint, 13); analysisPanel.AddChild(hint);
-            var engine = new UciProcessAiEngine(settings.AiEnginePath); AddChild(engine);
-            _analysis = new ReplayAnalysisCoordinator(engine, _positions, settings.AiAnalysisMilliseconds);
+            var engine = new UciProcessAiEngine(enginePath,
+                new UciEngineResourceOptions(settings.AiThreads, settings.AiHashMegabytes)); AddChild(engine);
+            _analysis = new ReplayAnalysisCoordinator(engine, _positions);
             _analysis.AnalysisAvailable += OnAnalysisAvailable;
         }
         _timeline = new HSlider

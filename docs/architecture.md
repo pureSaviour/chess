@@ -1,6 +1,6 @@
 # 经典象棋架构与运行流程
 
-更新：2026-09-11。本文件由原经典架构摘要原地整理，不是全项目总架构。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)；接口契约、扩展示例和注意事项见 [抽象层使用手册](abstractions.md)；三人玩法见 [三国象棋](three-kingdoms.md)。
+更新：2026-09-14。本文件由原经典架构摘要原地整理，不是全项目总架构。总览见 [TECHNICAL_ARCHITECTURE.md](../TECHNICAL_ARCHITECTURE.md)；接口契约、扩展示例和注意事项见 [抽象层使用手册](abstractions.md)；三人玩法见 [三国象棋](three-kingdoms.md)。
 
 ## 1. 层次与职责
 
@@ -108,11 +108,11 @@ XiangqiUciNotation 输出 FEN（从 Rank=9 向 Rank=0）及 a0..i9 坐标；它�
 
 当前聊天询问触发 AnalyzeAsync/MultiPV，返回候选线路、深度和评分，不将聊天自由文本发送给棋力引擎。分析期间变化的局面按版本拒绝。
 
-复盘使用独立 ReplayAnalysisCoordinator，不复用 AiGameCoordinator 的落子职责。它以当前步优先顺序串行搜索、缓存分数与最佳着法，取消旧选择的扫描，把 UCI 的行棋方分数换算为红方视角，并通过临时 ChessGame 拒绝非法 BestMove。Replay Screen 将结果显示为右侧折线、随步数移动的竖线、分数文字和棋盘箭头；上/下一步按钮与带刻度 HSlider 共同修改同一个当前步索引，SetValueNoSignal 防止渲染反向触发跳转。这些表现状态不写回记录或会话。
+复盘使用独立 ReplayAnalysisCoordinator，不复用 AiGameCoordinator 的落子职责。它固定以每局面 10 秒、无限深度、单一最佳线路按当前步优先顺序串行搜索，不读取人机难度或玩家参数；它缓存分数与最佳着法、取消旧选择的扫描，把 UCI 的行棋方分数换算为红方视角，并通过临时 ChessGame 拒绝非法 BestMove。Replay Screen 将结果显示为右侧折线、随步数移动的竖线、分数文字和棋盘箭头；上/下一步按钮与带刻度 HSlider 共同修改同一个当前步索引，SetValueNoSignal 防止渲染反向触发跳转。这些表现状态不写回记录或会话。
 
 UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回复；CanUndoHumanTurn 在 IsThinking 时为 false。NewGame/Dispose 会取消当前操作，不能把这一点描述成“思考中已支持悔棋”。GameScreen 还依赖引擎为 Node、AiMatchConfiguration 要求 EnginePath；远程/自然语言模型尚需配置和生命周期抽象。
 
-人机设置可手动选择 UCI 程序，也可确认 GPLv3 与 NNUE 非商业许可后，一键下载固定 Pikafish 2026-01-02 官方 7z。共享安装器校验发布 SHA-256、安全解压到 `user://engines/pikafish`，按 CPU 选择 AVX2 或 SSE4.1/POPCNT，并将 `pikafish.nnue` 与 exe 同目录以兼容 Unicode 用户目录。只有真实 UCI 搜索可用后才视为 smoke 通过；应用自身不打包该引擎或权重。
+人机设置不再接受玩家选择 UCI 程序，只能在确认 GPLv3 与 NNUE 非商业许可后，一键下载固定 Pikafish 2026-01-02 官方 7z。共享安装器校验发布 SHA-256、安全解压到 `user://engines/pikafish`，按 CPU 选择 AVX2 或 SSE4.1/POPCNT，并将 `pikafish.nnue` 与 exe 同目录以兼容 Unicode 用户目录；对局和复盘只从该管理目录解析固定版本。只有真实 UCI 搜索可用后才视为 smoke 通过；应用自身不打包该引擎或权重。
 
 ## 5. 双人协议与兼容性
 
