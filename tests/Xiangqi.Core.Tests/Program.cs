@@ -45,6 +45,7 @@ tests = tests.Concat(ThreeExtensionTests.All).ToArray();
 tests = tests.Concat(JieqiTests.All).ToArray();
 tests = tests.Concat(JunqiTests.All).ToArray();
 tests = tests.Concat(GomokuTests.All).ToArray();
+tests = tests.Concat(GoTests.All).ToArray();
 tests = tests.Concat(GameModuleCatalogTests.All).ToArray();
 var failures = 0;
 foreach (var test in tests)

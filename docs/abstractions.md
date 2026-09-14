@@ -127,7 +127,7 @@ GameSession 是具体门面而非接口，其私有 ChessGame 防止 UI 直接�
 
 目前 Session 返回具体 ThreeMatchSession，Game 又是可变 ThreeKingdomsGame，IsRunning 可公开设置。**只读查询是使用约定，不是类型系统保证。** 不可通过 Session.Game.Move/Undo 或 Session.Advance 绕过计时、投票、日志与鉴权。后续收窄查询面时，应提供快照、状态、目标查询和能力信息，UI 只保留 Submit/Tick，不让网络历史暴露出去。
 
-### 揭棋、军旗与五子棋控制器
+### 揭棋、军旗、五子棋与围棋控制器
 
 `IJieqiMatchController` 与 `IJunqiMatchController` 是新增玩法的引擎无关 UI 边界。两者均只发布脱敏快照、当前本地席位、能力状态、权威合法目标和异步走子意图；本地与网络实现都经过同一接口实际注入对应 Screen。UI 不得持有其权威聚合、修改快照或自行计算规则。
 
@@ -135,15 +135,17 @@ GameSession 是具体门面而非接口，其私有 ChessGame 防止 UI 直接�
 
 `IGomokuMatchController` 只发布 `GomokuSnapshot`、本地颜色、就绪/连接/落子能力，并接受 `GridPoint` 意图。本地、网络和 AI 实现是实际注入点；`InitializeAsync` 负责可取消准备，`Poll` 负责把异步完成收敛到调用线程。本地/网络实现的这两个方法为空操作。网络房主复验预期手数与棋规，客户端逐手重放权威主线；AI 协调器复验局面版本、行棋方和领域合法性。完整契约见 [五子棋玩法](gomoku.md)。
 
+`IGoMatchController` 发布不可变 `GoSnapshot`，接受落子、虚着、整块死子标记、确认数子和认输等语义动作。`LocalGoMatchController.Apply` 只路由到 `GoGame`，不增加权限；网络实现以本地执色、期望操作序号和房主身份再次鉴权。房主广播至多 4096 项的操作日志，客户端从空局逐条重放后才替换快照。Screen 持有控制器、聊天和资料交换，退出时先解绑适配器，再由控制器幂等释放 transport。完整规则、错误和限制见 [围棋玩法](go.md)。
+
 ## 7. 跨玩法房管消息板：RoomChatManager
 
-定义：[RoomChat.cs](../src/Xiangqi.Core/Application/RoomChat.cs)。RoomChatManager 是纯 C#、有界、进程内的消息板；经典 NetworkGameCoordinator、三国 IThreeMatchController，以及揭棋/军旗/五子棋的双人房适配器都实际使用同一契约。它不拥有 transport、文件、线程或 Godot 节点，也不负责平台认证、加密或决定谁是游戏权威。
+定义：[RoomChat.cs](../src/Xiangqi.Core/Application/RoomChat.cs)。RoomChatManager 是纯 C#、有界、进程内的消息板；经典 NetworkGameCoordinator、三国 IThreeMatchController，以及揭棋/军旗/五子棋/围棋的双人房适配器都实际使用同一契约。它不拥有 transport、文件、线程或 Godot 节点，也不负责平台认证、加密或决定谁是游戏权威。
 
 RoomChatEntry 使用稳定房间席位而非 Steam64/公钥指纹：SenderSeat 为零基发送席，TargetSeat=null 表示全房间，非空表示指定接收席。Post 验证发送/目标范围、禁止给自己定向、去除首尾空白、拒绝控制字符及超过 512 UTF-8 字节的正文，成功后生成 32 位十六进制消息 ID、先存储再同步触发 MessageAdded。双人房必须调用 `PostToOpponent`，由消息板根据发送席固定计算唯一对手；该入口拒绝三席及以上房间，避免 UI 或玩法控制器重新实现目标选择。失败返回用户可见错误且不触发事件。消息板默认最多保留 200 条，淘汰最旧项；Entries 是实时只读视图，不是历史快照。
 
 AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并传入 authenticatedSenderSeat；消息自述 SenderSeat 不匹配、结构非法或 ID 重复时返回 false。ImportTrustedHistory 只用于已认证房间同伴提供的有界历史页，逐条复验结构并去重，但不会替调用者建立信任。三国协议为保持房主迁移/断线恢复，把消息复制到可信房间副本；IsVisibleTo 只让全房间消息、发送者和目标席呈现定向消息。这是目标可见性，不是端到端加密。
 
-经典协调器通过 MatchWireProtocol v7 发送 RoomChatEntry，并按唯一对手的认证连接绑定远端席位；揭棋、军旗、五子棋由 `RawTwoPlayerRoomChat` 在各自权威玩法包之外复用同一有界 Chat 帧。所有双人房 UI 使用 `TwoPlayerChatPanel`，不显示接收者下拉框且只发送给唯一对手。适配器只拥有包事件订阅，Screen 必须先释放它，再由控制器释放 transport。三国聊天独立于游戏 ThreeCommand/哈希棋谱，SendChat 不要求三席满员、对局开始或当前房主在线；周期 hello 交换 chat-state 历史，后加入者和重连者可以补齐。三人及以上房间才允许 UI 选择全房间或具体席位。所有事件在控制器 Poll/调用所在主线程同步发布；Manager 本身无需 Dispose。
+经典协调器通过 MatchWireProtocol v7 发送 RoomChatEntry，并按唯一对手的认证连接绑定远端席位；揭棋、军旗、五子棋、围棋由 `RawTwoPlayerRoomChat` 在各自权威玩法包之外复用同一有界 Chat 帧。所有双人房 UI 使用 `TwoPlayerChatPanel`，不显示接收者下拉框且只发送给唯一对手。适配器只拥有包事件订阅，Screen 必须先释放它，再由控制器释放 transport。三国聊天独立于游戏 ThreeCommand/哈希棋谱，SendChat 不要求三席满员、对局开始或当前房主在线；周期 hello 交换 chat-state 历史，后加入者和重连者可以补齐。三人及以上房间才允许 UI 选择全房间或具体席位。所有事件在控制器 Poll/调用所在主线程同步发布；Manager 本身无需 Dispose。
 
 测试：[Program.cs](../tests/Xiangqi.Core.Tests/Program.cs) 覆盖正常/目标/越界/去重/伪造/协议畸形；[RoomChatNetworkTests.cs](../tests/Xiangqi.ThreeNetwork.Tests/RoomChatNetworkTests.cs) 覆盖两席发言、第三席历史、断线目标恢复和原房主离线后继续发言。常见误用包括用昵称鉴权、把 TargetSeat 当加密、把聊天塞回棋谱阻塞走子、让后台 I/O 直接更新控件。
 
@@ -160,7 +162,7 @@ AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并�
 
 共同要求：可靠传递、输入有界、合法身份、状态通知、清晰队列/线程/释放语义。类型化消息合法并不代表着法合法；接收端必须继续走协调器与领域。
 
-`ITwoPlayerPacketTransport` 与 `IMatchTransport` 定义在同一文件，是双人新玩法使用的原始可靠包端口：它只传递有界、不透明的 `ReadOnlyMemory<byte>`，报告连接/房主身份并由屏幕退出路径 `DisposeAsync`；它不解析玩法、序号、棋位、Seed 或私密布阵。`EnetMatchTransport` 与 `SteamMatchTransport` 同时实现两个端口，但一次房间只订阅一种接收事件。揭棋和军旗分别在 Core 控制器中拥有独立版本头和最大 16,000 字节 JSON，不能把原始包直接交给 UI。
+`ITwoPlayerPacketTransport` 与 `IMatchTransport` 定义在同一文件，是双人新玩法使用的原始可靠包端口：它只传递有界、不透明的 `ReadOnlyMemory<byte>`，报告连接/房主身份并由屏幕退出路径 `DisposeAsync`；它不解析玩法、序号、棋位、Seed 或私密布阵。`EnetMatchTransport` 与 `SteamMatchTransport` 同时实现两个端口，但一次房间只订阅一种接收事件。揭棋和军旗分别在 Core 控制器中拥有独立版本头和最大 16,000 字节 JSON；围棋因最多 4096 项数子操作使用独立的 32,000 字节上限。原始包不能直接交给 UI。
 
 三人名册满席后固定，离线只改变 Connected，不能补位；Poll 回调在调用线程发出，后台 I/O 只能入队。Send 不携带 UI Node/Steam handle。SetAuthority 是同步平台房主归属的钩子，不允许 transport 自行决定游戏权威。
 
@@ -218,19 +220,21 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 ## 11. 棋谱与推演抽象
 
-`ClassicGameRecord` / `ThreeGameRecord` / `JieqiGameRecord` / `JunqiGameRecord` / `GomokuGameRecord` 是不可变初始状态、主线着法和标签的快照，不拥有文件，也不允许消费者修改权威会话。`Replay()` 每次创建新聚合并逐手验证；非法着法以 `InvalidDataException` 失败，不返回部分可信结果。五子棋导入入口是 `GomokuSgfCodec.TryParse`，其余保持原有 PGN/AC2 codec；它们同步、无 I/O，调用者负责读取有界文本并展示错误。
+`ClassicGameRecord` / `ThreeGameRecord` / `JieqiGameRecord` / `JunqiGameRecord` / `GomokuGameRecord` / `GoGameRecord` 是不可变初始状态、主线着法和标签的快照，不拥有文件，也不允许消费者修改权威会话。`Replay()` 每次创建新聚合并逐手验证；非法着法以 `InvalidDataException` 失败，不返回部分可信结果。五子棋导入入口是 `GomokuSgfCodec.TryParse`，围棋内部记录读取使用 `GoSgfCodec.TryParse`，其余保持原有 PGN/AC2 codec；它们同步、无 I/O，调用者负责读取有界文本并展示错误。
 
 经典 PGN 写出固定 `Game=Chinese Chess`、`Variant=Xiangqi`、`Format=ICCS`，非标准开局增加 `SetUp=1` 与 `FEN`。导入支持 PGN 主线、标签、花括号/分号注释、NAG 与跳过 RAV，但只接受 ICCS；不得看到 `.pgn` 后跳过 `Replay()` 校验。三国扩展固定 `Variant=Xiangqi-ThreeKingdoms`，`TKFEN` 是 UTF-8 JSON 的 Base64 表示，保存存活、国土控制、出生国、当前控制者和兵出境状态；这只是本项目的版本 1 扩展，不是 WXF 标准。
 
-`ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` / `JunqiRecordStore` / `GomokuRecordStore` 是玩法 codec 与落盘时机的所有者；共享 `GameRecordStorage` 把文件限制在 `user://games/<game-id>/records/recent|saved`，负责原子写、唯一命名、路径/重解析点检查和 recent 淘汰。首次访问会把旧 `user://records/<mode>` 的记录与 sidecar 幂等复制到新根且保留源文件。recent 的容量策略为每玩法十局，saved 永久保留。经典/三国/揭棋为 UTF-8 PGN 扩展，军旗按 AC2 规范使用 GB2312 `.ac2`，五子棋使用 SGF。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
+`ClassicRecordStore` / `ThreeRecordStore` / `JieqiRecordStore` / `JunqiRecordStore` / `GomokuRecordStore` / `GoRecordStore` 是玩法 codec 与落盘时机的所有者；共享 `GameRecordStorage` 把文件限制在 `user://games/<game-id>/records/recent|saved`，负责原子写、唯一命名、路径/重解析点检查和 recent 淘汰。首次访问会把旧 `user://records/<mode>` 的记录与 sidecar 幂等复制到新根且保留源文件。recent 的容量策略为每玩法十局，saved 永久保留。经典/三国/揭棋为 UTF-8 PGN 扩展，军旗按 AC2 规范使用 GB2312 `.ac2`，五子棋与围棋使用各自 GM 值的 SGF。文件 I/O 同步发生在主线程，当前棋谱很小，但批量导入/云同步前应增加后台端口，且后台完成后只能在主线程更新 Godot UI。
 
-记录页的“保存对局”是从 recent 到 saved 的显式用户操作：Store 先通过对应 codec 重新加载并重放校验，再使用新名称写入 saved 并携带同一份展示 sidecar；原 recent 不删除，失败不改动任何记录。`RecordEntryRow` 只组合复盘/保存/导出回调，不解析棋谱。`RecordExportDialog` 由记录页持有，只在用户选定文件系统目标后同步调用 Store；经典 Store 复验后写 UTF-8 `.pgn`（PGN 容器、ICCS 着法），五子棋 Store 复验后写 UTF-8 `.sgf`（FF[4]/GM[4]）。当前两个玩法各只实现一种可完整重放的导出格式；新增第二格式时应在界面显式选择，并为新 codec 补往返、非法输入和扩展名测试。导出不包含 `.meta.json`，因为它不是棋谱标准的一部分。
+记录页的“保存对局”是从 recent 到 saved 的显式用户操作：Store 先通过对应 codec 重新加载并重放校验，再使用新名称写入 saved 并携带同一份展示 sidecar；原 recent 不删除，失败不改动任何记录。`RecordEntryRow` 只组合复盘/保存/导出回调，不解析棋谱。`RecordExportDialog` 由记录页持有，只在用户选定文件系统目标后同步调用 Store；经典 Store 复验后写 UTF-8 `.pgn`（PGN 容器、ICCS 着法），五子棋与围棋 Store 复验后分别写 UTF-8 SGF FF[4]/GM[4] 和 FF[4]/GM[1]。当前三个玩法各只实现一种可完整重放的导出格式；新增第二格式时应在界面显式选择，并为新 codec 补往返、非法输入和扩展名测试。导出不包含 `.meta.json`，因为它不是棋谱标准的一部分。
 
 揭棋使用 `Variant=Jieqi`、`Format=ICCS`、十六进制 `Seed` 与 `Shuffle=splitmix64-fy-v1`。`JieqiSnapshot.ToPublicPosition` 是直播脱敏边界；`HiddenIdentityHints` 只允许赛后复盘。未知随机算法必须拒绝，联机中不得把 Seed 或 hints 发给非权威端。详细契约见 [揭棋玩法](jieqi.md)。
 
 军旗使用 AC2 `INFO[1.0]`，A-L/0-4 坐标、a-l 棋子码，以及 AA/AB、MA/MB、RA/RB、FA/FB、EA/EB 属性；`JunqiGameRecord.Replay` 复验声明战果和亮旗，不信任文本。`JunqiSnapshot.ForPlayer` 是直播脱敏边界，`ForReplay` 只供赛后。完整映射与限制见 [军旗玩法](junqi.md)。
 
 五子棋使用 SGF FF[4]/GM[4] 的 `SZ/RU/AB/AW/PL/B/W` 主线，必须通过 `GomokuGameRecord.Replay` 重放验证。`GomokuRecordStore` 保存 UTF-8 `.sgf`；详见 [五子棋玩法](gomoku.md)。
+
+围棋使用 SGF FF[4]/GM[1] 的 `SZ[19]/RU[Chinese]/KM[7.5]/B/W/RE/AE` 主线与终局信息，`GoGameRecord.Replay` 重新执行提子、全同、双方确认死子和数子。局内坐标显示只属于 `GoBoardView` 投影，不进入记录或协议；详见 [围棋玩法](go.md)。
 
 所有玩法记录额外使用同名 `.meta.json` sidecar 保存纯展示信息；棋谱仍是独立、可重放的事实来源。`MatchRecordPresentation` 包含 PlayedAt、Mode、本地玩家、1..2 名对手和本地视角结果；玩家名称限制 64 字，头像限制为 64×64 RGBA8，不保存原头像路径、平台句柄或凭证。组合根先获取 Steam 本机昵称/头像（不可用时为本地默认），`CustomPlayerProfileFactory.ApplyOverrides` 再分别覆盖已配置的自定义昵称和头像；未配置或头像读取失败的字段保留平台默认值。返回快照可与 fallback 共享头像缓冲，必须交给唯一 `MatchPlayerProfiles` 租约；`ReplaceLocal/ReplaceOpponent` 仅在新旧头像不同时释放旧缓冲。双人原始包玩法用 `RawMatchProfileExchange` 复用受限 PlayerProfile 帧，三国 v3 以认证席位同步同一载荷；资料交换不拥有 transport，Screen 在控制器前解绑并释放像素。sidecar 损坏时回退棋谱标签/默认席位名。经典旧版 Red/Black sidecar 仍可读取，新记录统一写共享结构。各记录页共用 `RecordEntryRow`，其标题、104px 行高、时间/双方/结果/模式列与经典相同；页面持有所建 `ImageTexture` 并在 `_ExitTree` 释放。
 

@@ -3,9 +3,11 @@ using Xiangqi.Core.Application;
 using Xiangqi.Core.Application.Jieqi;
 using Xiangqi.Core.Application.Junqi;
 using Xiangqi.Core.Application.Gomoku;
+using Xiangqi.Core.Application.Go;
 using Xiangqi.Core.Domain;
 using Xiangqi.Core.Domain.Junqi;
 using Xiangqi.Core.Domain.Gomoku;
+using Xiangqi.Core.Domain.Go;
 using Xiangqi.Core.Domain.Grid;
 using Xiangqi.Presentation.AI;
 using Xiangqi.Presentation.Networking;
@@ -443,6 +445,15 @@ public partial class Main : Control
             SwitchTo(new GomokuGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport, match.Profiles));
             return;
         }
+        if (match.Configuration.Mode == TwoPlayerGameMode.Go)
+        {
+            var options = new GoRoomOptions(match.Configuration.HostSide == PieceSide.Red
+                ? GoStone.Black : GoStone.White);
+            var controller = new NetworkGoMatchController(match.Transport, match.IsHost ? options : null);
+            SwitchTo(new GoGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery,
+                match.Transport, match.Profiles));
+            return;
+        }
         SwitchTo(new GameScreen(
             _settings,
             ShowGallery,
@@ -676,6 +687,13 @@ public partial class Main : Control
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not GomokuGameScreen)
                 throw new InvalidOperationException("Gomoku local screen failed to instantiate.");
+            StartGoLocal(new GoRoomOptions(GoStone.Black));
+            await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GoGameScreen go || !go.AreCoordinatesVisible)
+                throw new InvalidOperationException("Go local screen or coordinate labels failed to instantiate.");
+            go.SetCoordinateLabelsForSmoke(false);
+            if (go.AreCoordinatesVisible)
+                throw new InvalidOperationException("Go in-game coordinate setting did not update the board projection.");
             StartJunqiLocal();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not JunqiGameScreen junqi)
@@ -699,7 +717,7 @@ public partial class Main : Control
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not GameScreen { TrialActionText: "推演" })
                 throw new InvalidOperationException("Classic trial action must use the 推演 label.");
-            GD.Print("[Xiangqi.UI.Smoke] Validated module catalog, Junqi, Gomoku, settings and spring-board local match instantiated.");
+            GD.Print("[Xiangqi.UI.Smoke] Validated module catalog, Junqi, Gomoku, Go, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }
         catch (Exception error)

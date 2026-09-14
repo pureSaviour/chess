@@ -89,6 +89,16 @@ public partial class Main
             Entry(Route("computer", "人机模式", "人机对决", GameModuleCapabilities.ComputerPlay, 0), StartConfiguredGomokuAiMatch),
             Entry(Route("computer-settings", "人机模式", "人机设置", GameModuleCapabilities.ComputerSettings, 1), ShowGomokuAiSettings)
         ]);
-        return [classic, three, jieqi, junqi, gomoku];
+        var go = new GameModuleRegistration(new(
+            new("go.chinese"), new Version(1, 0), "围棋", "十九路纵横 · 气尽提子 · 数子定胜",
+            "res://assets/gallery/go-card.svg", common, 500),
+        [
+            Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => ShowGoGallery(ClassicGalleryEntry.Local)),
+            Entry(Route("lan", "联机模式", "局域网联机", GameModuleCapabilities.LanPlay, 1), () => ShowGoGallery(ClassicGalleryEntry.Lan)),
+            Entry(Route("steam", "联机模式", "Steam 邀请好友", GameModuleCapabilities.SteamPlay, 2), () => ShowGoGallery(ClassicGalleryEntry.Steam)),
+            Entry(Route("recent", "对局记录", "最近对局", GameModuleCapabilities.RecentRecords, 0), () => ShowGoRecords(false)),
+            Entry(Route("saved", "对局记录", "保存对局", GameModuleCapabilities.SavedRecords, 1), () => ShowGoRecords(true))
+        ]);
+        return [classic, three, jieqi, junqi, gomoku, go];
     }
 }
