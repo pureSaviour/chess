@@ -72,9 +72,26 @@ public partial class GoGameScreen : Control
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
     private readonly RawTwoPlayerRoomChat? _roomChat;
+    private readonly TwoPlayerChatPanel? _chatPanel;
     private bool _recent;
     public bool AreCoordinatesVisible => _board.CoordinatesVisible;
+    public bool AreMoveNumbersVisible => _board.MoveNumbersVisible;
+    public Vector2 BoardAreaSize => _board.Size;
+    public string ChatBounds => _chatPanel is null ? "missing" :
+        $"panel={_chatPanel.GetGlobalRect()} viewport={GetViewportRect()} board={_board.GetGlobalRect()} screen={GetGlobalRect()}";
+    public bool IsChatFullyVisible
+    {
+        get
+        {
+            if (_chatPanel is null) return false;
+            var rect = _chatPanel.GetGlobalRect();
+            var viewport = GetViewportRect();
+            return rect.Position.X >= viewport.Position.X && rect.Position.Y >= viewport.Position.Y &&
+                   rect.End.X <= viewport.End.X + .5f && rect.End.Y <= viewport.End.Y + .5f;
+        }
+    }
     public void SetCoordinateLabelsForSmoke(bool visible) => _board.SetCoordinatesVisible(visible);
+    public void SetMoveNumbersForSmoke(bool visible) => _board.SetMoveNumbersVisible(visible);
 
     public GoGameScreen(IGoMatchController controller, string roomTitle, Action back, Node? driver = null,
         MatchPlayerProfiles? profiles = null)
@@ -92,29 +109,37 @@ public partial class GoGameScreen : Control
         var header = new HBoxContainer(); header.AddThemeConstantOverride("separation", 7); root.AddChild(header);
         var title = UiStyle.CreateTitle($"围棋 · {roomTitle}", 27); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         header.AddChild(_status);
-        _pass = UiStyle.CreateButton("虚着"); _pass.Pressed += () => Submit(GoActionKind.Pass); header.AddChild(_pass);
-        _confirm = UiStyle.CreateButton("确认数子"); _confirm.Pressed += () => Submit(GoActionKind.ConfirmScore); header.AddChild(_confirm);
-        var resign = UiStyle.CreateButton("认输"); header.AddChild(resign);
+        var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
+        var actions = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        actions.AddThemeConstantOverride("separation", 7); root.AddChild(actions);
+        _pass = UiStyle.CreateButton("虚着"); _pass.Pressed += () => Submit(GoActionKind.Pass); actions.AddChild(_pass);
+        _confirm = UiStyle.CreateButton("确认数子"); _confirm.Pressed += () => Submit(GoActionKind.ConfirmScore); actions.AddChild(_confirm);
+        var resign = UiStyle.CreateButton("认输"); actions.AddChild(resign);
         var resignDialog = new ConfirmationDialog { Title = "认输", DialogText = "确定认输并结束本局围棋吗？",
             OkButtonText = "确认认输", CancelButtonText = "取消" };
         AddChild(resignDialog); resign.Pressed += () => resignDialog.PopupCentered();
         resignDialog.Confirmed += () => Submit(GoActionKind.Resign);
-        _save = UiStyle.CreateButton("保存棋谱"); _save.Disabled = true; _save.Pressed += Save; header.AddChild(_save);
-        var settings = UiStyle.CreateButton("局内设置"); header.AddChild(settings);
-        var settingsDialog = new AcceptDialog { Title = "围棋 · 局内设置", OkButtonText = "完成", MinSize = new(520, 180) }; AddChild(settingsDialog);
+        _save = UiStyle.CreateButton("保存棋谱"); _save.Disabled = true; _save.Pressed += Save; actions.AddChild(_save);
+        var settings = UiStyle.CreateButton("局内设置"); actions.AddChild(settings);
+        var settingsDialog = new AcceptDialog { Title = "围棋 · 局内设置", OkButtonText = "完成", MinSize = new(520, 220) }; AddChild(settingsDialog);
         var settingsMargin = new MarginContainer();
         foreach (var key in new[] { "margin_left", "margin_right", "margin_top", "margin_bottom" })
             settingsMargin.AddThemeConstantOverride(key, 20);
         settingsDialog.AddChild(settingsMargin);
+        var settingsColumn = new VBoxContainer(); settingsColumn.AddThemeConstantOverride("separation", 12); settingsMargin.AddChild(settingsColumn);
         var coordinates = new CheckButton { Text = "显示棋盘坐标（A–T 跳过 I，1–19）", ButtonPressed = true };
-        coordinates.Toggled += _board.SetCoordinatesVisible; settingsMargin.AddChild(coordinates);
-        settings.Pressed += () => settingsDialog.PopupCentered(new(520, 180));
-        var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
+        coordinates.Toggled += _board.SetCoordinatesVisible; settingsColumn.AddChild(coordinates);
+        var moveNumbers = new CheckButton { Text = "在棋子上显示手数", ButtonPressed = false };
+        moveNumbers.Toggled += _board.SetMoveNumbersVisible; settingsColumn.AddChild(moveNumbers);
+        settings.Pressed += () => settingsDialog.PopupCentered(new(520, 220));
         var body = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
         body.AddThemeConstantOverride("separation", 10); root.AddChild(body);
-        var center = new CenterContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
-        center.AddChild(_board); body.AddChild(center);
-        if (_roomChat is not null) body.AddChild(new TwoPlayerChatPanel(_roomChat, () => _controller.LocalColor is { } color ? (int)color : null));
+        body.AddChild(_board);
+        if (_roomChat is not null)
+        {
+            _chatPanel = new TwoPlayerChatPanel(_roomChat, () => _controller.LocalColor is { } color ? (int)color : null);
+            body.AddChild(_chatPanel);
+        }
         var hint = new Label { Text = "SGF FF[4] / GM[1] · 行棋时点击落子；数子时点击整块棋标记或取消死子",
             HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);

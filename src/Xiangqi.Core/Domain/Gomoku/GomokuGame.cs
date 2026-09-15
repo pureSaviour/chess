@@ -8,7 +8,8 @@ public enum GomokuEndReason : byte { FiveInRow, BoardFull }
 public enum GomokuMoveRejection : byte { None, Finished, Occupied, OutOfBounds, NotPlayersTurn, Overline, DoubleFour, DoubleThree }
 
 public readonly record struct GomokuMove(long Sequence, StoneColor Color, GridPoint Point);
-public readonly record struct PlacedStone(GridPoint Point, StoneColor Color);
+/// <summary>One occupied intersection; setup stones have no move number, played stones retain it for presentation.</summary>
+public readonly record struct PlacedStone(GridPoint Point, StoneColor Color, long? MoveNumber = null);
 public sealed record GomokuSnapshot(int BoardSize, GomokuRuleSet Rules, IReadOnlyList<PlacedStone> Stones,
     StoneColor SideToMove, long PlyNumber, bool IsFinished, StoneColor? Winner, GomokuEndReason? EndReason,
     GomokuMove? LastMove);
@@ -28,6 +29,7 @@ public sealed class GomokuGame
     private static readonly (int Dc, int Dr)[] Directions = [(1, 0), (0, 1), (1, 1), (1, -1)];
     private readonly SquareGrid _grid;
     private readonly Dictionary<GridPoint, StoneColor> _stones = [];
+    private readonly Dictionary<GridPoint, long> _moveNumbers = [];
     private readonly List<GomokuMove> _history = [];
 
     public GomokuGame(int boardSize = 15, GomokuRuleSet rules = GomokuRuleSet.Freestyle,
@@ -51,7 +53,9 @@ public sealed class GomokuGame
     public GomokuEndReason? EndReason { get; private set; }
     public IReadOnlyList<GomokuMove> History => _history.AsReadOnly();
     public GomokuSnapshot Snapshot => new(_grid.Size, Rules,
-        _stones.Select(x => new PlacedStone(x.Key, x.Value)).OrderBy(x => x.Point.Row).ThenBy(x => x.Point.Column).ToArray(),
+        _stones.Select(x => new PlacedStone(x.Key, x.Value,
+            _moveNumbers.TryGetValue(x.Key, out var number) ? number : null))
+            .OrderBy(x => x.Point.Row).ThenBy(x => x.Point.Column).ToArray(),
         SideToMove, _history.Count, IsFinished, Winner, EndReason, _history.Count == 0 ? null : _history[^1]);
 
     public GomokuMoveResult TryPlace(GridPoint point, StoneColor? actor = null)
@@ -64,6 +68,7 @@ public sealed class GomokuGame
         if (_stones.ContainsKey(point)) return GomokuMoveResult.Rejected(move, GomokuMoveRejection.Occupied);
 
         _stones.Add(point, color);
+        _moveNumbers.Add(point, move.Sequence);
         var line = Directions.Max(direction => CountLine(point, color, direction.Dc, direction.Dr));
         if (Rules == GomokuRuleSet.RenjuForbiddenMoves && color == StoneColor.Black)
         {
@@ -71,7 +76,12 @@ public sealed class GomokuGame
                 line == 5 ? GomokuMoveRejection.None :
                 CountFourFormations(point, color) >= 2 ? GomokuMoveRejection.DoubleFour :
                 CountOpenThreeFormations(point, color) >= 2 ? GomokuMoveRejection.DoubleThree : GomokuMoveRejection.None;
-            if (rejection != GomokuMoveRejection.None) { _stones.Remove(point); return GomokuMoveResult.Rejected(move, rejection); }
+            if (rejection != GomokuMoveRejection.None)
+            {
+                _stones.Remove(point);
+                _moveNumbers.Remove(point);
+                return GomokuMoveResult.Rejected(move, rejection);
+            }
         }
 
         _history.Add(move);

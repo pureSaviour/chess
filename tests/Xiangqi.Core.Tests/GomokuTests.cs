@@ -32,6 +32,8 @@ internal static class GomokuTests
         var game = new GomokuGame(15);
         for (var x = 0; x < 4; x++) { Success(game.TryPlace(new(x, 7))); Success(game.TryPlace(new(x, 8))); }
         Success(game.TryPlace(new(4, 7))); True(game.Snapshot.IsFinished); Equal(StoneColor.Black, game.Snapshot.Winner);
+        Equal(1L, game.Snapshot.Stones.Single(x => x.Point == new GridPoint(0, 7)).MoveNumber);
+        Equal(9L, game.Snapshot.Stones.Single(x => x.Point == new GridPoint(4, 7)).MoveNumber);
         Equal(GomokuMoveRejection.Finished, game.TryPlace(new(9, 9)).Rejection);
     }
     private static void ForbiddenMoves()
@@ -39,6 +41,7 @@ internal static class GomokuTests
         var overline = new GomokuGame(15, GomokuRuleSet.RenjuForbiddenMoves,
             Enumerable.Range(3, 5).Select(x => new PlacedStone(new(x, 7), StoneColor.Black)));
         Equal(GomokuMoveRejection.Overline, overline.TryPlace(new(8, 7)).Rejection);
+        False(overline.Snapshot.Stones.Any(x => x.Point == new GridPoint(8, 7)));
 
         var setup = new[] { new GridPoint(5, 7), new GridPoint(6, 7), new GridPoint(8, 7),
             new GridPoint(7, 5), new GridPoint(7, 6), new GridPoint(7, 8) }

@@ -13,11 +13,20 @@ public partial class GoBoardView : Control
 {
     private GoSnapshot _snapshot = new GoGame().Snapshot;
     private bool _showCoordinates = true;
+    private bool _showMoveNumbers;
     public bool CoordinatesVisible => _showCoordinates;
+    public bool MoveNumbersVisible => _showMoveNumbers;
     public event Action<GridPoint>? PointPressed;
-    public GoBoardView() { CustomMinimumSize = new(620, 620); MouseDefaultCursorShape = CursorShape.PointingHand; }
+    public GoBoardView()
+    {
+        CustomMinimumSize = new(320, 320);
+        SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        SizeFlagsVertical = SizeFlags.ExpandFill;
+        MouseDefaultCursorShape = CursorShape.PointingHand;
+    }
     public void SetPosition(GoSnapshot snapshot) { _snapshot = snapshot; QueueRedraw(); }
     public void SetCoordinatesVisible(bool visible) { _showCoordinates = visible; QueueRedraw(); }
+    public void SetMoveNumbersVisible(bool visible) { _showMoveNumbers = visible; QueueRedraw(); }
 
     public override void _GuiInput(InputEvent input)
     {
@@ -73,7 +82,12 @@ public partial class GoBoardView : Control
                 DrawLine(center - Vector2.One * radius * .55f, center + Vector2.One * radius * .55f, mark, 2.5f);
                 DrawLine(center + new Vector2(-1, 1) * radius * .55f, center + new Vector2(1, -1) * radius * .55f, mark, 2.5f);
             }
-            else if (_snapshot.LastAction is { Kind: GoActionKind.Place, Point: { } last } && last == stone.Point)
+            var last = _snapshot.LastAction is { Kind: GoActionKind.Place, Point: { } lastPoint } && lastPoint == stone.Point;
+            if (_showMoveNumbers)
+                StoneMoveNumberPainter.Draw(this, center, radius, stone.MoveNumber,
+                    last ? stone.Color == GoStone.Black ? new Color("#E4C067") : new Color("#A7382D")
+                         : stone.Color == GoStone.Black ? new Color("#F5F1E8") : new Color("#28231E"));
+            else if (last)
                 DrawCircle(center, Math.Max(2.1f, spacing * .07f), stone.Color == GoStone.Black ? new Color("#E4C067") : new Color("#A7382D"));
         }
     }

@@ -13,7 +13,8 @@ public enum GoRejection : byte
 }
 
 public readonly record struct GoAction(long Sequence, GoStone Actor, GoActionKind Kind, GridPoint? Point = null);
-public readonly record struct GoPlacedStone(GridPoint Point, GoStone Color);
+/// <summary>One live board stone and the action number on which it was placed, for read-only presentation.</summary>
+public readonly record struct GoPlacedStone(GridPoint Point, GoStone Color, long MoveNumber);
 public readonly record struct GoScore(double Black, double White, double Komi)
 {
     public GoStone? Winner => Math.Abs(Black - White) < .0001 ? null : Black > White ? GoStone.Black : GoStone.White;
@@ -43,6 +44,7 @@ public sealed class GoGame
     private static readonly (int Dc, int Dr)[] Orthogonal = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     private readonly SquareGrid _grid = new(StandardBoardSize);
     private readonly Dictionary<GridPoint, GoStone> _stones = [];
+    private readonly Dictionary<GridPoint, long> _moveNumbers = [];
     private readonly List<GoAction> _actions = [];
     private readonly HashSet<string> _positions = [string.Empty];
     private readonly HashSet<GridPoint> _dead = [];
@@ -56,7 +58,8 @@ public sealed class GoGame
     public GoScore? Score { get; private set; }
     public IReadOnlyList<GoAction> Actions => _actions.AsReadOnly();
     public GoSnapshot Snapshot => new(StandardBoardSize,
-        _stones.Select(x => new GoPlacedStone(x.Key, x.Value)).OrderBy(x => x.Point.Row).ThenBy(x => x.Point.Column).ToArray(),
+        _stones.Select(x => new GoPlacedStone(x.Key, x.Value, _moveNumbers[x.Key]))
+            .OrderBy(x => x.Point.Row).ThenBy(x => x.Point.Column).ToArray(),
         SideToMove, _actions.Count, _actions.Count(x => x.Kind is GoActionKind.Place or GoActionKind.Pass),
         Phase, new HashSet<GridPoint>(_dead), new HashSet<GoStone>(_confirmations), Winner, EndReason,
         Score, _actions.Count == 0 ? null : _actions[^1]);
@@ -70,8 +73,9 @@ public sealed class GoGame
         if (!_grid.Contains(point)) return GoActionResult.Rejected(action, GoRejection.OutOfBounds);
         if (_stones.ContainsKey(point)) return GoActionResult.Rejected(action, GoRejection.Occupied);
 
-        var captured = new Dictionary<GridPoint, GoStone>();
+        var captured = new Dictionary<GridPoint, (GoStone Color, long MoveNumber)>();
         _stones.Add(point, color);
+        _moveNumbers.Add(point, action.Sequence);
         foreach (var neighbor in Neighbors(point))
         {
             if (!_stones.TryGetValue(neighbor, out var other) || other == color) continue;
@@ -79,21 +83,32 @@ public sealed class GoGame
             if (HasLiberty(group)) continue;
             foreach (var member in group)
             {
-                captured[member] = other;
+                captured[member] = (other, _moveNumbers[member]);
                 _stones.Remove(member);
+                _moveNumbers.Remove(member);
             }
         }
         if (!HasLiberty(Group(point)))
         {
             _stones.Remove(point);
-            foreach (var item in captured) _stones.Add(item.Key, item.Value);
+            _moveNumbers.Remove(point);
+            foreach (var item in captured)
+            {
+                _stones.Add(item.Key, item.Value.Color);
+                _moveNumbers.Add(item.Key, item.Value.MoveNumber);
+            }
             return GoActionResult.Rejected(action, GoRejection.Suicide);
         }
         var position = PositionKey();
         if (_positions.Contains(position))
         {
             _stones.Remove(point);
-            foreach (var item in captured) _stones.Add(item.Key, item.Value);
+            _moveNumbers.Remove(point);
+            foreach (var item in captured)
+            {
+                _stones.Add(item.Key, item.Value.Color);
+                _moveNumbers.Add(item.Key, item.Value.MoveNumber);
+            }
             return GoActionResult.Rejected(action, GoRejection.RepeatedPosition);
         }
         _positions.Add(position);

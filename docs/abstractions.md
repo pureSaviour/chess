@@ -234,7 +234,7 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 五子棋使用 SGF FF[4]/GM[4] 的 `SZ/RU/AB/AW/PL/B/W` 主线，必须通过 `GomokuGameRecord.Replay` 重放验证。`GomokuRecordStore` 保存 UTF-8 `.sgf`；详见 [五子棋玩法](gomoku.md)。
 
-围棋使用 SGF FF[4]/GM[1] 的 `SZ[19]/RU[Chinese]/KM[7.5]/B/W/RE/AE` 主线与终局信息，`GoGameRecord.Replay` 重新执行提子、全同、双方确认死子和数子。局内坐标显示只属于 `GoBoardView` 投影，不进入记录或协议；详见 [围棋玩法](go.md)。
+围棋使用 SGF FF[4]/GM[1] 的 `SZ[19]/RU[Chinese]/KM[7.5]/B/W/RE/AE` 主线与终局信息，`GoGameRecord.Replay` 重新执行提子、全同、双方确认死子和数子。`GoPlacedStone.MoveNumber` 与 `PlacedStone.MoveNumber` 是只读展示语义：领域聚合为实际落子赋值，初始摆放可为空；棋盘只决定是否绘制。局内坐标及围棋/五子棋手数开关均属于投影，不进入记录或协议；详见 [围棋玩法](go.md) 与 [五子棋玩法](gomoku.md)。
 
 所有玩法记录额外使用同名 `.meta.json` sidecar 保存纯展示信息；棋谱仍是独立、可重放的事实来源。`MatchRecordPresentation` 包含 PlayedAt、Mode、本地玩家、1..2 名对手和本地视角结果；玩家名称限制 64 字，头像限制为 64×64 RGBA8，不保存原头像路径、平台句柄或凭证。组合根先获取 Steam 本机昵称/头像（不可用时为本地默认），`CustomPlayerProfileFactory.ApplyOverrides` 再分别覆盖已配置的自定义昵称和头像；未配置或头像读取失败的字段保留平台默认值。返回快照可与 fallback 共享头像缓冲，必须交给唯一 `MatchPlayerProfiles` 租约；`ReplaceLocal/ReplaceOpponent` 仅在新旧头像不同时释放旧缓冲。双人原始包玩法用 `RawMatchProfileExchange` 复用受限 PlayerProfile 帧，三国 v3 以认证席位同步同一载荷；资料交换不拥有 transport，Screen 在控制器前解绑并释放像素。sidecar 损坏时回退棋谱标签/默认席位名。经典旧版 Red/Black sidecar 仍可读取，新记录统一写共享结构。各记录页共用 `RecordEntryRow`，其标题、104px 行高、时间/双方/结果/模式列与经典相同；页面持有所建 `ImageTexture` 并在 `_ExitTree` 释放。
 

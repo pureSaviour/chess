@@ -683,17 +683,39 @@ public partial class Main : Control
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not JieqiReplayScreen { AreBottomControlsFullyVisible: true })
                 throw new InvalidOperationException("Jieqi replay controls are outside the viewport.");
-            StartGomokuLocal(new GomokuRoomOptions(19, GomokuRuleSet.RenjuForbiddenMoves, StoneColor.Black));
+            var gomokuController = new LocalGomokuMatchController(19, GomokuRuleSet.RenjuForbiddenMoves);
+            SwitchTo(new GomokuGameScreen(gomokuController, "UI smoke", ShowGallery,
+                profiles: CreateOfflineProfiles("本地玩家 2")));
+            await gomokuController.SubmitAsync(new GridPoint(9, 9));
+            await gomokuController.SubmitAsync(new GridPoint(9, 10));
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GomokuGameScreen)
+            if (_currentScreen is not GomokuGameScreen gomoku || gomoku.BoardAreaSize.X < 700 ||
+                gomoku.AreMoveNumbersVisible)
                 throw new InvalidOperationException("Gomoku local screen failed to instantiate.");
-            StartGoLocal(new GoRoomOptions(GoStone.Black));
+            gomoku.SetMoveNumbersForSmoke(true);
+            if (!gomoku.AreMoveNumbersVisible)
+                throw new InvalidOperationException("Gomoku in-game move-number setting did not update the board projection.");
+            await ToSignal(GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
+            var goController = new LocalGoMatchController();
+            SwitchTo(new GoGameScreen(goController, "UI smoke", ShowGallery,
+                profiles: CreateOfflineProfiles("本地玩家 2")));
+            await goController.SubmitAsync(GoActionKind.Place, new GridPoint(9, 9));
+            await goController.SubmitAsync(GoActionKind.Place, new GridPoint(9, 10));
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GoGameScreen go || !go.AreCoordinatesVisible)
+            if (_currentScreen is not GoGameScreen go || !go.AreCoordinatesVisible ||
+                go.BoardAreaSize.X < 700 || go.AreMoveNumbersVisible)
                 throw new InvalidOperationException("Go local screen or coordinate labels failed to instantiate.");
             go.SetCoordinateLabelsForSmoke(false);
+            go.SetMoveNumbersForSmoke(true);
             if (go.AreCoordinatesVisible)
                 throw new InvalidOperationException("Go in-game coordinate setting did not update the board projection.");
+            if (!go.AreMoveNumbersVisible)
+                throw new InvalidOperationException("Go in-game move-number setting did not update the board projection.");
+            await ToSignal(GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
+            StartGoLanHost(EnetMatchTransport.DefaultPort + 2, new GoRoomOptions(GoStone.Black));
+            await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
+            if (_currentScreen is not GoGameScreen { IsChatFullyVisible: true })
+                throw new InvalidOperationException($"Go LAN chat panel is outside the viewport: {(_currentScreen as GoGameScreen)?.ChatBounds ?? "screen missing"}.");
             StartJunqiLocal();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not JunqiGameScreen junqi)

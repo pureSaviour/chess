@@ -1,6 +1,6 @@
 # 五子棋玩法与开发边界
 
-更新：2026-09-14。本文区分已实现的 Rapfi 桌面接入与尚未验收的移动端方案。
+更新：2026-09-15。本文区分已实现的 Rapfi 桌面接入与尚未验收的移动端方案。
 
 ## 规则
 
@@ -17,7 +17,7 @@
 
 `IGomokuMatchController` 是 UI 的实际注入边界。本地实现使用同一聚合；联机实现复用 `ITwoPlayerPacketTransport`，但使用独立 v1、16000 字节上限的房主权威协议。房主 hello 发布尺寸、禁手和席位；客户落子携带预期手数；房主发布主线，客户端逐手重放后才接受。未知版本、越界、错误角色、陈旧手数和畸形 JSON 失败关闭。这是可信 P2P 房主模型，尚无断线续局或中立裁判。所有实现还提供 `InitializeAsync` 和 `Poll`：本地/网络为空操作，AI 用前者探测引擎、用后者在 UI 主线程提交后台结果。
 
-事件在 transport 驱动线程同步发布；Godot 适配器在主线程泵入。AI 后台任务不发布 UI 事件，而是写入有界于“每次一个搜索”的完成队列，`GomokuGameScreen._Process` 调用 `Poll` 后才复验和发布。联网房间通过共享 `RawTwoPlayerRoomChat`/`TwoPlayerChatPanel` 发送有界消息，接收者固定为唯一对手且不显示目标选择；聊天不进入五子棋权威主线。Screen 拥有 controller，退出时先解绑聊天/资料事件再幂等释放；controller 再释放 transport 或 AI 引擎。`GomokuBoardView` 只绘制、命中和播放落子动画。
+事件在 transport 驱动线程同步发布；Godot 适配器在主线程泵入。AI 后台任务不发布 UI 事件，而是写入有界于“每次一个搜索”的完成队列，`GomokuGameScreen._Process` 调用 `Poll` 后才复验和发布。联网房间通过共享 `RawTwoPlayerRoomChat`/`TwoPlayerChatPanel` 发送有界消息，接收者固定为唯一对手且不显示目标选择；聊天不进入五子棋权威主线。Screen 拥有 controller，退出时先解绑聊天/资料事件再幂等释放；controller 再释放 transport 或 AI 引擎。`GomokuBoardView` 只绘制、命中和播放落子动画；它占用左侧全部可用空间，并可按局内开关用棋子对比色显示仍在盘面上的落子手数。初始摆放子没有手数，手数显示也不进入棋谱或网络协议。
 
 ## Rapfi AI 端口与进程适配
 

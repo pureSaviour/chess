@@ -26,6 +26,8 @@ internal static class GoTests
         Success(capture.Place(new(0, 1)));
         Equal(2, capture.Snapshot.Stones.Count);
         False(capture.Snapshot.Stones.Any(x => x.Point == new GridPoint(0, 0)));
+        Equal(1L, capture.Snapshot.Stones.Single(x => x.Point == new GridPoint(1, 0)).MoveNumber);
+        Equal(3L, capture.Snapshot.Stones.Single(x => x.Point == new GridPoint(0, 1)).MoveNumber);
 
         var suicide = new GoGame();
         Success(suicide.Place(new(10, 10)));
@@ -34,6 +36,7 @@ internal static class GoTests
         Success(suicide.Place(new(0, 1)));
         Equal(GoRejection.Suicide, suicide.Place(new(0, 0)).Rejection);
         Equal(4, suicide.Snapshot.Stones.Count);
+        Equal(4L, suicide.Snapshot.Stones.Single(x => x.Point == new GridPoint(0, 1)).MoveNumber);
     }
 
     private static void PositionalSuperko()
@@ -46,6 +49,8 @@ internal static class GoTests
         Success(game.Place(new(2, 1)));
         Equal(GoRejection.RepeatedPosition, game.Place(new(2, 2)).Rejection);
         Equal(9L, game.Snapshot.ActionNumber);
+        Equal(9L, game.Snapshot.Stones.Single(x => x.Point == new GridPoint(2, 1)).MoveNumber);
+        Equal(8L, game.Snapshot.Stones.Single(x => x.Point == new GridPoint(2, 0)).MoveNumber);
     }
 
     private static void PassAndAreaScoring()
