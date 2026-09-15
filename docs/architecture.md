@@ -12,7 +12,7 @@
 | IReadOnlyBoard / IPieceRule / PieceRuleRegistry | Domain | 只读查询、局部走法、棋种注册 |
 | ChessGame | Domain | 唯一棋规与胜负裁决、历史撤销 |
 | GameSession | Application | 意图门面、状态事件、表现语义 |
-| MatchClock | Application | 纯 C# 局时/步时状态机 |
+| MatchClock / MoveClockIndicator | Application | 纯 C# 局时/步时状态机及只读显示投影 |
 | NetworkGameCoordinator / IMatchTransport | Application | 双人同步、协商、类型化传输端口 |
 | RoomChatManager | Application | 跨玩法有界消息板、目标席位、验证与去重 |
 | AiGameCoordinator / IXiangqiAiEngine | Application | AI 决策回合、搜索结果验证、搜索端口 |
@@ -89,6 +89,8 @@ GameScreen 当前要求 IMatchTransport 实例同时为 Godot Node 并将其 Add
 
 MatchClock.Advance/BeginTurn/Apply 是引擎无关算法；0 为不限时。GameScreen._Process 推进时钟，房主才向协调器提交超时裁决，并约每 0.25 秒发送 ClockSync；客户端平滑显示并按相同 PlyNumber 校正。
 
+`MoveClockIndicator.From` 只把控制器提供的当前步时、步时上限和“是否当前行动者”投影为可见性、0..1 剩余比例与 Normal/Critical；它不拥有计时器、不判超时。剩余大于 10 秒为 Normal，剩余小于等于 10 秒为 Critical；不限步时或非当前行动者隐藏。`TwoPlayerProfileRow` 只把该投影映射成头像外的绿色/红色细进度框。
+
 悔棋/和棋由 NetworkGameCoordinator 管理申请 ID、类型、PlyNumber、发送/接收票据。仅本人最后落子且对方未走时可申请悔棋；双方复验申请资格与响应绑定。接受悔棋走 Session.Undo，和棋走 DeclareDraw。
 
 协商期间协调器拒绝走子，GameScreen 根据 HasPendingOffer 事件暂停棋钟。这项暂停策略尚未封装为统一无 UI 控制器，因此单测协调器并不能完全验证真实 UI 中的计时编排。
@@ -136,7 +138,9 @@ UndoHumanTurn 可撤销人类最近一手，若 AI 已回复则一起撤回回�
 
 ## 6. 资料、外观与生命周期
 
-MatchPlayerProfiles 持有本局双方 PlayerProfileSnapshot/PlayerAvatarPixels；平台或自定义提供器只产出名称/ID/像素。Steam Persona Name 是玩家可见名称，Steam64 仍保留为内部身份字段但玩家卡不再默认显示它。GameScreen 创建 ImageTexture，释放时先断开控件纹理再 Dispose；本机头像路径不发给对手。当前 UI 断线后释放资料并显示释放状态。
+MatchPlayerProfiles 持有本局双方 PlayerProfileSnapshot/PlayerAvatarPixels；平台或自定义提供器只产出名称/ID/像素。Steam Persona Name 是玩家可见名称，Steam64 仍保留为内部身份字段但玩家卡不再默认显示它。六种内置对局页复用 `TwoPlayerProfileRow`（三国每席一条）：组件拥有临时 ImageTexture，保持比例裁切铺满无底色的圆角矩形，并在替换或退出时先断开纹理再 Dispose；本机头像路径不发给对手。当前经典 UI 断线后释放资料并显示释放状态。
+
+经典顶栏只保留返回、玩法名、普通状态、设置和“功能”菜单；LAN 地址、端口与房间角色通过设置弹窗查看，推演、保存、认输、悔棋/重开或联网协商从功能菜单触发。围棋同样把虚着、确认数子、估算、认输和保存收进功能菜单，以释放纵向棋盘空间。当前尚未引入跨玩法的 Ready 协议：房间参数仍由玩法准备页在创建/加入前提交；首个权威动作后设置只允许修改本机视觉与声音，不能把 UI 解锁当成协议许可。
 
 本机资料的组合顺序是 Steam 昵称/头像→本地默认→按字段应用自定义昵称/头像，因此只自定义其中一项不会丢失另一项的 Steam 默认值。经典最近与保存记录页都可将已校验记录导出为 UTF-8 `.pgn`，内容固定使用 PGN 容器和 ICCS 着法；最近记录还可在记录页追加到 saved，不删除 recent 原件。
 

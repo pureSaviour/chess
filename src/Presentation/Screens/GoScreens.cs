@@ -76,12 +76,17 @@ public partial class GoGameScreen : Control
     private readonly RawMatchProfileExchange? _profileExchange;
     private readonly RawTwoPlayerRoomChat? _roomChat;
     private readonly TwoPlayerChatPanel? _chatPanel;
+    private readonly TwoPlayerProfileRow _topPlayer = new(false);
+    private readonly TwoPlayerProfileRow _bottomPlayer = new(true);
+    private bool _profilesDirty = true;
+    private GoStone? _profileColor;
     private GoManualScoreSession? _scorePreview;
     private bool _recent;
     public bool AreCoordinatesVisible => _board.CoordinatesVisible;
     public bool AreMoveNumbersVisible => _board.MoveNumbersVisible;
     public bool IsScorePreviewActive => _scorePreview is not null && _board.ScorePreviewVisible;
     public bool HasLastMoveHighlight => _board.HasLastMoveHighlight;
+    public bool HasUnifiedPlayerCards => _topPlayer.GetParent() is not null && _bottomPlayer.GetParent() is not null;
     public string ScorePreviewText => _estimateLabel.Text;
     public Vector2 BoardAreaSize => _board.Size;
     public string ChatBounds => _chatPanel is null ? "missing" :
@@ -108,7 +113,7 @@ public partial class GoGameScreen : Control
         _controller = controller; _profiles = profiles;
         if (driver is ITwoPlayerPacketTransport packetTransport)
         {
-            if (profiles is not null) _profileExchange = new(packetTransport, profiles);
+            if (profiles is not null) { _profileExchange = new(packetTransport, profiles); _profileExchange.OpponentChanged += OnProfileChanged; }
             _roomChat = new(packetTransport, () => _controller.LocalColor is { } color ? (int)color : null);
         }
         if (driver is not null) AddChild(driver);
@@ -116,10 +121,10 @@ public partial class GoGameScreen : Control
         var margin = UiStyle.CreatePageMargin(24, 14); AddChild(margin);
         var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 7); margin.AddChild(root);
         var header = new HBoxContainer(); header.AddThemeConstantOverride("separation", 7); root.AddChild(header);
-        var title = UiStyle.CreateTitle($"围棋 · {roomTitle}", 27); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
+        var title = UiStyle.CreateTitle("围棋", 27); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         header.AddChild(_status);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
-        var actions = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
+        var actions = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End, Visible = false };
         actions.AddThemeConstantOverride("separation", 7); root.AddChild(actions);
         _pass = UiStyle.CreateButton("虚着"); _pass.Pressed += () => Submit(GoActionKind.Pass); actions.AddChild(_pass);
         _confirm = UiStyle.CreateButton("确认数子"); _confirm.Pressed += () => Submit(GoActionKind.ConfirmScore); actions.AddChild(_confirm);
@@ -132,7 +137,7 @@ public partial class GoGameScreen : Control
         AddChild(resignDialog); _resign.Pressed += () => resignDialog.PopupCentered();
         resignDialog.Confirmed += () => Submit(GoActionKind.Resign);
         _save = UiStyle.CreateButton("保存棋谱"); _save.Disabled = true; _save.Pressed += Save; actions.AddChild(_save);
-        var settings = UiStyle.CreateButton("局内设置"); actions.AddChild(settings);
+        var settings = UiStyle.CreateButton("局内设置"); header.AddChild(settings);
         foreach (var actionButton in new[] { _pass, _confirm, _estimateButton, _resign, _save, settings })
             actionButton.CustomMinimumSize = new(140, 48);
         var settingsDialog = new AcceptDialog { Title = "围棋 · 局内设置", OkButtonText = "完成", MinSize = new(520, 220) }; AddChild(settingsDialog);
@@ -141,19 +146,41 @@ public partial class GoGameScreen : Control
             settingsMargin.AddThemeConstantOverride(key, 20);
         settingsDialog.AddChild(settingsMargin);
         var settingsColumn = new VBoxContainer(); settingsColumn.AddThemeConstantOverride("separation", 12); settingsMargin.AddChild(settingsColumn);
+        var roomInfo = new Label { Text = $"房间信息：{roomTitle}", AutowrapMode = TextServer.AutowrapMode.WordSmart };
+        UiStyle.SetMuted(roomInfo, 13); settingsColumn.AddChild(roomInfo);
         var coordinates = new CheckButton { Text = "显示棋盘坐标（A–T 跳过 I，1–19）", ButtonPressed = true };
         coordinates.Toggled += _board.SetCoordinatesVisible; settingsColumn.AddChild(coordinates);
         var moveNumbers = new CheckButton { Text = "在棋子上显示手数", ButtonPressed = false };
         moveNumbers.Toggled += _board.SetMoveNumbersVisible; settingsColumn.AddChild(moveNumbers);
         settings.Pressed += () => settingsDialog.PopupCentered(new(520, 220));
+        var functions = new MenuButton { Text = "功能 ▾", CustomMinimumSize = new(110, 48) };
+        var functionPopup = functions.GetPopup();
+        functionPopup.AddItem("虚着", 1); functionPopup.AddItem("确认数子", 2);
+        functionPopup.AddItem("数目估算", 3); functionPopup.AddSeparator();
+        functionPopup.AddItem("认输", 4); functionPopup.AddItem("保存棋谱", 5);
+        functionPopup.AboutToPopup += () =>
+        {
+            void Sync(int id, Button source) { var index = functionPopup.GetItemIndex(id); functionPopup.SetItemText(index, source.Text); functionPopup.SetItemDisabled(index, source.Disabled); }
+            Sync(1, _pass); Sync(2, _confirm); Sync(3, _estimateButton); Sync(4, _resign); Sync(5, _save);
+        };
+        functionPopup.IdPressed += id =>
+        {
+            switch (id) { case 1: Submit(GoActionKind.Pass); break; case 2: Submit(GoActionKind.ConfirmScore); break;
+                case 3: ToggleScorePreview(); break; case 4: resignDialog.PopupCentered(); break; case 5: Save(); break; }
+        };
+        header.AddChild(functions);
         var body = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
         body.AddThemeConstantOverride("separation", 10); root.AddChild(body);
         body.AddChild(_board);
+        var rail = new VBoxContainer { CustomMinimumSize = new(300, 0), SizeFlagsVertical = SizeFlags.ExpandFill };
+        rail.AddThemeConstantOverride("separation", 6); body.AddChild(rail); rail.AddChild(_topPlayer);
         if (_roomChat is not null)
         {
             _chatPanel = new TwoPlayerChatPanel(_roomChat, () => _controller.LocalColor is { } color ? (int)color : null);
-            body.AddChild(_chatPanel);
+            rail.AddChild(_chatPanel);
         }
+        else rail.AddChild(new Control { SizeFlagsVertical = SizeFlags.ExpandFill });
+        rail.AddChild(_bottomPlayer);
         _estimateLabel.HorizontalAlignment = HorizontalAlignment.Center;
         _estimateLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         _estimateLabel.Visible = false;
@@ -162,7 +189,7 @@ public partial class GoGameScreen : Control
             HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
         _board.PointPressed += OnPoint; _controller.Changed += OnChanged; _controller.Message += OnMessage;
-        Render();
+        ApplyProfiles(); Render();
     }
 
     public override async void _Ready()
@@ -184,7 +211,17 @@ public partial class GoGameScreen : Control
         var result = await _controller.SubmitAsync(kind, point);
         if (!result.Accepted) OnMessage(RejectText(result.Rejection, result.Error));
     }
-    private void OnChanged() => Render();
+    private void OnChanged() { ApplyProfiles(); Render(); }
+    private void ApplyProfiles()
+    {
+        if (!_profilesDirty && _profileColor == _controller.LocalColor) return;
+        _profilesDirty = false; _profileColor = _controller.LocalColor;
+        var bottom = _controller.LocalColor ?? GoStone.Black;
+        var top = bottom == GoStone.Black ? GoStone.White : GoStone.Black;
+        _bottomPlayer.Apply(_profiles?.Local, StoneName(bottom), _controller.LocalColor is null ? "本地双人" : $"你是{StoneName(bottom)}", string.Empty);
+        _topPlayer.Apply(_profiles?.Opponent, StoneName(top), _controller.LocalColor is null ? "本地双人" : $"对方是{StoneName(top)}", string.Empty);
+    }
+    private void OnProfileChanged() { _profilesDirty = true; ApplyProfiles(); }
     private void Render()
     {
         var snapshot = _controller.Snapshot;
@@ -283,6 +320,7 @@ public partial class GoGameScreen : Control
     public override void _ExitTree()
     {
         _board.PointPressed -= OnPoint; _controller.Changed -= OnChanged; _controller.Message -= OnMessage;
+        if (_profileExchange is not null) _profileExchange.OpponentChanged -= OnProfileChanged;
         _profileExchange?.Dispose(); _roomChat?.Dispose(); _profiles?.Dispose(); _ = _controller.DisposeAsync();
     }
 }

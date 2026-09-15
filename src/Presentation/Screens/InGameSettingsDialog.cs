@@ -17,6 +17,10 @@ public partial class InGameSettingsDialog : ConfirmationDialog
     private readonly OptionButton _skin = new();
     private readonly HSlider _master = VolumeSlider();
     private readonly HSlider _sfx = VolumeSlider();
+    private readonly Label _roomHeading = UiStyle.CreateTitle("房间信息", 19);
+    private readonly Label _roomName = new() { Text = "连接与规则" };
+    private readonly Label _roomDetail = new() { AutowrapMode = TextServer.AutowrapMode.WordSmart };
+    private readonly Label _roomEditState = new() { HorizontalAlignment = HorizontalAlignment.Right };
     private AppSettings? _draft;
 
     public event Action<AppSettings>? Saved;
@@ -39,6 +43,12 @@ public partial class InGameSettingsDialog : ConfirmationDialog
         grid.AddThemeConstantOverride("v_separation", 16);
         margin.AddChild(grid);
 
+        grid.AddChild(_roomHeading);
+        UiStyle.SetMuted(_roomEditState, 12); grid.AddChild(_roomEditState);
+        grid.AddChild(_roomName);
+        UiStyle.SetMuted(_roomDetail, 13); grid.AddChild(_roomDetail);
+        _roomHeading.Visible = _roomEditState.Visible = _roomName.Visible = _roomDetail.Visible = false;
+
         AddSection(grid, "棋盘", "仅改变本机显示，不影响棋局状态");
         PopulateThemes();
         AddRow(grid, "棋盘皮肤", _skin);
@@ -55,6 +65,8 @@ public partial class InGameSettingsDialog : ConfirmationDialog
 
     public void PopupFor(AppSettings current)
     {
+        _roomHeading.Visible = _roomEditState.Visible = _roomName.Visible = _roomDetail.Visible = false;
+        MinSize = new Vector2I(520, 390);
         _draft = current.Copy();
         _coordinates.ButtonPressed = _draft.ShowBoardCoordinates;
         _effects.ButtonPressed = _draft.EffectsEnabled;
@@ -62,6 +74,22 @@ public partial class InGameSettingsDialog : ConfirmationDialog
         _master.Value = _draft.MasterVolume * 100;
         _sfx.Value = _draft.EffectsVolume * 100;
         PopupCentered(new Vector2I(560, 430));
+    }
+
+    /// <summary>
+    /// Shows technical room metadata inside settings instead of the permanent match header.
+    /// The caller supplies the authoritative preparation/editability state; this dialog does not
+    /// mutate transport endpoints or match rules after their owning controller has started.
+    /// </summary>
+    public void PopupFor(AppSettings current, string roomHeading, string roomDetail, bool canEditRoom)
+    {
+        _roomHeading.Text = roomHeading;
+        _roomDetail.Text = roomDetail;
+        _roomEditState.Text = canEditRoom ? "准备阶段 · 参数可在玩法准备页更改" : "对局已开始 · 房间参数已锁定";
+        PopupFor(current);
+        _roomHeading.Visible = _roomEditState.Visible = _roomName.Visible = _roomDetail.Visible = true;
+        MinSize = new Vector2I(560, 480);
+        PopupCentered(new Vector2I(600, 510));
     }
 
     private void SaveDraft()

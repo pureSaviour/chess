@@ -26,6 +26,34 @@ public readonly record struct ClockSnapshot(
     double MoveSeconds,
     PieceSide SideToMove);
 
+public enum MoveClockUrgency : byte
+{
+    Hidden,
+    Normal,
+    Critical
+}
+
+/// <summary>
+/// Engine-independent projection used by player-card renderers. The ratio is always in [0, 1];
+/// an unlimited, inactive or already-finished turn is hidden. The final ten seconds are critical.
+/// This type owns no timer and never changes authoritative clock state.
+/// </summary>
+public readonly record struct MoveClockIndicator(bool IsVisible, double RemainingRatio, MoveClockUrgency Urgency)
+{
+    public static MoveClockIndicator From(double remainingSeconds, int moveLimitSeconds, bool isActive)
+    {
+        if (!double.IsFinite(remainingSeconds))
+            throw new ArgumentOutOfRangeException(nameof(remainingSeconds), "步时必须是有限数值。");
+        if (moveLimitSeconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(moveLimitSeconds), "步时上限不能小于零。");
+        if (!isActive || moveLimitSeconds == 0)
+            return new(false, 0, MoveClockUrgency.Hidden);
+        var remaining = Math.Clamp(remainingSeconds, 0, moveLimitSeconds);
+        return new(true, remaining / moveLimitSeconds,
+            remaining <= 10 ? MoveClockUrgency.Critical : MoveClockUrgency.Normal);
+    }
+}
+
 /// <summary>
 /// Engine-independent chess clock supporting total-game and per-move allowances. Zero means
 /// unlimited. Network hosts own timeout adjudication; clients apply host snapshots for display,

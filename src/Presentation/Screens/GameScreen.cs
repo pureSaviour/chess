@@ -32,7 +32,6 @@ public partial class GameScreen : Control
     private readonly bool _exchangeLocalProfile;
     private readonly AiMatchConfiguration? _aiConfiguration;
     private readonly IXiangqiAiEngine? _aiEngine;
-    private readonly List<ImageTexture> _profileTextures = [];
     private bool _profileResourcesReleased;
     private bool _localProfileSent;
     private NetworkGameCoordinator? _network;
@@ -50,16 +49,8 @@ public partial class GameScreen : Control
     private BoardView _board = null!;
     private CueEffectLayer _effects = null!;
     private Label _connectionLabel = null!;
-    private Label _topClock = null!;
-    private Label _bottomClock = null!;
-    private TextureRect _topAvatar = null!;
-    private TextureRect _bottomAvatar = null!;
-    private Label _topAvatarInitial = null!;
-    private Label _bottomAvatarInitial = null!;
-    private Label _topPlayerName = null!;
-    private Label _bottomPlayerName = null!;
-    private Label _topPlayerId = null!;
-    private Label _bottomPlayerId = null!;
+    private readonly TwoPlayerProfileRow _topPlayer = new(false);
+    private readonly TwoPlayerProfileRow _bottomPlayer = new(true);
     private Button _undoButton = null!;
     private Button _requestUndoButton = null!;
     private Button _requestDrawButton = null!;
@@ -80,6 +71,7 @@ public partial class GameScreen : Control
     private Button _trialButton = null!;
     private bool _trialOpponentMoveNotified;
     private Button _saveRecordButton = null!;
+    private MenuButton _functionMenu = null!;
     private bool _recentRecordWritten;
     private Control? _messageSidePanel;
 
@@ -95,6 +87,9 @@ public partial class GameScreen : Control
         }
     }
     internal string TrialActionText => _trialButton.Text;
+    internal bool HasCompactFunctionMenu => _functionMenu.GetParent() is not null && _trialButton.Visible == false;
+    internal bool HasUnifiedPlayerCards => _topPlayer.HasRoundedAvatar && _bottomPlayer.HasRoundedAvatar &&
+        !_topPlayer.HasColoredAvatarBackground && !_bottomPlayer.HasColoredAvatarBackground;
     internal string MessagePanelBounds => _messageSidePanel is null ? "missing" :
         $"panel={_messageSidePanel.GetGlobalRect()} viewport={GetViewportRect()} screen={GetGlobalRect()}";
 
@@ -255,12 +250,13 @@ public partial class GameScreen : Control
         backButton.Pressed += LeaveForGallery;
         header.AddChild(backButton);
         var title = UiStyle.CreateTitle("经典象棋", 26);
+        title.CustomMinimumSize = new Vector2(120, 41);
         title.VerticalAlignment = VerticalAlignment.Center;
         title.ClipText = true;
         header.AddChild(title);
         _connectionLabel = new Label
         {
-            Text = _matchLabel,
+            Text = "等待对局",
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
@@ -270,17 +266,18 @@ public partial class GameScreen : Control
         header.AddChild(_connectionLabel);
         var settingsButton = UiStyle.CreateButton("设置");
         settingsButton.CustomMinimumSize = new Vector2(70, 41);
-        settingsButton.Pressed += () => _settingsDialog.PopupFor(_settings);
+        settingsButton.Pressed += () => _settingsDialog.PopupFor(_settings, "房间信息", _matchLabel,
+            _session.Snapshot.PlyNumber == 0 && !_session.Snapshot.IsFinished);
         header.AddChild(settingsButton);
         _trialButton = UiStyle.CreateButton("推演");
         _trialButton.CustomMinimumSize = new Vector2(76, 41);
         _trialButton.Pressed += ToggleTrial;
-        header.AddChild(_trialButton);
+        _trialButton.Visible = false; header.AddChild(_trialButton);
         _saveRecordButton = UiStyle.CreateButton("保存棋局");
         _saveRecordButton.CustomMinimumSize = new Vector2(88, 41);
         _saveRecordButton.Disabled = true;
         _saveRecordButton.Pressed += SaveRecord;
-        header.AddChild(_saveRecordButton);
+        _saveRecordButton.Visible = false; header.AddChild(_saveRecordButton);
         var resign = UiStyle.CreateButton("认输");
         resign.CustomMinimumSize = new Vector2(76, 41);
         var resignDialog = new ConfirmationDialog
@@ -292,28 +289,49 @@ public partial class GameScreen : Control
         resignDialog.Confirmed += Resign;
         AddChild(resignDialog);
         resign.Pressed += () => resignDialog.PopupCentered();
-        header.AddChild(resign);
+        resign.Visible = false; header.AddChild(resign);
         _undoButton = UiStyle.CreateButton("悔棋");
         _undoButton.CustomMinimumSize = new Vector2(95, 41);
         _undoButton.Visible = _transport is null;
         _undoButton.Pressed += Undo;
-        header.AddChild(_undoButton);
+        _undoButton.Visible = false; header.AddChild(_undoButton);
         var restart = UiStyle.CreateButton("重开");
         restart.CustomMinimumSize = new Vector2(95, 41);
         restart.Visible = _transport is null;
         restart.Pressed += Restart;
-        header.AddChild(restart);
+        restart.Visible = false; header.AddChild(restart);
 
         _requestUndoButton = UiStyle.CreateButton("申请悔棋");
         _requestUndoButton.CustomMinimumSize = new Vector2(92, 41);
         _requestUndoButton.Visible = _transport is not null;
         _requestUndoButton.Pressed += () => RequestMatchOffer(MatchOfferKind.Undo);
-        header.AddChild(_requestUndoButton);
+        _requestUndoButton.Visible = false; header.AddChild(_requestUndoButton);
         _requestDrawButton = UiStyle.CreateButton("申请和棋");
         _requestDrawButton.CustomMinimumSize = new Vector2(92, 41);
         _requestDrawButton.Visible = _transport is not null;
         _requestDrawButton.Pressed += () => RequestMatchOffer(MatchOfferKind.Draw);
-        header.AddChild(_requestDrawButton);
+        _requestDrawButton.Visible = false; header.AddChild(_requestDrawButton);
+
+        _functionMenu = new MenuButton { Text = "功能 ▾", CustomMinimumSize = new Vector2(96, 41) };
+        var popup = _functionMenu.GetPopup();
+        popup.AddItem("推演", 1); popup.AddItem("保存棋局", 2); popup.AddSeparator(); popup.AddItem("认输", 3);
+        if (_transport is null) { popup.AddItem("悔棋", 4); popup.AddItem("重开", 5); }
+        else { popup.AddItem("申请悔棋", 6); popup.AddItem("申请和棋", 7); }
+        popup.AboutToPopup += RefreshFunctionMenu;
+        popup.IdPressed += id =>
+        {
+            switch (id)
+            {
+                case 1: ToggleTrial(); break;
+                case 2: SaveRecord(); break;
+                case 3: resignDialog.PopupCentered(); break;
+                case 4: Undo(); break;
+                case 5: Restart(); break;
+                case 6: RequestMatchOffer(MatchOfferKind.Undo); break;
+                case 7: RequestMatchOffer(MatchOfferKind.Draw); break;
+            }
+        };
+        header.AddChild(_functionMenu);
 
         var matchBody = new HBoxContainer
         {
@@ -331,7 +349,8 @@ public partial class GameScreen : Control
         };
         matchColumn.AddThemeConstantOverride("separation", 3);
         matchBody.AddChild(matchColumn);
-        matchColumn.AddChild(CreatePlayerRow(isBottom: false));
+        var hasMessageRail = _transport is not null || _aiConfiguration is not null;
+        if (!hasMessageRail) matchColumn.AddChild(_topPlayer);
         var boardPanel = UiStyle.CreatePanel();
         // Keep enough horizontal budget for the fixed message rail at the 1100px design size.
         // The board itself remains square inside the flexible column and grows on wide displays.
@@ -348,11 +367,11 @@ public partial class GameScreen : Control
         _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
         _board.SetFeedbackAnimated(settings.EffectsEnabled);
         boardPanel.AddChild(_board);
-        matchColumn.AddChild(CreatePlayerRow(isBottom: true));
+        if (!hasMessageRail) matchColumn.AddChild(_bottomPlayer);
 
         ApplyPlayerProfiles();
 
-        if (_transport is not null || _aiConfiguration is not null) BuildMessageSidePanel(matchBody);
+        if (hasMessageRail) BuildMessageSidePanel(matchBody);
 
         _effects = new CueEffectLayer { EnabledBySettings = settings.EffectsEnabled };
         _effects.ApplyTheme(_themes.Resolve(settings.ThemeId));
@@ -393,6 +412,7 @@ public partial class GameScreen : Control
         var title = UiStyle.CreateTitle(_aiConfiguration is null ? "对局消息" : "AI 分析", 20);
         title.HorizontalAlignment = HorizontalAlignment.Center;
         column.AddChild(title);
+        column.AddChild(_topPlayer);
         _chatLog = new RichTextLabel
         {
             SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -415,6 +435,7 @@ public partial class GameScreen : Control
         _chatSendButton.CustomMinimumSize = new Vector2(0, 40);
         _chatSendButton.Pressed += SendChat;
         column.AddChild(_chatSendButton);
+        column.AddChild(_bottomPlayer);
 
         _offerDialog = new ConfirmationDialog
         {
@@ -503,7 +524,7 @@ public partial class GameScreen : Control
             {
                 _trialOpponentMoveNotified = true;
                 AppendChat("系统", "真实对局已有新着法；退出推演后将回到最新局面。", true);
-                _connectionLabel.Text = $"{_matchLabel} · 推演中（真实对局已更新）";
+                _connectionLabel.Text = "推演中 · 真实对局已有更新";
             }
             UpdateNetworkControls();
             return;
@@ -609,8 +630,8 @@ public partial class GameScreen : Control
         }
         else
         {
-            local = new(_bottomPlayerName.Text, true);
-            opponent = new(_topPlayerName.Text, false);
+            local = new(_bottomPlayer.DisplayName, true);
+            opponent = new(_topPlayer.DisplayName, false);
         }
         var result = snapshot.EndReason == GameEndReason.Draw ? "和" : snapshot.Winner == localSide ? "胜" : "败";
         var mode = _ai is not null ? "人机对战" : _matchLabel.StartsWith("Steam", StringComparison.OrdinalIgnoreCase)
@@ -642,14 +663,14 @@ public partial class GameScreen : Control
             _trial = _session.BeginTrial();
             _trialOpponentMoveNotified = false;
             _trialButton.Text = "退出推演";
-            _connectionLabel.Text = $"{_matchLabel} · 推演分支";
+            _connectionLabel.Text = "推演分支";
             _board.SetPosition(_trial.Snapshot);
             _displayedSnapshot = _trial.Snapshot;
             return;
         }
         _trial = null;
         _trialButton.Text = "推演";
-        _connectionLabel.Text = _matchLabel;
+        _connectionLabel.Text = "返回真实对局";
         _displayedSnapshot = _session.Snapshot;
         _board.SetPosition(_session.Snapshot);
         ScheduleAiMoveIfReady();
@@ -856,7 +877,14 @@ public partial class GameScreen : Control
     {
         if (OS.IsDebugBuild()) GD.Print($"[Xiangqi.Network] State={status.State}, Detail={status.Detail}");
         var sideText = _localSide is null ? string.Empty : $" · 你执{SideName(_localSide.Value)}";
-        _connectionLabel.Text = $"{_matchLabel}{sideText} · {status.Detail}";
+        _connectionLabel.Text = status.State switch
+        {
+            TransportConnectionState.Connected => $"已连接{sideText}",
+            TransportConnectionState.Faulted => "连接失败",
+            TransportConnectionState.Disconnected => "连接已断开",
+            _ => "等待对手加入"
+        };
+        _connectionLabel.TooltipText = "连接与房间详情请在设置中查看";
         _connectionLabel.AddThemeColorOverride("font_color", status.State switch
         {
             TransportConnectionState.Connected => new Color("#79C99A"),
@@ -890,7 +918,7 @@ public partial class GameScreen : Control
         if (_isNetworkHost || _network is not null) return;
         ConfigureNetworkMatch(configuration, configuration.ClientSide);
         _clock.IsRunning = _network?.HasPendingOffer != true;
-        _connectionLabel.Text = $"{_matchLabel} · 你执{SideName(_localSide!.Value)}";
+        _connectionLabel.Text = $"配置完成 · 你执{SideName(_localSide!.Value)}";
     }
 
     private void ConfigureNetworkMatch(NetworkMatchConfiguration configuration, PieceSide localSide)
@@ -949,24 +977,23 @@ public partial class GameScreen : Control
     {
         if (_configuration?.TimeControl.IsEnabled != true || _localSide is null)
         {
-            _topClock.Visible = false;
-            _bottomClock.Visible = false;
+            _topPlayer.SetTrailing(string.Empty);
+            _bottomPlayer.SetTrailing(string.Empty);
+            _topPlayer.SetMoveClock(default);
+            _bottomPlayer.SetMoveClock(default);
             return;
         }
-        if (!_topClock.Visible) _topClock.Visible = true;
-        if (!_bottomClock.Visible) _bottomClock.Visible = true;
         var clock = _clock.Snapshot;
         var topSide = _localSide.Value.Opponent();
         var topText = ClockText(topSide, clock);
         var bottomText = ClockText(_localSide.Value, clock);
-        if (_topClock.Text != topText) _topClock.Text = topText;
-        if (_bottomClock.Text != bottomText) _bottomClock.Text = bottomText;
-        var topColor = clock.SideToMove == topSide ? UiStyle.Gold : UiStyle.Muted;
-        var bottomColor = clock.SideToMove == _localSide ? UiStyle.Gold : UiStyle.Muted;
-        if (_topClock.GetThemeColor("font_color") != topColor)
-            _topClock.AddThemeColorOverride("font_color", topColor);
-        if (_bottomClock.GetThemeColor("font_color") != bottomColor)
-            _bottomClock.AddThemeColorOverride("font_color", bottomColor);
+        _topPlayer.SetTrailing(topText);
+        _bottomPlayer.SetTrailing(bottomText);
+        var active = !_session.Snapshot.IsFinished && _clock.IsRunning;
+        _topPlayer.SetMoveClock(MoveClockIndicator.From(clock.MoveSeconds,
+            _configuration.Value.TimeControl.MoveSeconds, active && clock.SideToMove == topSide));
+        _bottomPlayer.SetMoveClock(MoveClockIndicator.From(clock.MoveSeconds,
+            _configuration.Value.TimeControl.MoveSeconds, active && clock.SideToMove == _localSide.Value));
     }
 
     private string ClockText(PieceSide side, ClockSnapshot clock)
@@ -987,124 +1014,39 @@ public partial class GameScreen : Control
 
     private static string SideName(PieceSide side) => side == PieceSide.Red ? "红方" : "黑方";
 
-    private static Label CreateClockLabel()
-    {
-        var label = new Label
-        {
-            HorizontalAlignment = HorizontalAlignment.Center,
-            CustomMinimumSize = new Vector2(0, 26)
-        };
-        label.AddThemeFontSizeOverride("font_size", 17);
-        return label;
-    }
-
-    private Control CreatePlayerRow(bool isBottom)
-    {
-        var row = new HBoxContainer { CustomMinimumSize = new Vector2(0, 50) };
-        row.AddThemeConstantOverride("separation", 10);
-        var avatarRoot = new Control { CustomMinimumSize = new Vector2(46, 46) };
-        var background = new ColorRect { Color = isBottom ? new Color("#8E3B35") : new Color("#34373D") };
-        background.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        avatarRoot.AddChild(background);
-        var avatar = new TextureRect
-        {
-            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
-            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered
-        };
-        avatar.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        avatarRoot.AddChild(avatar);
-        var initial = new Label
-        {
-            Text = "棋",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        initial.AddThemeFontSizeOverride("font_size", 22);
-        initial.AddThemeColorOverride("font_color", Colors.White);
-        initial.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        avatarRoot.AddChild(initial);
-        row.AddChild(avatarRoot);
-
-        var identity = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
-        identity.AddThemeConstantOverride("separation", 0);
-        var name = new Label { Text = isBottom ? "本地玩家" : "对手" };
-        name.AddThemeFontSizeOverride("font_size", 16);
-        name.AddThemeColorOverride("font_color", UiStyle.Text);
-        identity.AddChild(name);
-        var id = new Label { Text = "身份等待中" };
-        UiStyle.SetMuted(id, 12);
-        identity.AddChild(id);
-        row.AddChild(identity);
-
-        var clock = CreateClockLabel();
-        clock.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        clock.HorizontalAlignment = HorizontalAlignment.Right;
-        row.AddChild(clock);
-
-        if (isBottom)
-        {
-            _bottomAvatar = avatar;
-            _bottomAvatarInitial = initial;
-            _bottomPlayerName = name;
-            _bottomPlayerId = id;
-            _bottomClock = clock;
-        }
-        else
-        {
-            _topAvatar = avatar;
-            _topAvatarInitial = initial;
-            _topPlayerName = name;
-            _topPlayerId = id;
-            _topClock = clock;
-        }
-        return row;
-    }
-
     private void ApplyPlayerProfiles()
     {
         if (_playerProfiles is null)
         {
             if (_ai is not null || _aiConfiguration is not null)
             {
-                _topPlayerName.Text = _aiEngine?.DisplayName ?? "AI 引擎";
-                _bottomPlayerName.Text = "本地玩家";
-                _topPlayerId.Text = "UCI 象棋引擎";
-                _bottomPlayerId.Text = $"玩家执{SideName(_localSide ?? PieceSide.Red)}";
+                _topPlayer.Apply(null, _aiEngine?.DisplayName ?? "AI 引擎", "UCI 象棋引擎", string.Empty);
+                _bottomPlayer.Apply(null, "本地玩家", $"玩家执{SideName(_localSide ?? PieceSide.Red)}", string.Empty);
                 return;
             }
-            _topPlayerName.Text = _transport is null ? "黑方" : "联机对手";
-            _bottomPlayerName.Text = _transport is null ? "红方" : "本地玩家";
-            _topPlayerId.Text = _transport is null ? "本地双人" : "临时联机身份";
-            _bottomPlayerId.Text = _transport is null ? "本地双人" : "临时联机身份";
+            var detail = _transport is null ? "本地双人" : "临时联机身份";
+            _topPlayer.Apply(null, _transport is null ? "黑方" : "联机对手", detail, string.Empty);
+            _bottomPlayer.Apply(null, _transport is null ? "红方" : "本地玩家", detail, string.Empty);
             return;
         }
-        ApplyPlayerProfile(_bottomAvatar, _bottomAvatarInitial,
-            _bottomPlayerName, _bottomPlayerId, _playerProfiles.Local);
-        ApplyPlayerProfile(_topAvatar, _topAvatarInitial,
-            _topPlayerName, _topPlayerId, _playerProfiles.Opponent);
+        var bottom = _localSide ?? PieceSide.Red;
+        _bottomPlayer.Apply(_playerProfiles.Local, SideName(bottom), $"玩家执{SideName(bottom)}", string.Empty);
+        _topPlayer.Apply(_playerProfiles.Opponent, SideName(bottom.Opponent()), $"对方执{SideName(bottom.Opponent())}", string.Empty);
         UpdatePlayerSideLabels();
     }
 
-    private void ApplyPlayerProfile(
-        TextureRect avatarView, Label initialView, Label nameView, Label idView,
-        PlayerProfileSnapshot profile)
+    private void RefreshFunctionMenu()
     {
-        if (avatarView.Texture is ImageTexture oldTexture && _profileTextures.Remove(oldTexture))
-            oldTexture.Dispose();
-        avatarView.Texture = null;
-        initialView.Visible = true;
-        nameView.Text = profile.DisplayName;
-        idView.Text = profile.Platform == "Steam" ? "Steam 昵称" : profile.Platform;
-        initialView.Text = FirstTextElement(profile.DisplayName);
-        if (profile.Avatar is null) return;
-        var image = Image.CreateFromData(
-            profile.Avatar.Width, profile.Avatar.Height, false,
-            Image.Format.Rgba8, profile.Avatar.CopyRgba());
-        var texture = ImageTexture.CreateFromImage(image);
-        image.Dispose();
-        avatarView.Texture = texture;
-        initialView.Visible = false;
-        _profileTextures.Add(texture);
+        var popup = _functionMenu.GetPopup();
+        void Sync(int id, Button source)
+        {
+            var index = popup.GetItemIndex(id);
+            if (index < 0) return;
+            popup.SetItemDisabled(index, source.Disabled);
+            popup.SetItemText(index, source.Text);
+        }
+        Sync(1, _trialButton); Sync(2, _saveRecordButton); Sync(4, _undoButton);
+        Sync(6, _requestUndoButton); Sync(7, _requestDrawButton);
     }
 
     private void OnPlayerProfileReceived(PlayerProfileCommand command)
@@ -1113,9 +1055,7 @@ public partial class GameScreen : Control
         try
         {
             _playerProfiles.ReplaceOpponent(CustomPlayerProfileFactory.FromCommand(command));
-            ApplyPlayerProfile(_topAvatar, _topAvatarInitial,
-                _topPlayerName, _topPlayerId, _playerProfiles.Opponent);
-            UpdatePlayerSideLabels();
+            ApplyPlayerProfiles();
         }
         catch (Exception error)
         {
@@ -1142,41 +1082,21 @@ public partial class GameScreen : Control
 
     private void UpdatePlayerSideLabels()
     {
-        if (_localSide is null) return;
-        var topSide = _localSide.Value.Opponent();
-        _topPlayerId.TooltipText = $"{SideName(topSide)} · {_topPlayerId.Text}";
-        _bottomPlayerId.TooltipText = $"{SideName(_localSide.Value)} · {_bottomPlayerId.Text}";
+        UpdateClockLabels();
     }
 
     private void ReleaseProfileResources()
     {
         if (_profileResourcesReleased) return;
         _profileResourcesReleased = true;
-        _topAvatar.Texture = null;
-        _bottomAvatar.Texture = null;
-        foreach (var texture in _profileTextures) texture.Dispose();
-        _profileTextures.Clear();
         _playerProfiles?.Dispose();
     }
 
     private void MarkProfilesReleased()
     {
         if (_playerProfiles is null) return;
-        _topAvatarInitial.Visible = true;
-        _bottomAvatarInitial.Visible = true;
-        _topAvatarInitial.Text = "—";
-        _bottomAvatarInitial.Text = "—";
-        _topPlayerName.Text = "房间已解散";
-        _bottomPlayerName.Text = "本地玩家";
-        _topPlayerId.Text = "临时资料已释放";
-        _bottomPlayerId.Text = "临时资料已释放";
-    }
-
-    private static string FirstTextElement(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return "棋";
-        var enumerator = System.Globalization.StringInfo.GetTextElementEnumerator(value.Trim());
-        return enumerator.MoveNext() ? enumerator.GetTextElement() : "棋";
+        _topPlayer.Apply((PlayerProfileSnapshot?)null, "房间已解散", "临时资料已释放", string.Empty);
+        _bottomPlayer.Apply((PlayerProfileSnapshot?)null, "本地玩家", "临时资料已释放", string.Empty);
     }
 
     private void Undo()
@@ -1226,7 +1146,7 @@ public partial class GameScreen : Control
         {
             await _ai.InitializeAsync();
             _aiInitialized = true;
-            _topPlayerName.Text = _aiEngine.DisplayName;
+            ApplyPlayerProfiles();
             _connectionLabel.Text = $"人机对决 · 你执{SideName(_ai.HumanSide)} · {_aiEngine.DisplayName}";
             _connectionLabel.AddThemeColorOverride("font_color", new Color("#79C99A"));
             AppendChat("系统", $"{_aiEngine.DisplayName} 已连接。输入问题可获得当前局面的 3 个候选走法。", true);

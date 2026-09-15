@@ -66,8 +66,12 @@ public partial class JieqiGameScreen : Control
         var margin = UiStyle.CreatePageMargin(32, 20); AddChild(margin);
         var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 10); margin.AddChild(root);
         var header = new HBoxContainer(); root.AddChild(header);
-        var title = UiStyle.CreateTitle($"揭棋 · {roomTitle}", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
+        var title = UiStyle.CreateTitle("揭棋", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
+        var settingsButton = UiStyle.CreateButton("设置"); header.AddChild(settingsButton);
+        var settingsDialog = new InGameSettingsDialog(themes); AddChild(settingsDialog);
+        settingsButton.Pressed += () => settingsDialog.PopupFor(settings, "房间信息", roomTitle,
+            _controller.Snapshot.PlyNumber == 0 && !_controller.Snapshot.IsFinished);
         _save = UiStyle.CreateButton("保存棋局"); _save.CustomMinimumSize = new Vector2(88, 41);
         _save.Disabled = true; header.AddChild(_save);
         var resign = UiStyle.CreateButton("认输"); resign.CustomMinimumSize = new Vector2(76, 41); header.AddChild(resign);
@@ -78,17 +82,9 @@ public partial class JieqiGameScreen : Control
 
         var matchBody = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
         matchBody.AddThemeConstantOverride("separation", 10); root.AddChild(matchBody);
-        var matchColumn = new VBoxContainer
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ExpandFill,
-            Alignment = BoxContainer.AlignmentMode.Center
-        };
-        matchColumn.AddThemeConstantOverride("separation", 3); matchBody.AddChild(matchColumn);
-        matchColumn.AddChild(_topPlayer);
         var boardPanel = UiStyle.CreatePanel(); boardPanel.CustomMinimumSize = new Vector2(560, 560);
         boardPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill; boardPanel.SizeFlagsVertical = SizeFlags.ExpandFill;
-        matchColumn.AddChild(boardPanel);
+        matchBody.AddChild(boardPanel);
         _board = new BoardView(themes)
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
@@ -96,14 +92,18 @@ public partial class JieqiGameScreen : Control
             CustomMinimumSize = new Vector2(540, 540)
         };
         _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates);
+        settingsDialog.Saved += updated => { settings.UpdateFrom(updated); settings.SaveAndApply(); _board.ApplyAppearance(settings.ThemeId, settings.ShowBoardCoordinates); };
         _board.SetCoveredIdentityHints(null, false); boardPanel.AddChild(_board);
-        matchColumn.AddChild(_bottomPlayer);
+        var rail = new VBoxContainer { CustomMinimumSize = new(300, 0), SizeFlagsVertical = SizeFlags.ExpandFill };
+        rail.AddThemeConstantOverride("separation", 6); matchBody.AddChild(rail); rail.AddChild(_topPlayer);
         if (_roomChat is not null)
         {
             _chatPanel = new TwoPlayerChatPanel(_roomChat,
                 () => _controller.LocalSide is { } side ? (int)side : null);
-            matchBody.AddChild(_chatPanel);
+            rail.AddChild(_chatPanel);
         }
+        else rail.AddChild(new Control { SizeFlagsVertical = SizeFlags.ExpandFill });
+        rail.AddChild(_bottomPlayer);
         AddChild(_audio);
         var hint = new Label { Text = "暗子首步按所在槽位走法；联机对局只由房主保管秘密排列。", HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
@@ -182,6 +182,13 @@ public partial class JieqiGameScreen : Control
         var bottom = _controller.LocalSide ?? PieceSide.Red;
         _bottomPlayer.SetTrailing(bottom == PieceSide.Red ? red : black);
         _topPlayer.SetTrailing(bottom == PieceSide.Red ? black : red);
+        var active = !_controller.Snapshot.IsFinished && _controller.IsConnected;
+        var redIndicator = MoveClockIndicator.From(clock.MoveSeconds, control.MoveSeconds,
+            active && clock.SideToMove == PieceSide.Red);
+        var blackIndicator = MoveClockIndicator.From(clock.MoveSeconds, control.MoveSeconds,
+            active && clock.SideToMove == PieceSide.Black);
+        _bottomPlayer.SetMoveClock(bottom == PieceSide.Red ? redIndicator : blackIndicator);
+        _topPlayer.SetMoveClock(bottom == PieceSide.Red ? blackIndicator : redIndicator);
     }
 
     private void ApplyPlayerProfiles()

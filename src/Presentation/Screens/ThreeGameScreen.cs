@@ -20,7 +20,10 @@ public partial class ThreeGameScreen : Control
     private readonly ThreeBoardView _board;
     private readonly GameplayAudioPlayer _audio = new();
     private readonly Label _status = new();
-    private readonly Label[] _players = [new(), new(), new()];
+    private readonly TwoPlayerProfileRow[] _players = [new(false), new(false), new(false)];
+    private readonly PlayerProfileCommand?[] _renderedProfiles = new PlayerProfileCommand?[3];
+    private readonly string[] _renderedNames = [string.Empty, string.Empty, string.Empty];
+    private readonly string[] _renderedDetails = [string.Empty, string.Empty, string.Empty];
     private readonly VBoxContainer _votes = new();
     private readonly RichTextLabel _chat = new() { BbcodeEnabled = false, ScrollFollowing = true, CustomMinimumSize = new(260, 125), SizeFlagsVertical = SizeFlags.ExpandFill };
     private readonly OptionButton _actor = new();
@@ -71,11 +74,7 @@ public partial class ThreeGameScreen : Control
         for (var i = 0; i < 3; i++)
         {
             var panel = UiStyle.CreatePanel(); side.AddChild(panel);
-            _players[i].AddThemeColorOverride("font_color", ThreeBoardView.KingdomColors[i].Lightened(0.25f));
-            _players[i].AddThemeFontSizeOverride("font_size", 15);
-            _players[i].ClipText = true;
-            _players[i].TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
-            _players[i].CustomMinimumSize = new(268, 65);
+            _players[i].CustomMinimumSize = new(268, 58);
             panel.AddChild(_players[i]);
             _actor.AddItem($"以{ThreeMatchSession.Name((Kingdom)i)}国身份操作 / 聊天", i);
         }
@@ -121,7 +120,9 @@ public partial class ThreeGameScreen : Control
         {
             var flag = !s.IsRunning ? "等待开局" : !state.Alive[i] ? "已淘汰" : !_controller.Connections[i] ? "断线 · 等待重连" : state.Turn == (Kingdom)i ? "正在行棋" : "等待";
             _players[i].TooltipText = _controller.PlayerNames[i];
-            _players[i].Text = $"  {ThreeMatchSession.Name((Kingdom)i)}  {_controller.PlayerNames[i]}  · {flag}\n  局时 {Clock(_controller.DisplayedGameTimes[i], s.TimeControl.GameSeconds)}    步时 {Clock(_controller.DisplayedStepTimes[i], s.TimeControl.MoveSeconds)}";
+            _players[i].SetTrailing($"局时 {Clock(_controller.DisplayedGameTimes[i], s.TimeControl.GameSeconds)} · 步时 {Clock(_controller.DisplayedStepTimes[i], s.TimeControl.MoveSeconds)}");
+            _players[i].SetMoveClock(MoveClockIndicator.From(_controller.DisplayedStepTimes[i],
+                s.TimeControl.MoveSeconds, s.IsRunning && !state.IsFinished && state.Alive[i] && state.Turn == (Kingdom)i));
         }
     }
     private static string Clock(double seconds, int limit) => limit == 0 ? "不限" : $"{(int)Math.Ceiling(seconds) / 60:00}:{(int)Math.Ceiling(seconds) % 60:00}";
@@ -156,6 +157,7 @@ public partial class ThreeGameScreen : Control
     private void Refresh()
     {
         var session = _controller.Session; var state = session.Game.Snapshot;
+        RefreshPlayerProfiles();
         if (_trial is not null)
         {
             if (!_trialLiveMoveNotified && session.Revision > _trial.BaseRevision)
@@ -200,6 +202,20 @@ public partial class ThreeGameScreen : Control
         {
             var absent = k;
             AddButton(_votes, $"判{ThreeMatchSession.Name(k)}国断线负", () => Send(new(ThreeCommandKind.Forfeit, Actor, Target: absent)));
+        }
+    }
+    private void RefreshPlayerProfiles()
+    {
+        for (var i = 0; i < _players.Length; i++)
+        {
+            var kingdom = (Kingdom)i;
+            var local = _controller.LocalKingdom == kingdom;
+            var detail = local ? $"{ThreeMatchSession.Name(kingdom)}国 · 本方" : $"{ThreeMatchSession.Name(kingdom)}国";
+            if (_renderedNames[i] == _controller.PlayerNames[i] && _renderedDetails[i] == detail &&
+                _renderedProfiles[i] == _controller.PlayerProfiles[i]) continue;
+            _players[i].ApplyCommand(_controller.PlayerProfiles[i], _controller.PlayerNames[i], detail, string.Empty);
+            _renderedNames[i] = _controller.PlayerNames[i]; _renderedDetails[i] = detail;
+            _renderedProfiles[i] = _controller.PlayerProfiles[i];
         }
     }
     private void RenderPosition()

@@ -672,6 +672,15 @@ public partial class Main : Control
             var lanScreen = _currentScreen as GameScreen;
             if (lanScreen is null || !lanScreen.IsMessagePanelFullyVisible)
                 throw new InvalidOperationException($"Classic LAN message panel is outside the viewport: {lanScreen?.MessagePanelBounds ?? "screen missing"}.");
+            if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
+            {
+                await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+                var directory = ProjectSettings.GlobalizePath("res://build/ui-qa");
+                System.IO.Directory.CreateDirectory(directory);
+                using var image = GetViewport().GetTexture().GetImage();
+                if (image.SavePng(System.IO.Path.Combine(directory, "classic-lan.png")) != Error.Ok)
+                    throw new IOException("Classic LAN capture failed.");
+            }
             StartJieqiLanHost(EnetMatchTransport.DefaultPort + 1,
                 new NetworkMatchConfiguration(TimeControl.Unlimited, PieceSide.Red,
                     TwoPlayerGameMode.Jieqi));
@@ -689,7 +698,7 @@ public partial class Main : Control
             await gomokuController.SubmitAsync(new GridPoint(9, 9));
             await gomokuController.SubmitAsync(new GridPoint(9, 10));
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GomokuGameScreen gomoku || gomoku.BoardAreaSize.X < 700 ||
+            if (_currentScreen is not GomokuGameScreen gomoku || !gomoku.HasUnifiedPlayerCards || gomoku.BoardAreaSize.X < 700 ||
                 gomoku.AreMoveNumbersVisible)
                 throw new InvalidOperationException("Gomoku local screen failed to instantiate.");
             gomoku.SetMoveNumbersForSmoke(true);
@@ -702,7 +711,7 @@ public partial class Main : Control
             await goController.SubmitAsync(GoActionKind.Place, new GridPoint(9, 9));
             await goController.SubmitAsync(GoActionKind.Place, new GridPoint(9, 10));
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GoGameScreen go || !go.AreCoordinatesVisible ||
+            if (_currentScreen is not GoGameScreen go || !go.HasUnifiedPlayerCards || !go.AreCoordinatesVisible ||
                 go.BoardAreaSize.X < 700 || go.AreMoveNumbersVisible || !go.HasLastMoveHighlight)
                 throw new InvalidOperationException("Go local screen or coordinate labels failed to instantiate.");
             go.SetCoordinateLabelsForSmoke(false);
@@ -730,7 +739,7 @@ public partial class Main : Control
                 throw new InvalidOperationException($"Go score preview obscured LAN chat: {lanGo.ChatBounds}.");
             StartJunqiLocal();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not JunqiGameScreen junqi)
+            if (_currentScreen is not JunqiGameScreen { HasUnifiedPlayerCards: true } junqi)
                 throw new InvalidOperationException("Junqi local screen failed to instantiate.");
             if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
             {
@@ -749,8 +758,17 @@ public partial class Main : Control
             smokeSettings.ShowBoardCoordinates = true;
             SwitchTo(new GameScreen(smokeSettings, ShowGallery, localTimeControl: TimeControl.Unlimited, themes: _themes));
             await ToSignal(GetTree().CreateTimer(0.25), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GameScreen { TrialActionText: "推演" })
-                throw new InvalidOperationException("Classic trial action must use the 推演 label.");
+            if (_currentScreen is not GameScreen { TrialActionText: "推演", HasCompactFunctionMenu: true, HasUnifiedPlayerCards: true })
+                throw new InvalidOperationException("Classic match must use the compact function menu and unified player cards.");
+            if (capture && !string.Equals(DisplayServer.GetName(), "headless", StringComparison.OrdinalIgnoreCase))
+            {
+                await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+                var directory = ProjectSettings.GlobalizePath("res://build/ui-qa");
+                System.IO.Directory.CreateDirectory(directory);
+                using var image = GetViewport().GetTexture().GetImage();
+                if (image.SavePng(System.IO.Path.Combine(directory, "classic-match.png")) != Error.Ok)
+                    throw new IOException("Classic match capture failed.");
+            }
             GD.Print("[Xiangqi.UI.Smoke] Validated module catalog, Junqi, Gomoku, Go, settings and spring-board local match instantiated.");
             GetTree().Quit();
         }

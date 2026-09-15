@@ -15,6 +15,7 @@ var tests = new (string Name, Action Run)[]
     ("双车错识别器只发出语义特效提示", DoubleChariotCue),
     ("联机协调器同步双方着法并校验序号", NetworkCoordinator),
     ("局时和步时任一耗尽都会返回超时方", MatchClockTimeout),
+    ("玩家卡步时投影在最后十秒切换为紧急状态", MoveClockIndicatorProjection),
     ("超时裁决结束棋局并指定另一方获胜", TimeoutAdjudication),
     ("认输裁决在会话与联机协调器中指定对手获胜", ResignationAdjudication),
     ("悔棋完整恢复棋盘与行棋方", UndoRestoresState),
@@ -223,6 +224,22 @@ static void MatchClockTimeout()
     clock.BeginTurn(PieceSide.Black);
     Equal<PieceSide?>(null, clock.Advance(2.9));
     Equal<PieceSide?>(PieceSide.Black, clock.Advance(0.2));
+}
+
+static void MoveClockIndicatorProjection()
+{
+    var normal = MoveClockIndicator.From(11, 60, true);
+    True(normal.IsVisible);
+    Equal(MoveClockUrgency.Normal, normal.Urgency);
+    True(Math.Abs(normal.RemainingRatio - 11d / 60) < .001);
+    Equal(MoveClockUrgency.Critical, MoveClockIndicator.From(10, 60, true).Urgency);
+    Equal(MoveClockUrgency.Critical, MoveClockIndicator.From(-1, 60, true).Urgency);
+    False(MoveClockIndicator.From(30, 60, false).IsVisible);
+    False(MoveClockIndicator.From(0, 0, true).IsVisible);
+    var failed = false;
+    try { MoveClockIndicator.From(double.NaN, 60, true); }
+    catch (ArgumentOutOfRangeException) { failed = true; }
+    True(failed);
 }
 
 static void TimeoutAdjudication()

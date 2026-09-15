@@ -240,6 +240,10 @@ IBoardThemeCatalog.Resolve 同步解析字符串或旧 BoardSkinKind，未知 ID
 
 所有玩法记录额外使用同名 `.meta.json` sidecar 保存纯展示信息；棋谱仍是独立、可重放的事实来源。`MatchRecordPresentation` 包含 PlayedAt、Mode、本地玩家、1..2 名对手和本地视角结果；玩家名称限制 64 字，头像限制为 64×64 RGBA8，不保存原头像路径、平台句柄或凭证。组合根先获取 Steam 本机昵称/头像（不可用时为本地默认），`CustomPlayerProfileFactory.ApplyOverrides` 再分别覆盖已配置的自定义昵称和头像；未配置或头像读取失败的字段保留平台默认值。返回快照可与 fallback 共享头像缓冲，必须交给唯一 `MatchPlayerProfiles` 租约；`ReplaceLocal/ReplaceOpponent` 仅在新旧头像不同时释放旧缓冲。双人原始包玩法用 `RawMatchProfileExchange` 复用受限 PlayerProfile 帧，三国 v3 以认证席位同步同一载荷；资料交换不拥有 transport，Screen 在控制器前解绑并释放像素。sidecar 损坏时回退棋谱标签/默认席位名。经典旧版 Red/Black sidecar 仍可读取，新记录统一写共享结构。各记录页共用 `RecordEntryRow`，其标题、104px 行高、时间/双方/结果/模式列与经典相同；页面持有所建 `ImageTexture` 并在 `_ExitTree` 释放。
 
+局内玩家展示统一使用 `TwoPlayerProfileRow`。输入是已经过资料提供器合成的 `PlayerProfileSnapshot`，或三国控制器认证席位上的 `PlayerProfileCommand`，以及调用方提供的席位说明和时钟文字；组件不查询 Steam、不判断本地席位、不推进棋钟。它拥有由 RGBA8 创建的 Godot 纹理，替换/退出均幂等释放；头像使用 `KeepAspectCovered` 和圆角 shader，不加红/黑阵营底色。倒计时框只消费 `MoveClockIndicator`，因此新增玩法若有步时，必须在 Application 控制器中提供剩余值和行动者，再由 Screen 构造投影；无步时玩法传 Hidden，禁止在 UI 自造倒计时。
+
+新增内置玩法的对局 Screen 必须从组合根接收本局玩家资料，并在棋盘侧栏为所有席位显示同一套昵称与头像；本机资料仍遵循“自定义字段优先、缺失字段回退平台默认”的组合规则。若玩法暂不支持计时，仍显示玩家卡但隐藏活动进度，不得因为没有棋钟而省略身份展示。外部声明式玩法当前 ABI 尚未开放玩家资料与计时端口，因此只能显示宿主提供的席位 fallback；扩展 ABI 前不能让包直接读取 Steam 身份或本机头像路径。
+
 `GameSession.BeginTrial()` 和 `ThreeMatchSession.BeginTrial()` 返回一次性的隔离分支。输入是调用时的只读权威局面，输出是副本快照和经同一棋规验证的 `TryMove`；它们不含玩家权限、时钟、聊天、协商、网络发送或提交/合并。经典界面将推演前后快照与成功 `MoveResult` 交给 `GameSession.DescribeMove`，按权威对局相同顺序获取移动/吃子、将军/终局和注册 detector 提示，再播放平移、淡出、音效与落子效果；`DescribeMove` 不写入任何局面，并拒绝失败结果。分支由界面持有，退出推演后解除引用即可。
 
 `ReplayAnalysisCoordinator` 输入一个 IXiangqiAiEngine、不可变复盘局面序列和已校验的每局面时间预算（默认 200ms，100ms–120s）；搜索策略固定为无限深度、单线程、64MB 哈希和单一最佳线路，不读取设置存储或对局难度。“最强”在这里表示不主动降级搜索结果，不表示无限时间。`SelectAndSweepAsync(index)` 取消上一代操作、先算 index，再按距离补齐缓存，并在未缓存局面之间让出 50ms；AnalysisAvailable 在调用上下文连续发布，UI 仍必须在 Godot 主线程调用。屏幕等待时间轴选择稳定 150ms 后才调用协调器。BestMove 经临时 ChessGame 重验，非法输出以 InvalidDataException 失败；分数约定为 UCI 行棋方视角并归一为红方视角，mate 映射到有界哨兵值。协调器拥有引擎，DisposeAsync 取消活动操作并释放进程；消费者不得再单独释放同一引擎。UCI 适配器把后台输出放入有界队列，Godot 每帧最多派发 128 行，避免引擎输出突发拖慢渲染；队列溢出仍按不可信外部输入失败关闭。

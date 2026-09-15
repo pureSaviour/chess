@@ -20,11 +20,16 @@ public partial class JunqiGameScreen : Control
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
     private readonly RawTwoPlayerRoomChat? _roomChat;
+    private readonly TwoPlayerProfileRow _topPlayer = new(false);
+    private readonly TwoPlayerProfileRow _bottomPlayer = new(true);
     private readonly Control? _privacyCurtain;
     private JunqiCell? _selected;
     private IReadOnlyList<JunqiCell> _legal = [];
     private bool _recentSaved;
     private bool _turnRevealed;
+    private bool _profilesDirty = true;
+    private JunqiSide? _profileSide;
+    internal bool HasUnifiedPlayerCards => _topPlayer.GetParent() is not null && _bottomPlayer.GetParent() is not null;
 
     public JunqiGameScreen(Action back, MatchPlayerProfiles? profiles = null) : this(new LocalJunqiMatchController(), "本地联机", back, profiles: profiles) { }
 
@@ -35,7 +40,7 @@ public partial class JunqiGameScreen : Control
         _profiles = profiles;
         if (networkDriver is ITwoPlayerPacketTransport packetTransport)
         {
-            if (profiles is not null) _profileExchange = new RawMatchProfileExchange(packetTransport, profiles);
+            if (profiles is not null) { _profileExchange = new RawMatchProfileExchange(packetTransport, profiles); _profileExchange.OpponentChanged += OnProfileChanged; }
             _roomChat = new RawTwoPlayerRoomChat(packetTransport,
                 () => _controller.LocalSide is { } side ? (int)side : null);
         }
@@ -44,8 +49,12 @@ public partial class JunqiGameScreen : Control
         var margin = UiStyle.CreatePageMargin(30, 18); AddChild(margin);
         var root = new VBoxContainer(); root.AddThemeConstantOverride("separation", 8); margin.AddChild(root);
         var header = new HBoxContainer(); root.AddChild(header);
-        var title = UiStyle.CreateTitle($"军旗 · {roomTitle}", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
+        var title = UiStyle.CreateTitle("军旗", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
+        var settings = UiStyle.CreateButton("设置"); header.AddChild(settings);
+        var roomDialog = new AcceptDialog { Title = "军旗 · 房间信息", OkButtonText = "完成", MinSize = new(500, 170) };
+        var roomLabel = new Label { Text = roomTitle, AutowrapMode = TextServer.AutowrapMode.WordSmart };
+        roomDialog.AddChild(roomLabel); AddChild(roomDialog); settings.Pressed += () => roomDialog.PopupCentered(new(500, 170));
         _save = UiStyle.CreateButton("保存棋局"); _save.Disabled = true; header.AddChild(_save);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
         var body = new HBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsVertical = SizeFlags.ExpandFill };
@@ -58,13 +67,16 @@ public partial class JunqiGameScreen : Control
         {
             _privacyCurtain = CreatePrivacyCurtain(); stage.AddChild(_privacyCurtain);
         }
-        if (_roomChat is not null)
-            body.AddChild(new TwoPlayerChatPanel(_roomChat,
-                () => _controller.LocalSide is { } side ? (int)side : null));
+        var rail = new VBoxContainer { CustomMinimumSize = new(300, 0), SizeFlagsVertical = SizeFlags.ExpandFill };
+        rail.AddThemeConstantOverride("separation", 6); body.AddChild(rail); rail.AddChild(_topPlayer);
+        if (_roomChat is not null) rail.AddChild(new TwoPlayerChatPanel(_roomChat,
+            () => _controller.LocalSide is { } side ? (int)side : null));
+        else rail.AddChild(new Control { SizeFlagsVertical = SizeFlags.ExpandFill });
+        rail.AddChild(_bottomPlayer);
         var hint = new Label { Text = "铁路直行；工兵可沿铁路转弯。行营不可攻击，大本营内棋子不能移动。", HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
         _board.CellPressed += OnCellPressed; _controller.Changed += OnChanged; _controller.Message += OnMessage; _save.Pressed += Save;
-        Render();
+        ApplyProfiles(); Render();
     }
 
     private Control CreatePrivacyCurtain()
@@ -98,8 +110,19 @@ public partial class JunqiGameScreen : Control
     {
         _selected = null; _legal = [];
         if (_controller.LocalSide is null) { _turnRevealed = false; if (_privacyCurtain is not null) _privacyCurtain.Visible = true; }
-        Render();
+        ApplyProfiles(); Render();
     }
+    private void ApplyProfiles()
+    {
+        if (!_profilesDirty && _profileSide == _controller.LocalSide) return;
+        _profilesDirty = false; _profileSide = _controller.LocalSide;
+        var bottom = _controller.LocalSide ?? JunqiSide.First;
+        var top = bottom == JunqiSide.First ? JunqiSide.Second : JunqiSide.First;
+        static string Name(JunqiSide side) => side == JunqiSide.First ? "先手" : "后手";
+        _bottomPlayer.Apply(_profiles?.Local, Name(bottom), _controller.LocalSide is null ? "本地双人" : $"你是{Name(bottom)}", string.Empty);
+        _topPlayer.Apply(_profiles?.Opponent, Name(top), _controller.LocalSide is null ? "本地双人" : $"对方是{Name(top)}", string.Empty);
+    }
+    private void OnProfileChanged() { _profilesDirty = true; ApplyProfiles(); }
     private void OnMessage(string text) => _status.Text = text;
     private void Render()
     {
@@ -149,6 +172,7 @@ public partial class JunqiGameScreen : Control
     public override void _ExitTree()
     {
         _board.CellPressed -= OnCellPressed; _controller.Changed -= OnChanged; _controller.Message -= OnMessage;
+        if (_profileExchange is not null) _profileExchange.OpponentChanged -= OnProfileChanged;
         _profileExchange?.Dispose(); _roomChat?.Dispose(); _profiles?.Dispose(); _ = _controller.DisposeAsync();
     }
 }
