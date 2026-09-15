@@ -125,13 +125,15 @@ public partial class Main : Control
     private void StartJieqiSteamInvite(NetworkMatchConfiguration configuration) =>
         StartSteamInvite(configuration with { Mode = TwoPlayerGameMode.Jieqi });
 
-    private void StartJunqiLocal() => SwitchTo(new JunqiGameScreen(ShowGallery, CreateOfflineProfiles("本地玩家 2")));
+    private void StartJunqiLocal(TimeControl timeControl) => SwitchTo(new JunqiGameScreen(
+        new LocalJunqiMatchController(timeControl:timeControl),"本地对决",ShowGallery,
+        profiles:CreateOfflineProfiles("本地玩家 2")));
 
     private void ShowJunqiRecords(bool saved) => SwitchTo(new JunqiRecordScreen(saved, ShowGallery,
         record => SwitchTo(new JunqiReplayScreen(record, () => ShowJunqiRecords(saved)))));
 
     private void ShowJunqiGallery(ClassicGalleryEntry entry) => SwitchTo(new GalleryScreen(
-        ShowGallery, _ => StartJunqiLocal(), StartJunqiLanHost, StartJunqiLanClient,
+        ShowGallery, StartJunqiLocal, StartJunqiLanHost, StartJunqiLanClient,
         StartJunqiSteamInvite, entry, TwoPlayerGameMode.Junqi));
 
     private void StartJunqiLanHost(int port, NetworkMatchConfiguration configuration)
@@ -139,7 +141,7 @@ public partial class Main : Control
         try
         {
             var transport = EnetMatchTransport.Host(port);
-            var controller = new NetworkJunqiMatchController(transport, ToJunqiSide(configuration.HostSide));
+            var controller = new NetworkJunqiMatchController(transport, ToJunqiSide(configuration.HostSide),configuration.TimeControl);
             SwitchTo(new JunqiGameScreen(controller, $"房主 · {GetPreferredLanAddress()}:{port}", ShowGallery, transport, CreateLanProfiles()));
         }
         catch (Exception error) { ShowError(error.Message); }
@@ -164,7 +166,7 @@ public partial class Main : Control
     private void ShowGomokuGallery(ClassicGalleryEntry entry) => SwitchTo(new GomokuGalleryScreen(
         ShowGallery, StartGomokuLocal, StartGomokuLanHost, StartGomokuLanClient, StartGomokuSteamInvite, entry));
     private void StartGomokuLocal(GomokuRoomOptions options) => SwitchTo(new GomokuGameScreen(
-        new LocalGomokuMatchController(options.BoardSize, options.Rules), "本地对决", ShowGallery,
+        new LocalGomokuMatchController(options.BoardSize, options.Rules,options.TimeControl), "本地对决", ShowGallery,
         profiles: CreateOfflineProfiles("本地玩家 2")));
     private void StartGomokuLanHost(int port, GomokuRoomOptions options)
     {
@@ -179,7 +181,7 @@ public partial class Main : Control
         catch(Exception error){ShowError(error.Message);}
     }
     private void StartGomokuSteamInvite(GomokuRoomOptions options) => StartSteamInvite(new NetworkMatchConfiguration(
-        TimeControl.Unlimited, options.HostColor==StoneColor.Black?PieceSide.Red:PieceSide.Black,
+        options.TimeControl, options.HostColor==StoneColor.Black?PieceSide.Red:PieceSide.Black,
         TwoPlayerGameMode.Gomoku, options.BoardSize, (int)options.Rules));
     private void ShowGomokuRecords(bool saved)=>SwitchTo(new GomokuRecordScreen(saved,ShowGallery,
         record=>SwitchTo(new GomokuReplayScreen(_settings,record,()=>ShowGomokuRecords(saved),
@@ -202,7 +204,8 @@ public partial class Main : Control
             _settings.GomokuAiThinkMilliseconds,_settings.GomokuAiMaxDepth);
         var controller=new AiGomokuMatchController(engine,_settings.GomokuAiBoardSize,rules,human,
             profile.ThinkMilliseconds,profile.MaxDepth,profile.Strength,_settings.GomokuAiThreads,
-            _settings.GomokuAiMemoryMegabytes,profile.UseDeterministicLegalMove);
+            _settings.GomokuAiMemoryMegabytes,profile.UseDeterministicLegalMove,
+            new TimeControl(_settings.AiGameSeconds,_settings.AiMoveSeconds));
         SwitchTo(new GomokuGameScreen(controller,$"人机对决 · Rapfi · 玩家执{(human==StoneColor.Black?"黑":"白")}",ShowGallery,
             profiles:CreateOfflineProfiles("AI 引擎")));
 #endif
@@ -432,7 +435,7 @@ public partial class Main : Control
         }
         if (match.Configuration.Mode == TwoPlayerGameMode.Junqi)
         {
-            var controller = new NetworkJunqiMatchController(match.Transport, ToJunqiSide(match.Configuration.HostSide));
+            var controller = new NetworkJunqiMatchController(match.Transport, ToJunqiSide(match.Configuration.HostSide),match.Configuration.TimeControl);
             SwitchTo(new JunqiGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport, match.Profiles));
             return;
         }
@@ -440,7 +443,7 @@ public partial class Main : Control
         {
             var options = new GomokuRoomOptions(match.Configuration.BoardSize,
                 (GomokuRuleSet)match.Configuration.RuleFlags,
-                match.Configuration.HostSide == PieceSide.Red ? StoneColor.Black : StoneColor.White);
+                match.Configuration.HostSide == PieceSide.Red ? StoneColor.Black : StoneColor.White,match.Configuration.TimeControl);
             var controller = new NetworkGomokuMatchController(match.Transport, match.IsHost ? options : null);
             SwitchTo(new GomokuGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery, match.Transport, match.Profiles));
             return;
@@ -448,7 +451,7 @@ public partial class Main : Control
         if (match.Configuration.Mode == TwoPlayerGameMode.Go)
         {
             var options = new GoRoomOptions(match.Configuration.HostSide == PieceSide.Red
-                ? GoStone.Black : GoStone.White);
+                ? GoStone.Black : GoStone.White,match.Configuration.TimeControl);
             var controller = new NetworkGoMatchController(match.Transport, match.IsHost ? options : null);
             SwitchTo(new GoGameScreen(controller, $"Steam · 对手 {match.OpponentName}", ShowGallery,
                 match.Transport, match.Profiles));
@@ -737,7 +740,7 @@ public partial class Main : Control
             await ToSignal(GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
             if (!lanGo.IsScorePreviewActive || !lanGo.IsChatFullyVisible)
                 throw new InvalidOperationException($"Go score preview obscured LAN chat: {lanGo.ChatBounds}.");
-            StartJunqiLocal();
+            StartJunqiLocal(TimeControl.Unlimited);
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not JunqiGameScreen { HasUnifiedPlayerCards: true } junqi)
                 throw new InvalidOperationException("Junqi local screen failed to instantiate.");

@@ -30,7 +30,7 @@ public enum JunqiPieceKind : byte
 public readonly record struct JunqiPiece(int Id, JunqiSide Side, JunqiPieceKind Kind);
 public readonly record struct JunqiPlacement(JunqiCell Cell, JunqiPiece Piece);
 public enum JunqiBattleResult : byte { MoveOnly, AttackerWins, DefenderWins, BothRemoved, FlagCaptured }
-public enum JunqiEndReason : byte { None, FlagCaptured, MandatoryAttack, NoLegalMove, Resignation }
+public enum JunqiEndReason : byte { None, FlagCaptured, MandatoryAttack, NoLegalMove, Resignation, Timeout }
 public readonly record struct JunqiMove(JunqiCell From, JunqiCell To);
 public readonly record struct JunqiMoveResult(bool IsSuccess, JunqiMove Move, JunqiBattleResult Battle,
     JunqiSide? FlagRevealedFor, string? Error);
@@ -252,6 +252,14 @@ public sealed class JunqiGame
     {
         if (_finished || !Enum.IsDefined(side)) return false;
         _finished = true; _winner = side.Opponent(); _endReason = JunqiEndReason.Resignation; return true;
+    }
+
+
+    /// <summary>Applies an application-authorized clock loss without adding a board move.</summary>
+    public bool DeclareTimeout(JunqiSide loser)
+    {
+        if (_finished || !Enum.IsDefined(loser)) return false;
+        _finished = true; _winner = loser.Opponent(); _endReason = JunqiEndReason.Timeout; return true;
     }
 
     private bool HasAnyMove(JunqiSide side)

@@ -17,6 +17,7 @@ public partial class JunqiGameScreen : Control
     private readonly JunqiBoardView _board = new();
     private readonly Label _status = new();
     private readonly Button _save;
+    private readonly Button _rematch;
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
     private readonly RawTwoPlayerRoomChat? _roomChat;
@@ -51,6 +52,7 @@ public partial class JunqiGameScreen : Control
         var header = new HBoxContainer(); root.AddChild(header);
         var title = UiStyle.CreateTitle("军旗", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
+        _rematch=UiStyle.CreateButton("再来一局");_rematch.Visible=_controller is IRematchableMatchController;_rematch.Pressed+=RequestRematch;header.AddChild(_rematch);
         var settings = UiStyle.CreateButton("设置"); header.AddChild(settings);
         var roomDialog = new AcceptDialog { Title = "军旗 · 房间信息", OkButtonText = "完成", MinSize = new(500, 170) };
         var roomLabel = new Label { Text = roomTitle, AutowrapMode = TextServer.AutowrapMode.WordSmart };
@@ -78,6 +80,8 @@ public partial class JunqiGameScreen : Control
         _board.CellPressed += OnCellPressed; _controller.Changed += OnChanged; _controller.Message += OnMessage; _save.Pressed += Save;
         ApplyProfiles(); Render();
     }
+
+    public override void _Process(double delta){_controller.Tick(delta);UpdateClocks();}
 
     private Control CreatePrivacyCurtain()
     {
@@ -124,19 +128,24 @@ public partial class JunqiGameScreen : Control
     }
     private void OnProfileChanged() { _profilesDirty = true; ApplyProfiles(); }
     private void OnMessage(string text) => _status.Text = text;
+    private async void RequestRematch(){if(_controller is not IRematchableMatchController value)return;try{await value.RequestRematchAsync();Render();}catch(Exception error){OnMessage(error.Message);}}
     private void Render()
     {
         var snapshot = _controller.Snapshot; var bottom = _controller.LocalSide ?? snapshot.SideToMove;
+        if(!snapshot.IsFinished&&_recentSaved){_recentSaved=false;_save.Disabled=true;_save.Text="保存棋局";}
         _board.SetPosition(snapshot, _selected, _legal, bottom);
         _status.Text = !_controller.IsConnected ? "等待联机连接" : !_controller.IsReady ? "等待对手布阵"
             : snapshot.IsFinished ? snapshot.Winner == JunqiSide.First ? "先手胜" : snapshot.Winner == JunqiSide.Second ? "后手胜" : "对局结束"
             : $"{(snapshot.SideToMove == JunqiSide.First ? "先手" : "后手")}行棋 · 连续未交战 {snapshot.QuietPlyCount}/{JunqiGame.StandardMandatoryAttackPly}";
+        if(_controller is IRematchableMatchController rematch){_rematch.Disabled=!rematch.CanRequestRematch;_rematch.Text=rematch.Rematch.LocalReady?"等待对手同意":"再来一局";}
+        UpdateClocks();
         if (!snapshot.IsFinished) return;
         _save.Disabled = false;
         if (_recentSaved) return; _recentSaved = true;
         try { if (TryRecord(out var record)) JunqiRecordStore.SaveRecent(record!, BuildPresentation(snapshot)); }
         catch (Exception error) { GD.PushWarning($"保存军旗最近对局失败：{error.Message}"); }
     }
+    private void UpdateClocks(){var local=_controller.LocalSide??JunqiSide.First;var other=local.Opponent();var c=_controller.Clock;string Text(JunqiSide s){var value=s==JunqiSide.First?c.FirstGameSeconds:c.SecondGameSeconds;return _controller.TimeControl.GameSeconds==0?"局时 ∞":$"局时 {TimeSpan.FromSeconds(value):mm\\:ss}";}_bottomPlayer.SetTrailing(Text(local));_topPlayer.SetTrailing(Text(other));var active=!_controller.Snapshot.IsFinished;_bottomPlayer.SetMoveClock(MoveClockIndicator.From(c.MoveSeconds,_controller.TimeControl.MoveSeconds,active&&c.ActiveSeat==(int)local));_topPlayer.SetMoveClock(MoveClockIndicator.From(c.MoveSeconds,_controller.TimeControl.MoveSeconds,active&&c.ActiveSeat==(int)other));}
     private bool TryRecord(out JunqiGameRecord? record)
     {
         var localSide = _controller.LocalSide ?? JunqiSide.First;

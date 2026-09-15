@@ -152,10 +152,12 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
     private bool _initialized;
     private bool _searching;
     private bool _disposed;
+    private readonly TwoSeatMatchClock _clock;
 
     public AiGomokuMatchController(IGomokuAiEngine engine, int boardSize, GomokuRuleSet rules,
         StoneColor humanColor, int thinkMilliseconds, int maxDepth = 0, int strength = 100,
-        int threads = 1, int memoryMegabytes = 256, bool useDeterministicLegalMove = false)
+        int threads = 1, int memoryMegabytes = 256, bool useDeterministicLegalMove = false,
+        TimeControl? timeControl = null)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         if (!Enum.IsDefined(humanColor)) throw new ArgumentOutOfRangeException(nameof(humanColor));
@@ -170,6 +172,7 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
         _threads = search.Threads;
         _memoryMegabytes = search.MemoryMegabytes;
         _useDeterministicLegalMove = useDeterministicLegalMove;
+        TimeControl=(timeControl??TimeControl.Unlimited).Validate();_clock=new(TimeControl){IsRunning=true};
     }
 
     public event Action? Changed;
@@ -179,6 +182,9 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
     public bool IsReady => _initialized && _engine.IsReady;
     public bool IsConnected => true;
     public bool CanPlace => IsReady && !_searching && !_game.IsFinished && _game.SideToMove == _humanColor;
+    public TimeControl TimeControl { get; }
+    public SeatClockSnapshot Clock=>_clock.Snapshot;
+    public void Tick(double seconds){var loser=_clock.Advance(seconds);if(loser is null)return;_clock.IsRunning=false;if(_game.DeclareTimeout((StoneColor)loser.Value)){_lifetime.Cancel();Changed?.Invoke();}}
 
     public async ValueTask InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -198,6 +204,7 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
         var result = _game.TryPlace(point, _humanColor);
         if (!result.IsSuccess) return ValueTask.FromResult(new GomokuSubmitResult(false, false,
             result.Rejection, result.Rejection.ToString()));
+        _clock.BeginTurn((int)_game.SideToMove);
         Changed?.Invoke();
         if (!_game.IsFinished) StartSearch();
         return ValueTask.FromResult(new GomokuSubmitResult(true, false, GomokuMoveRejection.None, null));
@@ -215,6 +222,7 @@ public sealed class AiGomokuMatchController : IGomokuMatchController
             { Message?.Invoke("已丢弃过期的 AI 着法。"); continue; }
             var result = _game.TryPlace(completion.Point, snapshot.SideToMove);
             if (!result.IsSuccess) { Message?.Invoke($"AI 返回非法着法：{result.Rejection}。"); continue; }
+            _clock.BeginTurn((int)_game.SideToMove);
             Changed?.Invoke();
         }
     }

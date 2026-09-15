@@ -36,14 +36,16 @@ public partial class GoGalleryScreen : Control
             Text = "中国围棋规则 · 标准 19 路 · 黑先贴 7.5 目 · 禁止自杀与全局同形。双方连续虚着后标记死子并确认数子。",
             AutowrapMode = TextServer.AutowrapMode.WordSmart
         });
+        var timeEnabled=new CheckButton{Text="启用计时（局时 + 步时）",ButtonPressed=true};content.AddChild(timeEnabled);var timeRow=new HBoxContainer();content.AddChild(timeRow);timeRow.AddChild(new Label{Text="局时（分钟）"});var gameMinutes=new SpinBox{MinValue=1,MaxValue=180,Value=20,Step=1};timeRow.AddChild(gameMinutes);timeRow.AddChild(new Label{Text="步时（秒）"});var moveSeconds=new SpinBox{MinValue=5,MaxValue=300,Value=60,Step=5};timeRow.AddChild(moveSeconds);timeEnabled.Toggled+=value=>{gameMinutes.Editable=value;moveSeconds.Editable=value;};
         var color = new OptionButton { CustomMinimumSize = new(240, 42) };
         color.AddItem("房主执黑"); color.AddItem("房主执白"); color.AddItem("随机猜先");
         if (entry != ClassicGalleryEntry.Local) content.AddChild(color);
         GoRoomOptions Options() => new(color.Selected == 1 ? GoStone.White :
-            color.Selected == 2 && Random.Shared.Next(2) == 1 ? GoStone.White : GoStone.Black);
+            color.Selected == 2 && Random.Shared.Next(2) == 1 ? GoStone.White : GoStone.Black,
+            timeEnabled.ButtonPressed?new TimeControl((int)gameMinutes.Value*60,(int)moveSeconds.Value):TimeControl.Unlimited);
         if (entry == ClassicGalleryEntry.Local)
         {
-            var start = UiStyle.CreateButton("开始本地对决", true); start.Pressed += () => local(new(GoStone.Black)); content.AddChild(start);
+            var start = UiStyle.CreateButton("开始本地对决", true); start.Pressed += () => local(Options()); content.AddChild(start);
         }
         else if (entry == ClassicGalleryEntry.Steam)
         {
@@ -71,6 +73,7 @@ public partial class GoGameScreen : Control
     private readonly Button _resign;
     private readonly Button _save;
     private readonly Button _estimateButton;
+    private readonly Button _rematch;
     private readonly Label _estimateLabel = new();
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
@@ -123,6 +126,7 @@ public partial class GoGameScreen : Control
         var header = new HBoxContainer(); header.AddThemeConstantOverride("separation", 7); root.AddChild(header);
         var title = UiStyle.CreateTitle("围棋", 27); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         header.AddChild(_status);
+        _rematch=UiStyle.CreateButton("再来一局");_rematch.Visible=_controller is IRematchableMatchController;_rematch.Pressed+=RequestRematch;header.AddChild(_rematch);
         var leave = UiStyle.CreateButton("返回画廊"); leave.Pressed += back; header.AddChild(leave);
         var actions = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End, Visible = false };
         actions.AddThemeConstantOverride("separation", 7); root.AddChild(actions);
@@ -194,7 +198,7 @@ public partial class GoGameScreen : Control
 
     public override async void _Ready()
     { try { await _controller.InitializeAsync(); Render(); } catch (Exception error) { OnMessage(error.Message); } }
-    public override void _Process(double delta) => _controller.Poll();
+    public override void _Process(double delta) { _controller.Poll(); _controller.Tick(delta); UpdateClocks(); }
     private void OnPoint(GridPoint point)
     {
         if (_scorePreview is not null)
@@ -211,6 +215,7 @@ public partial class GoGameScreen : Control
         var result = await _controller.SubmitAsync(kind, point);
         if (!result.Accepted) OnMessage(RejectText(result.Rejection, result.Error));
     }
+    private async void RequestRematch(){if(_controller is not IRematchableMatchController value)return;try{await value.RequestRematchAsync();Render();}catch(Exception error){OnMessage(error.Message);}}
     private void OnChanged() { ApplyProfiles(); Render(); }
     private void ApplyProfiles()
     {
@@ -225,6 +230,7 @@ public partial class GoGameScreen : Control
     private void Render()
     {
         var snapshot = _controller.Snapshot;
+        if(snapshot.Phase!=GoPhase.Finished&&_recent){_recent=false;_save.Disabled=true;_save.Text="保存棋谱";}
         if (_scorePreview is not null && _scorePreview.SourceActionNumber != snapshot.ActionNumber)
         {
             _scorePreview = null;
@@ -243,6 +249,8 @@ public partial class GoGameScreen : Control
             snapshot.Phase == GoPhase.Finished ? ResultText(snapshot) :
             snapshot.Phase == GoPhase.Scoring ? $"数子 · {StoneName(snapshot.SideToMove)}确认 · 已确认 {snapshot.ScoreConfirmations.Count}/2" :
             $"{StoneName(snapshot.SideToMove)}行棋" + (_controller.LocalColor is { } local ? $" · 你是{StoneName(local)}" : string.Empty);
+        if(_controller is IRematchableMatchController rematch){_rematch.Disabled=!rematch.CanRequestRematch;_rematch.Text=rematch.Rematch.LocalReady?"等待对手同意":"再来一局";}
+        UpdateClocks();
         if (snapshot.Phase != GoPhase.Finished) return;
         _save.Disabled = false;
         if (_recent) return;
@@ -250,6 +258,7 @@ public partial class GoGameScreen : Control
         try { GoRecordStore.SaveRecent(_controller.CreateRecord(), BuildPresentation(snapshot)); }
         catch (Exception error) { GD.PushWarning(error.Message); }
     }
+    private void UpdateClocks(){var local=_controller.LocalColor??GoStone.Black;var other=local==GoStone.Black?GoStone.White:GoStone.Black;var c=_controller.Clock;string Text(GoStone s){var value=s==GoStone.Black?c.FirstGameSeconds:c.SecondGameSeconds;return _controller.TimeControl.GameSeconds==0?"局时 ∞":$"局时 {TimeSpan.FromSeconds(value):mm\\:ss}";}_bottomPlayer.SetTrailing(Text(local));_topPlayer.SetTrailing(Text(other));var active=_controller.Snapshot.Phase!=GoPhase.Finished;_bottomPlayer.SetMoveClock(MoveClockIndicator.From(c.MoveSeconds,_controller.TimeControl.MoveSeconds,active&&c.ActiveSeat==(int)local));_topPlayer.SetMoveClock(MoveClockIndicator.From(c.MoveSeconds,_controller.TimeControl.MoveSeconds,active&&c.ActiveSeat==(int)other));}
     private void ToggleScorePreview()
     {
         if (_scorePreview is null)

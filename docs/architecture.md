@@ -91,7 +91,7 @@ MatchClock.Advance/BeginTurn/Apply 是引擎无关算法；0 为不限时。Game
 
 `MoveClockIndicator.From` 只把控制器提供的当前步时、步时上限和“是否当前行动者”投影为可见性、0..1 剩余比例与 Normal/Critical；它不拥有计时器、不判超时。剩余大于 10 秒为 Normal，剩余小于等于 10 秒为 Critical；不限步时或非当前行动者隐藏。`TwoPlayerProfileRow` 只把该投影映射成头像外的绿色/红色细进度框。
 
-悔棋/和棋由 NetworkGameCoordinator 管理申请 ID、类型、PlyNumber、发送/接收票据。仅本人最后落子且对方未走时可申请悔棋；双方复验申请资格与响应绑定。接受悔棋走 Session.Undo，和棋走 DeclareDraw。
+悔棋/和棋/复赛由 NetworkGameCoordinator 管理申请 ID、类型、PlyNumber、发送/接收票据。仅本人最后落子且对方未走时可申请悔棋；双方复验申请资格与响应绑定。接受悔棋走 Session.Undo，和棋走 DeclareDraw。复赛只允许在终局发起；双方同意后调用 Session.NewGame、交换 LocalSide 并重置棋钟，transport、聊天和玩家资料不释放。只有一方主动离开页面才触发房间 transport 释放。
 
 协商期间协调器拒绝走子，GameScreen 根据 HasPendingOffer 事件暂停棋钟。这项暂停策略尚未封装为统一无 UI 控制器，因此单测协调器并不能完全验证真实 UI 中的计时编排。
 

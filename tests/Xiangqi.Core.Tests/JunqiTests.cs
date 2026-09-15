@@ -115,7 +115,7 @@ internal static class JunqiTests
     {
         var hostTransport = new FakePacketTransport(true); var clientTransport = new FakePacketTransport(false);
         hostTransport.Peer = clientTransport; clientTransport.Peer = hostTransport;
-        var host = new NetworkJunqiMatchController(hostTransport, JunqiSide.Second);
+        var host = new NetworkJunqiMatchController(hostTransport, JunqiSide.Second,new(0,1));
         var client = new NetworkJunqiMatchController(clientTransport, JunqiSide.Second);
         hostTransport.Connect(); clientTransport.Connect();
         True(host.IsReady); True(client.IsReady); Equal(JunqiSide.First, client.LocalSide);
@@ -125,6 +125,10 @@ internal static class JunqiTests
         var target = client.LegalDestinations(source)[0];
         var result = client.SubmitMoveAsync(source, target).AsTask().GetAwaiter().GetResult();
         True(result.Accepted); Equal(1, host.Snapshot.PlyNumber); Equal(1, client.Snapshot.PlyNumber);
+        host.Tick(1.1);True(host.Snapshot.IsFinished);True(client.Snapshot.IsFinished);
+        host.RequestRematchAsync().AsTask().GetAwaiter().GetResult();client.RequestRematchAsync().AsTask().GetAwaiter().GetResult();
+        False(host.Snapshot.IsFinished);False(client.Snapshot.IsFinished);Equal(JunqiSide.First,host.LocalSide);
+        True(host.IsReady);True(client.IsReady);
         host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 

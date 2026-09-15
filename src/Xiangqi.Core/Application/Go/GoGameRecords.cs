@@ -43,6 +43,11 @@ public sealed record GoGameRecord(IReadOnlyList<GoAction> Moves, IReadOnlySet<Gr
             var result = game.Resign(Winner == GoStone.Black ? GoStone.White : GoStone.Black);
             if (!result.IsSuccess) throw new InvalidDataException("认输结果与棋谱轮次不一致。");
         }
+        else if(EndReason==GoEndReason.Timeout)
+        {
+            if(Winner is null||DeadStones.Count!=0||Score is not null||!game.DeclareTimeout(Winner==GoStone.Black?GoStone.White:GoStone.Black))
+                throw new InvalidDataException("超时结果与棋谱不一致。");
+        }
         else if (EndReason == GoEndReason.AreaScore)
         {
             if (game.Phase != GoPhase.Scoring) throw new InvalidDataException("数子棋谱未以双方连续虚着结束行棋。");
@@ -162,6 +167,7 @@ public static class GoSgfCodec
     private static string Result(GoGameRecord record) => record.EndReason switch
     {
         GoEndReason.Resignation => $"{(record.Winner == GoStone.Black ? "B" : "W")}+R",
+        GoEndReason.Timeout => $"{(record.Winner == GoStone.Black ? "B" : "W")}+T",
         GoEndReason.AreaScore when record.Score is { } score && score.Winner is { } winner =>
             $"{(winner == GoStone.Black ? "B" : "W")}+{score.Margin.ToString("0.0", CultureInfo.InvariantCulture)}",
         GoEndReason.AreaScore => "0",
@@ -176,6 +182,7 @@ public static class GoSgfCodec
             throw new InvalidDataException("SGF RE 结果无效。");
         winner = value[0] == 'B' ? GoStone.Black : GoStone.White;
         if (value[2..].Equals("R", StringComparison.OrdinalIgnoreCase)) { reason = GoEndReason.Resignation; return; }
+        if (value[2..].Equals("T", StringComparison.OrdinalIgnoreCase)) { reason = GoEndReason.Timeout; return; }
         if (!double.TryParse(value[2..], NumberStyles.Float, CultureInfo.InvariantCulture, out margin) || margin <= 0)
             throw new InvalidDataException("SGF RE 目数无效。");
         reason = GoEndReason.AreaScore;

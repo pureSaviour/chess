@@ -54,6 +54,7 @@ public partial class GameScreen : Control
     private Button _undoButton = null!;
     private Button _requestUndoButton = null!;
     private Button _requestDrawButton = null!;
+    private Button _requestRematchButton = null!;
     private Button _chatSendButton = null!;
     private RichTextLabel _chatLog = null!;
     private LineEdit _chatInput = null!;
@@ -311,12 +312,14 @@ public partial class GameScreen : Control
         _requestDrawButton.Visible = _transport is not null;
         _requestDrawButton.Pressed += () => RequestMatchOffer(MatchOfferKind.Draw);
         _requestDrawButton.Visible = false; header.AddChild(_requestDrawButton);
+        _requestRematchButton=UiStyle.CreateButton("再来一局");_requestRematchButton.Visible=false;
+        _requestRematchButton.Pressed+=()=>RequestMatchOffer(MatchOfferKind.Rematch);header.AddChild(_requestRematchButton);
 
         _functionMenu = new MenuButton { Text = "功能 ▾", CustomMinimumSize = new Vector2(96, 41) };
         var popup = _functionMenu.GetPopup();
         popup.AddItem("推演", 1); popup.AddItem("保存棋局", 2); popup.AddSeparator(); popup.AddItem("认输", 3);
         if (_transport is null) { popup.AddItem("悔棋", 4); popup.AddItem("重开", 5); }
-        else { popup.AddItem("申请悔棋", 6); popup.AddItem("申请和棋", 7); }
+        else { popup.AddItem("申请悔棋", 6); popup.AddItem("申请和棋", 7);popup.AddItem("再来一局",8); }
         popup.AboutToPopup += RefreshFunctionMenu;
         popup.IdPressed += id =>
         {
@@ -329,6 +332,7 @@ public partial class GameScreen : Control
                 case 5: Restart(); break;
                 case 6: RequestMatchOffer(MatchOfferKind.Undo); break;
                 case 7: RequestMatchOffer(MatchOfferKind.Draw); break;
+                case 8: RequestMatchOffer(MatchOfferKind.Rematch); break;
             }
         };
         header.AddChild(_functionMenu);
@@ -790,9 +794,7 @@ public partial class GameScreen : Control
             GetTree().CreateTimer(0.05).Timeout += () => RespondToVisibleOffer(true);
             return;
         }
-        _offerDialog.DialogText = request.Kind == MatchOfferKind.Undo
-            ? "对方申请撤销最近一手棋，是否同意？"
-            : "对方申请结束本局并判为和棋，是否同意？";
+        _offerDialog.DialogText = request.Kind switch{MatchOfferKind.Undo=>"对方申请撤销最近一手棋，是否同意？",MatchOfferKind.Rematch=>"对方希望再来一局并交换红黑，是否同意？",_=>"对方申请结束本局并判为和棋，是否同意？"};
         _offerDialog.PopupCentered(new Vector2I(430, 190));
     }
 
@@ -817,6 +819,7 @@ public partial class GameScreen : Control
         var actor = resolution.WasLocalRequest ? "对方" : "你";
         var action = resolution.Accepted ? "同意" : "拒绝";
         AppendChat("系统", $"{actor}{action}了{OfferName(resolution.Kind)}申请。", true);
+        if(resolution.Accepted&&resolution.Kind==MatchOfferKind.Rematch&&_network is not null&&_configuration is { } configuration){_localSide=_network.LocalSide;_configuration=configuration with{HostSide=configuration.HostSide.Opponent()};_board.BottomSide=_localSide.Value;_clock=new(configuration.TimeControl){IsRunning=true};_settlementShown=false;_recentRecordWritten=false;_lastPly=0;UpdatePlayerSideLabels();}
         if (_debugNetworkSmoke && resolution.WasLocalRequest && resolution.Accepted &&
             resolution.Kind == MatchOfferKind.Undo && _localSide == PieceSide.Black)
             _ = SendSmokeDrawOfferAsync();
@@ -866,12 +869,12 @@ public partial class GameScreen : Control
         _requestUndoButton.Disabled = !connected || pending || finished ||
                                       _network?.CanRequestLocalUndo != true;
         _requestDrawButton.Disabled = !connected || pending || finished;
+        _requestRematchButton.Disabled=!connected||pending||!finished;
         _chatSendButton.Disabled = !connected;
         _chatInput.Editable = connected;
     }
 
-    private static string OfferName(MatchOfferKind kind) =>
-        kind == MatchOfferKind.Undo ? "悔棋" : "和棋";
+    private static string OfferName(MatchOfferKind kind) =>kind switch{MatchOfferKind.Undo=>"悔棋",MatchOfferKind.Rematch=>"再来一局",_=>"和棋"};
 
     private async void OnNetworkStatus(TransportStatus status)
     {
@@ -1046,7 +1049,7 @@ public partial class GameScreen : Control
             popup.SetItemText(index, source.Text);
         }
         Sync(1, _trialButton); Sync(2, _saveRecordButton); Sync(4, _undoButton);
-        Sync(6, _requestUndoButton); Sync(7, _requestDrawButton);
+        Sync(6, _requestUndoButton); Sync(7, _requestDrawButton);Sync(8,_requestRematchButton);
     }
 
     private void OnPlayerProfileReceived(PlayerProfileCommand command)

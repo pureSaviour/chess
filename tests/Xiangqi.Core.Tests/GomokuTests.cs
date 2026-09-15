@@ -13,6 +13,7 @@ internal static class GomokuTests
         ("SGF GM[4] 可往返主线与禁手规则", SgfRoundTrip),
         ("SGF 拒绝越界和非法主线", SgfRejectsInvalid),
         ("五子棋联机房主配置与落子可同步", NetworkRoundTrip),
+        ("五子棋联机超时后双方同意复赛并交换黑白", NetworkTimedRematch),
         ("五子棋 AI 协调器在主线程轮询后应用合法着法", AiRoundTrip),
         ("五子棋 AI 协调器拒绝非法输出", AiRejectsInvalid),
         ("五子棋 AI 协调器释放引擎且释放幂等", AiDisposal),
@@ -78,6 +79,17 @@ internal static class GomokuTests
         True(host.SubmitAsync(new(7, 7)).AsTask().GetAwaiter().GetResult().Accepted); Equal(1L, client.Snapshot.PlyNumber);
         True(client.SubmitAsync(new(7, 8)).AsTask().GetAwaiter().GetResult().Accepted); Equal(2L, host.Snapshot.PlyNumber); Equal(2L, client.Snapshot.PlyNumber);
         host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+    private static void NetworkTimedRematch()
+    {
+        var (hostPort,clientPort)=FakePacketTransport.Pair();
+        var host=new NetworkGomokuMatchController(hostPort,new(15,GomokuRuleSet.Freestyle,StoneColor.Black,new(0,1)));
+        var client=new NetworkGomokuMatchController(clientPort,null);hostPort.Connect();clientPort.Connect();
+        Equal(1,client.TimeControl.MoveSeconds);host.Tick(1.1);True(host.Snapshot.IsFinished);True(client.Snapshot.IsFinished);
+        host.RequestRematchAsync().AsTask().GetAwaiter().GetResult();True(host.Rematch.LocalReady);True(client.Rematch.RemoteReady);
+        client.RequestRematchAsync().AsTask().GetAwaiter().GetResult();False(host.Snapshot.IsFinished);False(client.Snapshot.IsFinished);
+        Equal(StoneColor.White,host.LocalColor);Equal(StoneColor.Black,client.LocalColor);Equal(2L,host.Rematch.Round);
+        host.DisposeAsync().AsTask().GetAwaiter().GetResult();client.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
     private static void AiRoundTrip()
     {

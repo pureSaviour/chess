@@ -94,11 +94,11 @@ public sealed class LocalJieqiMatchController : IJieqiMatchController
 /// The host commits SHA-256(seed, protocol, variant) before play and releases the seed only in a
 /// terminal state. This detects reshuffling but cannot prevent a P2P host from inspecting memory.
 /// </summary>
-public sealed class NetworkJieqiMatchController : IJieqiMatchController
+public sealed class NetworkJieqiMatchController : IJieqiMatchController, IRematchableMatchController
 {
     private readonly ITwoPlayerPacketTransport _transport;
-    private readonly JieqiGameSession? _authority;
-    private readonly ulong? _authoritySeed;
+    private JieqiGameSession? _authority;
+    private ulong? _authoritySeed;
     private readonly List<ChessMove> _moves = [];
     private readonly Dictionary<BoardPosition, IReadOnlyList<BoardPosition>> _legal = [];
     private GameSnapshot _public;
@@ -111,6 +111,7 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     private TaskCompletionSource<bool>? _pendingResignation;
     private long _pendingResignationRequest;
     private bool _disposed;
+    private readonly TwoPlayerRematchNegotiation _rematch=new();
 
     public NetworkJieqiMatchController(ITwoPlayerPacketTransport transport, PieceSide? hostSide,
         ulong? hostSeed = null, TimeControl? timeControl = null)
@@ -143,6 +144,9 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
     public bool CanSubmitMove => IsConnected && !_public.IsFinished && _public.SideToMove == LocalSide;
     public TimeControl TimeControl => _timeControl;
     public ClockSnapshot Clock => _clock.Snapshot;
+    public RematchSnapshot Rematch=>_rematch.Snapshot;
+    public bool CanRequestRematch=>IsConnected&&_public.IsFinished&&!_rematch.Snapshot.LocalReady;
+    public async ValueTask RequestRematchAsync(CancellationToken cancellationToken=default){if(!CanRequestRematch)throw new InvalidOperationException("当前不能申请再来一局。");var start=_rematch.MarkLocalReady();await SendAsync(new JieqiPacket("rematch",_rematch.Snapshot.Round,_public.PlyNumber,(int)LocalSide!.Value,-1,-1,-1,-1,null,null,null,null,"1"),cancellationToken);if(start)StartRematch();Changed?.Invoke();}
 
     public void Tick(double deltaSeconds)
     {
@@ -242,6 +246,8 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
         if (packet!.Type == "move") ReceiveMoveRequest(packet);
         else if (packet.Type == "resign") ReceiveResignationRequest(packet);
         else if (packet.Type == "state") ReceiveState(packet);
+        else if(packet.Type=="rematch")ReceiveRematch(packet);
+        else if(packet.Type=="sync"&&_authority is not null)_=SendStateAsync(0,null);
         else if (packet.Type == "reject" && _authority is null)
         {
             if (packet.RequestId == _pendingResignationRequest) _pendingResignation?.TrySetResult(false);
@@ -249,6 +255,8 @@ public sealed class NetworkJieqiMatchController : IJieqiMatchController
         }
         else Message?.Invoke("收到与本机角色不匹配的揭棋消息。");
     }
+    private void ReceiveRematch(JieqiPacket packet){if(!_public.IsFinished||packet.Error!="1"||!_rematch.AcceptRemoteReady(packet.RequestId)){Message?.Invoke("忽略了失效的再来一局请求。");return;}if(_rematch.Snapshot.LocalReady)StartRematch();else{Message?.Invoke("对手已选择再来一局。");Changed?.Invoke();}}
+    private void StartRematch(){if(LocalSide is null||HostSide is null)return;LocalSide=LocalSide.Value.Opponent();HostSide=HostSide.Value.Opponent();_moves.Clear();_legal.Clear();_releasedSeed=null;if(_transport.IsPacketHost){_authoritySeed=RandomSeed();_authority=new(_authoritySeed.Value);_public=_authority.Snapshot;_commitment=Commitment(_authoritySeed.Value);RefreshLegal();}else{_authoritySeed=null;_authority=null;_commitment=null;_public=new JieqiGameSession(0).Snapshot;}_clock=new(_timeControl){IsRunning=_transport.IsPacketHost};_clockSyncAccumulator=0;_rematch.BeginNextRound();Message?.Invoke("新对局已开始，双方已交换红黑。");Changed?.Invoke();if(!_transport.IsPacketHost)_=SendAsync(new JieqiPacket("sync",0,0,(int)LocalSide.Value,-1,-1,-1,-1,null,null,null,null));}
 
     private void ReceiveMoveRequest(JieqiPacket packet)
     {
@@ -444,7 +452,7 @@ internal static class JieqiWireProtocol
         try
         {
             packet = JsonSerializer.Deserialize<JieqiPacket>(bytes[2..], Json);
-            if (packet is null || packet.Type is not ("move" or "resign" or "state" or "reject")) throw new JsonException();
+            if (packet is null || packet.Type is not ("move" or "resign" or "state" or "reject" or "rematch" or "sync")) throw new JsonException();
             return true;
         }
         catch (JsonException) { error = "揭棋数据包 JSON 无效。"; return false; }

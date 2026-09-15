@@ -166,6 +166,8 @@ AcceptLive 的前置条件是协调器已经用 transport 认证了来源，并�
 
 `ITwoPlayerPacketTransport` 与 `IMatchTransport` 定义在同一文件，是双人新玩法使用的原始可靠包端口：它只传递有界、不透明的 `ReadOnlyMemory<byte>`，报告连接/房主身份并由屏幕退出路径 `DisposeAsync`；它不解析玩法、序号、棋位、Seed 或私密布阵。`EnetMatchTransport` 与 `SteamMatchTransport` 同时实现两个端口，但一次房间只订阅一种接收事件。揭棋和军旗分别在 Core 控制器中拥有独立版本头和最大 16,000 字节 JSON；围棋因最多 4096 项数子操作使用独立的 32,000 字节上限。原始包不能直接交给 UI。
 
+`TwoSeatMatchClock` 是非经典双人玩法共享的应用层棋钟。输入为已验证的 `TimeControl` 和 0/1 行动席位，输出为不可变 `SeatClockSnapshot`；零值表示不限时，非有限 Tick 被拒绝。它不认识任何玩法颜色、不决定胜负，也不发送网络消息：本地/AI 控制器推进并调用领域超时入口，联机仅由可信房主推进，客户端应用约 250 ms 的权威快照。Screen 只把席位映射到玩家卡并生成 `MoveClockIndicator`，不得自行判超时。`TwoPlayerRematchNegotiation` 只记录当前轮次的双方意愿；`IRematchableMatchController` 是 UI 唯一的复赛意图入口。双方对同一终局轮次均置为 ready 后，具体控制器新建聚合、清空本局瞬态状态、重置棋钟并交换逻辑席位；transport、聊天和玩家资料租约保持不变。轮次不匹配的迟到/重放帧不改变房间。该抽象仅适用于两席位，三国三席位不能通过伪造一个“对手”复用。
+
 三人名册满席后固定，离线只改变 Connected，不能补位；Poll 回调在调用线程发出，后台 I/O 只能入队。Send 不携带 UI Node/Steam handle。SetAuthority 是同步平台房主归属的钩子，不允许 transport 自行决定游戏权威。
 
 新增适配器先以 fake 验证正常、拒绝、顺序、重放/丢失恢复，再做真实后端集成。三人支持迁移不代表二人自动拥有迁移；具体协议、大小上限和版本必须按玩法区分。

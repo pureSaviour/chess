@@ -5,7 +5,7 @@ namespace Xiangqi.Core.Domain.Go;
 public enum GoStone : byte { Black, White }
 public enum GoPhase : byte { Playing, Scoring, Finished }
 public enum GoActionKind : byte { Place, Pass, MarkDead, ConfirmScore, Resign }
-public enum GoEndReason : byte { AreaScore, Resignation }
+public enum GoEndReason : byte { AreaScore, Resignation, Timeout }
 public enum GoRejection : byte
 {
     None, Finished, WrongPhase, OutOfBounds, Occupied, NotPlayersTurn, Suicide,
@@ -179,6 +179,16 @@ public sealed class GoGame
         EndReason = GoEndReason.Resignation;
         Phase = GoPhase.Finished;
         return new(true, action, GoRejection.None);
+    }
+
+    /// <summary>Applies an application-authorized clock loss without appending a board action.</summary>
+    public bool DeclareTimeout(GoStone loser)
+    {
+        if (Phase == GoPhase.Finished || !Enum.IsDefined(loser)) return false;
+        Winner = Opponent(loser);
+        EndReason = GoEndReason.Timeout;
+        Phase = GoPhase.Finished;
+        return true;
     }
 
     public GoScore CalculateScore()

@@ -4,7 +4,7 @@ namespace Xiangqi.Core.Domain.Gomoku;
 
 public enum StoneColor : byte { Black, White }
 public enum GomokuRuleSet : byte { Freestyle, RenjuForbiddenMoves }
-public enum GomokuEndReason : byte { FiveInRow, BoardFull }
+public enum GomokuEndReason : byte { FiveInRow, BoardFull, Timeout }
 public enum GomokuMoveRejection : byte { None, Finished, Occupied, OutOfBounds, NotPlayersTurn, Overline, DoubleFour, DoubleThree }
 
 public readonly record struct GomokuMove(long Sequence, StoneColor Color, GridPoint Point);
@@ -90,6 +90,16 @@ public sealed class GomokuGame
         else if (_stones.Count == _grid.Size * _grid.Size) { IsFinished = true; EndReason = GomokuEndReason.BoardFull; }
         else SideToMove = color == StoneColor.Black ? StoneColor.White : StoneColor.Black;
         return new GomokuMoveResult(true, move, GomokuMoveRejection.None);
+    }
+
+    /// <summary>Applies an application-authorized clock loss without manufacturing a move.</summary>
+    public bool DeclareTimeout(StoneColor loser)
+    {
+        if (IsFinished || !Enum.IsDefined(loser)) return false;
+        IsFinished = true;
+        Winner = loser == StoneColor.Black ? StoneColor.White : StoneColor.Black;
+        EndReason = GomokuEndReason.Timeout;
+        return true;
     }
 
     private int CountLine(GridPoint point, StoneColor color, int dc, int dr) =>

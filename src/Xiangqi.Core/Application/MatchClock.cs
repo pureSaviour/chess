@@ -108,3 +108,67 @@ public sealed class MatchClock
     private static double UnlimitedAsInfinity(double seconds) => seconds <= 0 ? double.PositiveInfinity : seconds;
     private static double InfinityAsUnlimited(double seconds) => double.IsPositiveInfinity(seconds) ? 0 : Math.Max(0, seconds);
 }
+
+/// <summary>
+/// Engine-independent clock for any alternating two-seat game. Seat zero/one are mapped to a
+/// game's own colors by its application controller; this type deliberately knows no chess,
+/// Gomoku, Go or Junqi domain enum. Zero limits are unlimited. The caller owns ticking and decides
+/// whether a timeout is authoritative; network clients should only apply host snapshots.
+/// </summary>
+public readonly record struct SeatClockSnapshot(
+    double FirstGameSeconds, double SecondGameSeconds, double MoveSeconds, int ActiveSeat);
+
+public sealed class TwoSeatMatchClock
+{
+    private readonly TimeControl _control;
+    private double _first;
+    private double _second;
+    private double _move;
+    private int _activeSeat;
+
+    public TwoSeatMatchClock(TimeControl control, int firstSeat = 0)
+    {
+        _control = control.Validate();
+        _first = ToInternal(control.GameSeconds);
+        _second = ToInternal(control.GameSeconds);
+        _move = ToInternal(control.MoveSeconds);
+        BeginTurn(firstSeat);
+    }
+
+    public bool IsRunning { get; set; }
+    public TimeControl Control => _control;
+    public SeatClockSnapshot Snapshot => new(ToExternal(_first), ToExternal(_second),
+        ToExternal(_move), _activeSeat);
+
+    public int? Advance(double seconds)
+    {
+        if (!IsRunning || seconds <= 0 || !_control.IsEnabled) return null;
+        if (!double.IsFinite(seconds)) throw new ArgumentOutOfRangeException(nameof(seconds));
+        if (_activeSeat == 0) _first -= seconds; else _second -= seconds;
+        _move -= seconds;
+        var gameExpired = _activeSeat == 0 ? _first <= 0 : _second <= 0;
+        return gameExpired || _move <= 0 ? _activeSeat : null;
+    }
+
+    public void BeginTurn(int seat)
+    {
+        if (seat is not (0 or 1)) throw new ArgumentOutOfRangeException(nameof(seat));
+        _activeSeat = seat;
+        _move = ToInternal(_control.MoveSeconds);
+    }
+
+    public void Apply(SeatClockSnapshot snapshot)
+    {
+        if (snapshot.ActiveSeat is not (0 or 1) || !double.IsFinite(snapshot.FirstGameSeconds) ||
+            !double.IsFinite(snapshot.SecondGameSeconds) || !double.IsFinite(snapshot.MoveSeconds) ||
+            snapshot.FirstGameSeconds < 0 || snapshot.SecondGameSeconds < 0 || snapshot.MoveSeconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(snapshot));
+        _first = ToInternal(snapshot.FirstGameSeconds);
+        _second = ToInternal(snapshot.SecondGameSeconds);
+        _move = ToInternal(snapshot.MoveSeconds);
+        _activeSeat = snapshot.ActiveSeat;
+    }
+
+    private static double ToInternal(double seconds) => seconds <= 0 ? double.PositiveInfinity : seconds;
+    private static double ToExternal(double seconds) => double.IsPositiveInfinity(seconds) ? 0 : Math.Max(0, seconds);
+}

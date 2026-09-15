@@ -19,6 +19,9 @@ public interface IJunqiMatchController : IAsyncDisposable
     bool IsReady { get; }
     bool IsConnected { get; }
     bool CanSubmitMove { get; }
+    TimeControl TimeControl { get; }
+    SeatClockSnapshot Clock { get; }
+    void Tick(double seconds);
     IReadOnlyList<JunqiCell> LegalDestinations(JunqiCell from);
     ValueTask<JunqiSubmitResult> SubmitMoveAsync(JunqiCell from, JunqiCell to,
         CancellationToken cancellationToken = default);
@@ -31,12 +34,14 @@ public sealed class LocalJunqiMatchController : IJunqiMatchController
     private readonly IReadOnlyList<JunqiPlacement> _first;
     private readonly IReadOnlyList<JunqiPlacement> _second;
     private readonly JunqiGame _game;
+    private readonly TwoSeatMatchClock _clock;
     public LocalJunqiMatchController(IReadOnlyList<JunqiPlacement>? first = null,
-        IReadOnlyList<JunqiPlacement>? second = null)
+        IReadOnlyList<JunqiPlacement>? second = null, TimeControl? timeControl=null)
     {
         _first = first ?? JunqiGame.CreateRandomLayout(JunqiSide.First, 1);
         _second = second ?? JunqiGame.CreateRandomLayout(JunqiSide.Second, 26);
         _game = new(_first, _second);
+        TimeControl=(timeControl??TimeControl.Unlimited).Validate();_clock=new(TimeControl){IsRunning=true};
     }
     public event Action? Changed;
     public event Action<string>? Message { add { } remove { } }
@@ -45,12 +50,15 @@ public sealed class LocalJunqiMatchController : IJunqiMatchController
     public bool IsReady => true;
     public bool IsConnected => true;
     public bool CanSubmitMove => !_game.Snapshot.IsFinished;
+    public TimeControl TimeControl { get; }
+    public SeatClockSnapshot Clock=>_clock.Snapshot;
+    public void Tick(double seconds){var loser=_clock.Advance(seconds);if(loser is null)return;_clock.IsRunning=false;if(_game.DeclareTimeout((JunqiSide)loser.Value))Changed?.Invoke();}
     public IReadOnlyList<JunqiCell> LegalDestinations(JunqiCell from) => _game.LegalDestinations(from);
     public ValueTask<JunqiSubmitResult> SubmitMoveAsync(JunqiCell from, JunqiCell to,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested(); var result = _game.TryMove(new(from, to));
-        if (result.IsSuccess) Changed?.Invoke();
+        if (result.IsSuccess) {_clock.BeginTurn((int)_game.Snapshot.SideToMove);Changed?.Invoke();}
         return ValueTask.FromResult(new JunqiSubmitResult(result.IsSuccess, false, result.Error));
     }
     public bool TryCreateFinishedRecord(string firstPlayer, string secondPlayer,
@@ -58,7 +66,8 @@ public sealed class LocalJunqiMatchController : IJunqiMatchController
     {
         var snapshot = _game.Snapshot;
         if (!snapshot.IsFinished) { record = null; error = "对局尚未结束。"; return false; }
-        record = BuildRecord(firstPlayer, secondPlayer, _first, _second, _game.History, snapshot.Winner);
+        record = BuildRecord(firstPlayer, secondPlayer, _first, _second, _game.History, snapshot.Winner,
+            snapshot.EndReason==JunqiEndReason.Timeout,TimeControl.GameSeconds);
         error = null; return true;
     }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -66,9 +75,9 @@ public sealed class LocalJunqiMatchController : IJunqiMatchController
     internal static JunqiGameRecord BuildRecord(string firstPlayer, string secondPlayer,
         IReadOnlyList<JunqiPlacement> first, IReadOnlyList<JunqiPlacement> second,
         IReadOnlyList<(JunqiMove Move, JunqiBattleResult Battle, JunqiSide? FlagReveal)> history,
-        JunqiSide? winner) => new(firstPlayer, secondPlayer, 0, JunqiGame.StandardMandatoryAttackPly,
+        JunqiSide? winner,bool abnormalEnd=false,int timeLimitSeconds=0) => new(firstPlayer, secondPlayer, timeLimitSeconds, JunqiGame.StandardMandatoryAttackPly,
             first.ToArray(), second.ToArray(), history.Select((x, index) => new JunqiRecordedMove(
-                index % 2 == 0 ? JunqiSide.First : JunqiSide.Second, x.Move, x.Battle, x.FlagReveal)).ToArray(), winner);
+                index % 2 == 0 ? JunqiSide.First : JunqiSide.Second, x.Move, x.Battle, x.FlagReveal)).ToArray(), winner,abnormalEnd);
 }
 
 /// <summary>
@@ -78,7 +87,7 @@ public sealed class LocalJunqiMatchController : IJunqiMatchController
 /// state so either peer can create a fully replayable AC2 record. A P2P host necessarily learns the
 /// remote layout and is therefore trusted as referee; a neutral server is required to remove that trust.
 /// </summary>
-public sealed class NetworkJunqiMatchController : IJunqiMatchController
+public sealed class NetworkJunqiMatchController : IJunqiMatchController, IRematchableMatchController
 {
     private readonly ITwoPlayerPacketTransport _transport;
     private IReadOnlyList<JunqiPlacement>? _localLayout;
@@ -91,12 +100,18 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
     private JunqiSide? _hostSide;
     private long _nextRequest;
     private bool _disposed;
+    private TimeControl _timeControl;
+    private TwoSeatMatchClock _clock;
+    private double _clockSyncAccumulator;
+    private readonly TwoPlayerRematchNegotiation _rematch=new();
 
-    public NetworkJunqiMatchController(ITwoPlayerPacketTransport transport, JunqiSide? hostSide)
+    public NetworkJunqiMatchController(ITwoPlayerPacketTransport transport, JunqiSide? hostSide,
+        TimeControl? timeControl=null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         if (transport.IsPacketHost && hostSide is null || hostSide is { } value && !Enum.IsDefined(value))
             throw new ArgumentOutOfRangeException(nameof(hostSide));
+        _timeControl=(timeControl??TimeControl.Unlimited).Validate();_clock=new(_timeControl);
         _hostSide = hostSide; LocalSide = transport.IsPacketHost ? hostSide : hostSide?.Opponent();
         _localLayout = LocalSide is { } local ? JunqiGame.CreateRandomLayout(local, local == JunqiSide.First ? 1 : 26) : null;
         _view = _localLayout is null ? EmptyView() : WaitingView(_localLayout, LocalSide!.Value);
@@ -114,6 +129,18 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
     public bool IsReady => _authority is not null || !_transport.IsPacketHost && _hostSide is not null && _view.Pieces.Count == 50;
     public bool IsConnected => _transport.IsPacketConnected;
     public bool CanSubmitMove => IsReady && IsConnected && !_view.IsFinished && _view.SideToMove == LocalSide;
+    public TimeControl TimeControl=>_timeControl;
+    public SeatClockSnapshot Clock=>_clock.Snapshot;
+    public RematchSnapshot Rematch=>_rematch.Snapshot;
+    public bool CanRequestRematch=>IsConnected&&_view.IsFinished&&!_rematch.Snapshot.LocalReady;
+    public async ValueTask RequestRematchAsync(CancellationToken cancellationToken=default){if(!CanRequestRematch)throw new InvalidOperationException("当前不能申请再来一局。");var start=_rematch.MarkLocalReady();await SendAsync(new JunqiPacket("rematch",_rematch.Snapshot.Round,_view.PlyNumber,(int)LocalSide!.Value,-1,-1,-1,-1,null,null,null,null,"1"),cancellationToken);if(start)StartRematch();Changed?.Invoke();}
+    public void Tick(double seconds)
+    {
+        if(!_transport.IsPacketHost||_authority is null||_view.IsFinished)return;
+        var loser=_clock.Advance(seconds);_clockSyncAccumulator+=seconds;
+        if(loser is not null){_clock.IsRunning=false;if(_authority.DeclareTimeout((JunqiSide)loser.Value)){PublishHostView();_=SendStateAsync(0,null);}return;}
+        if(_clockSyncAccumulator>=.25){_clockSyncAccumulator=0;_=SendStateAsync(0,null);}
+    }
     public IReadOnlyList<JunqiCell> LegalDestinations(JunqiCell from) => _legal.TryGetValue(from, out var value) ? value : [];
 
     public async ValueTask<JunqiSubmitResult> SubmitMoveAsync(JunqiCell from, JunqiCell to,
@@ -128,7 +155,7 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
         }
         var result = _authority.TryMove(new(from, to));
         if (!result.IsSuccess) return new(false, false, result.Error);
-        AppendMove(result); PublishHostView(); await SendStateAsync(0, result, cancellationToken); return new(true, false, null);
+        _clock.BeginTurn((int)_authority.Snapshot.SideToMove);AppendMove(result); PublishHostView(); await SendStateAsync(0, result, cancellationToken); return new(true, false, null);
     }
 
     public bool TryCreateFinishedRecord(string firstPlayer, string secondPlayer,
@@ -137,8 +164,8 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
         record = null;
         if (!_view.IsFinished || _firstLayout is null || _secondLayout is null)
         { error = "对局未结束或赛后布阵尚未释放。"; return false; }
-        var candidate = new JunqiGameRecord(firstPlayer, secondPlayer, 0, JunqiGame.StandardMandatoryAttackPly,
-            _firstLayout, _secondLayout, _moves.ToArray(), _view.Winner);
+        var candidate = new JunqiGameRecord(firstPlayer, secondPlayer, _timeControl.GameSeconds, JunqiGame.StandardMandatoryAttackPly,
+            _firstLayout, _secondLayout, _moves.ToArray(), _view.Winner,_view.EndReason==JunqiEndReason.Timeout);
         try { _ = candidate.Replay(); record = candidate; error = null; return true; }
         catch (InvalidDataException exception) { error = exception.Message; return false; }
     }
@@ -155,7 +182,7 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
         Message?.Invoke(status.Detail ?? status.State.ToString());
         if (status.State == TransportConnectionState.Connected && _transport.IsPacketHost)
             _ = SendAsync(new JunqiPacket("hello", 0, 0, (int)_hostSide!.Value, -1, -1, -1, -1,
-                null, null, null, null, null));
+                null, null, null, null, null,GameSeconds:_timeControl.GameSeconds,MoveSeconds:_timeControl.MoveSeconds));
         Changed?.Invoke();
     }
 
@@ -172,15 +199,20 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
             case "move" when _transport.IsPacketHost: ReceiveMove(packet); break;
             case "state" when !_transport.IsPacketHost: ReceiveState(packet); break;
             case "reject" when !_transport.IsPacketHost: Message?.Invoke(packet.Error ?? "房主拒绝了请求。"); break;
+            case "rematch": ReceiveRematch(packet); break;
             default: Message?.Invoke("军旗消息与当前端角色不匹配。"); break;
         }
     }
+    private void ReceiveRematch(JunqiPacket packet){if(!_view.IsFinished||packet.Error!="1"||!_rematch.AcceptRemoteReady(packet.RequestId)){Message?.Invoke("忽略了失效的再来一局请求。");return;}if(_rematch.Snapshot.LocalReady)StartRematch();else{Message?.Invoke("对手已选择再来一局。");Changed?.Invoke();}}
+    private void StartRematch(){if(LocalSide is null||_hostSide is null)return;LocalSide=LocalSide.Value.Opponent();_hostSide=_hostSide.Value.Opponent();_localLayout=JunqiGame.CreateRandomLayout(LocalSide.Value,LocalSide==JunqiSide.First?1:26);_firstLayout=LocalSide==JunqiSide.First?_localLayout:null;_secondLayout=LocalSide==JunqiSide.Second?_localLayout:null;_authority=null;_moves.Clear();_legal.Clear();_view=WaitingView(_localLayout,LocalSide.Value);_clock=new(_timeControl);_clockSyncAccumulator=0;_rematch.BeginNextRound();Message?.Invoke("新对局已准备，双方已交换先后手。");Changed?.Invoke();if(!_transport.IsPacketHost)_=SendAsync(new JunqiPacket("setup",0,0,(int)LocalSide.Value,-1,-1,-1,-1,LayoutCodes(_localLayout),null,null,null,null));}
 
     private void ReceiveHello(JunqiPacket packet)
     {
         if (IsReady) return;
         if (packet.Side is < 0 or > 1 || _hostSide is { } known && (int)known != packet.Side)
         { Message?.Invoke("军旗房主席位无效。"); return; }
+        if(packet.GameSeconds<0||packet.MoveSeconds<0){Message?.Invoke("军旗计时配置无效。");return;}
+        _timeControl=new(packet.GameSeconds,packet.MoveSeconds);_clock=new(_timeControl);
         _hostSide = (JunqiSide)packet.Side; LocalSide = _hostSide.Value.Opponent();
         var layout = JunqiGame.CreateRandomLayout(LocalSide.Value, LocalSide == JunqiSide.First ? 1 : 26);
         _localLayout = layout;
@@ -201,7 +233,7 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
             var side = (JunqiSide)packet.Side;
             var layout = JunqiGame.Build(side, packet.Layout, side == JunqiSide.First ? 1 : 26);
             if (side == JunqiSide.First) _firstLayout = layout; else _secondLayout = layout;
-            _authority = new(_firstLayout!, _secondLayout!); PublishHostView(); _ = SendStateAsync(0, null);
+            _authority = new(_firstLayout!, _secondLayout!);_clock.IsRunning=true; PublishHostView(); _ = SendStateAsync(0, null);
         }
         catch (ArgumentException exception) { _ = Reject(0, exception.Message); }
     }
@@ -213,15 +245,14 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
         { _ = Reject(packet.RequestId, "军旗着法身份或局面版本无效。"); return; }
         var result = _authority.TryMove(new(new(packet.FromRow, packet.FromColumn), new(packet.ToRow, packet.ToColumn)));
         if (!result.IsSuccess) { _ = Reject(packet.RequestId, result.Error ?? "军旗着法无效。"); return; }
-        AppendMove(result); PublishHostView(); _ = SendStateAsync(packet.RequestId, result);
+        _clock.BeginTurn((int)_authority.Snapshot.SideToMove);AppendMove(result); PublishHostView(); _ = SendStateAsync(packet.RequestId, result);
     }
 
     private void ReceiveState(JunqiPacket packet)
     {
         string? error = null;
         if (packet.View is null || !TryView(packet.View, out var view, out error) ||
-            view!.PlyNumber == 0 && _view.PlyNumber != 0 ||
-            view.PlyNumber != 0 && view.PlyNumber != _view.PlyNumber + 1 ||
+            view!.PlyNumber < _view.PlyNumber || view.PlyNumber > _view.PlyNumber + 1 ||
             packet.Battle is { } declared && !Enum.IsDefined((JunqiBattleResult)declared) ||
             packet.FlagReveal is < 0 or > 1)
         { Message?.Invoke(error ?? "军旗权威局面序号不连续。"); return; }
@@ -233,7 +264,8 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
         if (view.PlyNumber == _view.PlyNumber + 1 && packet.Battle is { } battle)
             _moves.Add(new((JunqiSide)packet.Side, new(new(packet.FromRow, packet.FromColumn), new(packet.ToRow, packet.ToColumn)),
                 (JunqiBattleResult)battle, packet.FlagReveal is null ? null : (JunqiSide)packet.FlagReveal.Value));
-        _view = view; LoadLegal(packet.Legal);
+        if(packet.Clock is not null)_clock.Apply(new(packet.Clock.First,packet.Clock.Second,packet.Clock.Move,packet.Clock.Active));
+        _view = view;_clock.IsRunning=!view.IsFinished; LoadLegal(packet.Legal);
         if (_view.IsFinished && packet.Layout is not null && packet.OtherLayout is not null && LocalSide is { } local)
         {
             try
@@ -260,11 +292,12 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
         var legal = LegalDto(_authority, view.SideToMove);
         var ownCodes = view.IsFinished ? LayoutCodes(remote == JunqiSide.First ? _firstLayout! : _secondLayout!) : null;
         var otherCodes = view.IsFinished ? LayoutCodes(remote == JunqiSide.First ? _secondLayout! : _firstLayout!) : null;
-        await SendAsync(new JunqiPacket("state", requestId, view.PlyNumber,
+        var c=_clock.Snapshot;await SendAsync(new JunqiPacket("state", requestId, view.PlyNumber,
             result is null ? (int)_hostSide.Value : (int)view.SideToMove.Opponent(),
             result?.Move.From.Row ?? -1, result?.Move.From.Column ?? -1, result?.Move.To.Row ?? -1, result?.Move.To.Column ?? -1,
             ownCodes, otherCodes, ToDto(view), legal, result?.Error, result is null ? null : (int)result.Value.Battle,
-            result?.FlagRevealedFor is null ? null : (int)result.Value.FlagRevealedFor.Value), cancellationToken);
+            result?.FlagRevealedFor is null ? null : (int)result.Value.FlagRevealedFor.Value,
+            _timeControl.GameSeconds,_timeControl.MoveSeconds,new(c.FirstGameSeconds,c.SecondGameSeconds,c.MoveSeconds,c.ActiveSeat)), cancellationToken);
     }
     private ValueTask Reject(long id, string error) => SendAsync(new JunqiPacket("reject", id, _view.PlyNumber,
         (int)_hostSide!.Value, -1, -1, -1, -1, null, null, null, null, error));
@@ -320,7 +353,9 @@ public sealed class NetworkJunqiMatchController : IJunqiMatchController
 
 internal sealed record JunqiPacket(string Type, long RequestId, int ExpectedPly, int Side,
     int FromRow, int FromColumn, int ToRow, int ToColumn, string? Layout, string? OtherLayout,
-    JunqiViewDto? View, JunqiLegalDto[]? Legal, string? Error, int? Battle = null, int? FlagReveal = null);
+    JunqiViewDto? View, JunqiLegalDto[]? Legal, string? Error, int? Battle = null, int? FlagReveal = null,
+    int GameSeconds=0,int MoveSeconds=0,JunqiClockDto? Clock=null);
+internal sealed record JunqiClockDto(double First,double Second,double Move,int Active);
 internal sealed record JunqiViewDto(JunqiPublicDto[] Pieces, int Side, bool Finished, int? Winner,
     int EndReason, int Ply, int Quiet, int[] Exposed);
 internal sealed record JunqiPublicDto(int Row, int Column, int Id, int Side, int? Kind);
@@ -344,7 +379,7 @@ internal static class JunqiWireProtocol
         try
         {
             packet = JsonSerializer.Deserialize<JunqiPacket>(bytes[2..], Json);
-            if (packet is null || packet.Type is not ("hello" or "setup" or "move" or "state" or "reject")) throw new JsonException();
+            if (packet is null || packet.Type is not ("hello" or "setup" or "move" or "state" or "reject" or "rematch")) throw new JsonException();
             return true;
         }
         catch (JsonException) { error = "军旗数据包 JSON 无效。"; return false; }

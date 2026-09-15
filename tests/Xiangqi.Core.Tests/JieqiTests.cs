@@ -95,6 +95,10 @@ internal static class JieqiTests
         Equal(GameEndReason.Resignation, client.Snapshot.EndReason);
         Equal(PieceSide.Black, client.Snapshot.Winner);
         Equal(new TimeControl(30, 5), client.TimeControl);
+        host.RequestRematchAsync().AsTask().GetAwaiter().GetResult();
+        client.RequestRematchAsync().AsTask().GetAwaiter().GetResult();
+        False(host.Snapshot.IsFinished);False(client.Snapshot.IsFinished);
+        Equal(PieceSide.Red,host.LocalSide);Equal(PieceSide.Black,client.LocalSide);
         host.DisposeAsync().AsTask().GetAwaiter().GetResult(); client.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 

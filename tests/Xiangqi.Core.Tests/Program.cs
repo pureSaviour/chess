@@ -15,6 +15,8 @@ var tests = new (string Name, Action Run)[]
     ("双车错识别器只发出语义特效提示", DoubleChariotCue),
     ("联机协调器同步双方着法并校验序号", NetworkCoordinator),
     ("局时和步时任一耗尽都会返回超时方", MatchClockTimeout),
+    ("通用双席位棋钟不依赖具体棋种阵营", TwoSeatClockTimeout),
+    ("再来一局必须双方同意且拒绝过期轮次", RematchNegotiation),
     ("玩家卡步时投影在最后十秒切换为紧急状态", MoveClockIndicatorProjection),
     ("超时裁决结束棋局并指定另一方获胜", TimeoutAdjudication),
     ("认输裁决在会话与联机协调器中指定对手获胜", ResignationAdjudication),
@@ -24,6 +26,7 @@ var tests = new (string Name, Action Run)[]
     ("共享房管校验目标、可见性、去重与历史导入", RoomChatManagement),
     ("远端悔棋申请获同意后撤销最近一手", NetworkUndoOffer),
     ("本地和棋申请获同意后结束双方对局", NetworkDrawOffer),
+    ("经典象棋复赛同意后保留连接并交换红黑", NetworkRematchOffer),
     ("拒绝对局申请时保持原有局面", NetworkRejectedOffer),
     ("只有最后行棋方可以申请悔棋", NetworkUndoEligibility),
     ("共享联机协议可往返全部对局消息", MatchWireRoundTrip),
@@ -226,6 +229,20 @@ static void MatchClockTimeout()
     Equal<PieceSide?>(PieceSide.Black, clock.Advance(0.2));
 }
 
+static void TwoSeatClockTimeout()
+{
+    var clock=new TwoSeatMatchClock(new TimeControl(8,3)){IsRunning=true};
+    Equal<int?>(null,clock.Advance(2));Equal<int?>(0,clock.Advance(1.1));
+    clock.BeginTurn(1);Equal(1,clock.Snapshot.ActiveSeat);Equal<int?>(1,clock.Advance(3.1));
+}
+
+static void RematchNegotiation()
+{
+    var value=new TwoPlayerRematchNegotiation();False(value.MarkLocalReady());True(value.AcceptRemoteReady(1));
+    True(value.Snapshot.LocalReady&&value.Snapshot.RemoteReady);value.BeginNextRound();
+    Equal(2L,value.Snapshot.Round);False(value.AcceptRemoteReady(1));
+}
+
 static void MoveClockIndicatorProjection()
 {
     var normal = MoveClockIndicator.From(11, 60, true);
@@ -361,6 +378,17 @@ static void NetworkDrawOffer()
     Equal<PieceSide?>(null, session.Snapshot.Winner);
     False(coordinator.HasPendingOffer);
     coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+}
+
+static void NetworkRematchOffer()
+{
+    var session=new GameSession();True(session.DeclareDraw());var transport=new FakeTransport();
+    var coordinator=new NetworkGameCoordinator(session,transport,PieceSide.Red);
+    coordinator.RequestMatchOfferAsync(MatchOfferKind.Rematch).AsTask().GetAwaiter().GetResult();
+    var request=transport.LastOffer??throw new InvalidOperationException("Rematch offer was not sent.");
+    transport.Receive(new MatchOfferResponse(request.RequestId,request.PlyNumber,request.Kind,true));
+    False(session.Snapshot.IsFinished);Equal(0,session.Snapshot.PlyNumber);Equal(PieceSide.Black,coordinator.LocalSide);
+    True(transport.IsConnected);coordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
 }
 
 static void NetworkRejectedOffer()

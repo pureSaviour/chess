@@ -4,9 +4,9 @@ using Xiangqi.Core.Domain.Grid;
 
 namespace Xiangqi.Core.Application.Go;
 
-public readonly record struct GoRoomOptions(GoStone HostColor)
+public readonly record struct GoRoomOptions(GoStone HostColor, TimeControl TimeControl = default)
 {
-    public void Validate() { if (!Enum.IsDefined(HostColor)) throw new ArgumentOutOfRangeException(nameof(HostColor)); }
+    public void Validate() { if (!Enum.IsDefined(HostColor)) throw new ArgumentOutOfRangeException(nameof(HostColor)); TimeControl.Validate(); }
 }
 public readonly record struct GoSubmitResult(bool Accepted, bool Pending, GoRejection Rejection, string? Error);
 
@@ -24,8 +24,11 @@ public interface IGoMatchController : IAsyncDisposable
     bool IsReady { get; }
     bool IsConnected { get; }
     bool CanAct { get; }
+    TimeControl TimeControl { get; }
+    SeatClockSnapshot Clock { get; }
     ValueTask InitializeAsync(CancellationToken cancellationToken = default);
     void Poll();
+    void Tick(double seconds);
     ValueTask<GoSubmitResult> SubmitAsync(GoActionKind kind, GridPoint? point = null,
         CancellationToken cancellationToken = default);
     GoGameRecord CreateRecord(IReadOnlyDictionary<string, string>? tags = null);
@@ -35,6 +38,8 @@ public interface IGoMatchController : IAsyncDisposable
 public sealed class LocalGoMatchController : IGoMatchController
 {
     private readonly GoGame _game = new();
+    private readonly TwoSeatMatchClock _clock;
+    public LocalGoMatchController(TimeControl? timeControl=null){TimeControl=(timeControl??TimeControl.Unlimited).Validate();_clock=new(TimeControl){IsRunning=true};}
     public event Action? Changed;
     public event Action<string>? Message { add { } remove { } }
     public GoSnapshot Snapshot => _game.Snapshot;
@@ -42,15 +47,18 @@ public sealed class LocalGoMatchController : IGoMatchController
     public bool IsReady => true;
     public bool IsConnected => true;
     public bool CanAct => _game.Phase != GoPhase.Finished;
+    public TimeControl TimeControl { get; }
+    public SeatClockSnapshot Clock=>_clock.Snapshot;
     public ValueTask InitializeAsync(CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.CompletedTask; }
     public void Poll() { }
+    public void Tick(double seconds){var loser=_clock.Advance(seconds);if(loser is null)return;_clock.IsRunning=false;if(_game.DeclareTimeout((GoStone)loser.Value))Changed?.Invoke();}
     public ValueTask<GoSubmitResult> SubmitAsync(GoActionKind kind, GridPoint? point = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var result = Apply(_game, kind, point);
-        if (result.IsSuccess) Changed?.Invoke();
+        if (result.IsSuccess) {if(_game.Phase!=GoPhase.Finished)_clock.BeginTurn((int)_game.SideToMove);else _clock.IsRunning=false;Changed?.Invoke();}
         return ValueTask.FromResult(new GoSubmitResult(result.IsSuccess, false, result.Rejection,
             result.IsSuccess ? null : result.Rejection.ToString()));
     }
@@ -78,13 +86,16 @@ public sealed class LocalGoMatchController : IGoMatchController
 /// Unknown versions, malformed payloads, stale sequences and wrong roles fail closed without
 /// changing the game. The controller owns the transport and disposal is idempotent.
 /// </summary>
-public sealed class NetworkGoMatchController : IGoMatchController
+public sealed class NetworkGoMatchController : IGoMatchController, IRematchableMatchController
 {
     private const int Protocol = 1, MaximumBytes = 32_000;
     private readonly ITwoPlayerPacketTransport _transport;
     private GoRoomOptions? _options;
     private GoGame? _game;
+    private TwoSeatMatchClock _clock=new(TimeControl.Unlimited);
     private bool _disposed;
+    private double _clockSyncAccumulator;
+    private readonly TwoPlayerRematchNegotiation _rematch=new();
 
     public NetworkGoMatchController(ITwoPlayerPacketTransport transport, GoRoomOptions? hostOptions)
     {
@@ -93,7 +104,7 @@ public sealed class NetworkGoMatchController : IGoMatchController
             throw new ArgumentException("只有房主可提供围棋房间配置。", nameof(hostOptions));
         if (hostOptions is { } options)
         {
-            options.Validate(); _options = options; _game = new(); LocalColor = options.HostColor;
+            options.Validate(); _options = options; _game = new(); _clock=new(options.TimeControl); LocalColor = options.HostColor;
         }
         _transport.PacketReceived += OnPacket;
         _transport.PacketStatusChanged += OnStatus;
@@ -105,9 +116,15 @@ public sealed class NetworkGoMatchController : IGoMatchController
     public bool IsReady => _game is not null && LocalColor is not null;
     public bool IsConnected => _transport.IsPacketConnected;
     public bool CanAct => IsReady && IsConnected && Snapshot.Phase != GoPhase.Finished && Snapshot.SideToMove == LocalColor;
+    public TimeControl TimeControl=>_options?.TimeControl??TimeControl.Unlimited;
+    public SeatClockSnapshot Clock=>_clock.Snapshot;
+    public RematchSnapshot Rematch=>_rematch.Snapshot;
+    public bool CanRequestRematch=>IsConnected&&Snapshot.Phase==GoPhase.Finished&&!_rematch.Snapshot.LocalReady;
+    public async ValueTask RequestRematchAsync(CancellationToken cancellationToken=default){if(!CanRequestRematch)throw new InvalidOperationException("当前不能申请再来一局。");var start=_rematch.MarkLocalReady();await Send(new(Protocol,"rematch",_rematch.Snapshot.Round,0,0,0,"1",null),cancellationToken);if(start)StartRematch();Changed?.Invoke();}
     public ValueTask InitializeAsync(CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.CompletedTask; }
     public void Poll() { }
+    public void Tick(double seconds){if(!_transport.IsPacketHost||!IsConnected||_game is null||_game.Phase==GoPhase.Finished)return;var loser=_clock.Advance(seconds);_clockSyncAccumulator+=seconds;if(loser is null){if(_clockSyncAccumulator>=.25){_clockSyncAccumulator=0;_=Broadcast();}return;}_clock.IsRunning=false;if(_game.DeclareTimeout((GoStone)loser.Value)){Changed?.Invoke();_=Broadcast();}}
 
     public async ValueTask<GoSubmitResult> SubmitAsync(GoActionKind kind, GridPoint? point = null,
         CancellationToken cancellationToken = default)
@@ -121,7 +138,7 @@ public sealed class NetworkGoMatchController : IGoMatchController
         }
         var result = LocalGoMatchController.Apply(_game!, kind, point, LocalColor);
         if (!result.IsSuccess) return new(false, false, result.Rejection, result.Rejection.ToString());
-        Changed?.Invoke(); await Broadcast(cancellationToken);
+        if(_game!.Phase!=GoPhase.Finished)_clock.BeginTurn((int)_game.SideToMove);else _clock.IsRunning=false;Changed?.Invoke(); await Broadcast(cancellationToken);
         return new(true, false, GoRejection.None, null);
     }
 
@@ -144,8 +161,8 @@ public sealed class NetworkGoMatchController : IGoMatchController
     }
     private async Task SendHello()
     {
-        await Send(new(Protocol, "hello", 0, 0, 0, 0, ((int)_options!.Value.HostColor).ToString(), null));
-        await Broadcast();
+        var o=_options!.Value;await Send(new(Protocol, "hello", 0, 0, 0, 0, ((int)o.HostColor).ToString(), null,o.TimeControl.GameSeconds,o.TimeControl.MoveSeconds));
+        await Broadcast();_clock.IsRunning=true;
     }
     private void OnPacket(ReadOnlyMemory<byte> bytes)
     {
@@ -159,13 +176,16 @@ public sealed class NetworkGoMatchController : IGoMatchController
         if (packet.Kind == "hello" && !_transport.IsPacketHost) ReceiveHello(packet);
         else if (packet.Kind == "action" && _transport.IsPacketHost) ReceiveAction(packet);
         else if (packet.Kind == "state" && !_transport.IsPacketHost) ReceiveState(packet);
+        else if(packet.Kind=="rematch")ReceiveRematch(packet);
         else Message?.Invoke("围棋消息与当前端角色不匹配。");
     }
+    private void ReceiveRematch(Packet packet){if(Snapshot.Phase!=GoPhase.Finished||packet.Data!="1"||!_rematch.AcceptRemoteReady(packet.Sequence)){Message?.Invoke("忽略了失效的再来一局请求。");return;}if(_rematch.Snapshot.LocalReady)StartRematch();else{Message?.Invoke("对手已选择再来一局。");Changed?.Invoke();}}
+    private void StartRematch(){if(_options is null||LocalColor is null)return;LocalColor=Opponent(LocalColor.Value);var o=_options.Value;_options=o with{HostColor=Opponent(o.HostColor)};_game=new();_clock=new(o.TimeControl){IsRunning=true};_clockSyncAccumulator=0;_rematch.BeginNextRound();Message?.Invoke("新对局已开始，双方已交换黑白。");Changed?.Invoke();if(_transport.IsPacketHost)_=Broadcast();}
     private void ReceiveHello(Packet packet)
     {
         if (_game is not null || packet.Data is not ("0" or "1")) { Message?.Invoke("房主围棋配置无效。"); return; }
-        var host = (GoStone)int.Parse(packet.Data);
-        _options = new(host); _game = new(); LocalColor = Opponent(host); Changed?.Invoke();
+        if(packet.GameSeconds<0||packet.MoveSeconds<0){Message?.Invoke("房主围棋计时配置无效。");return;}var host = (GoStone)int.Parse(packet.Data);
+        _options = new(host,new(packet.GameSeconds,packet.MoveSeconds)); _game = new();_clock=new(_options.Value.TimeControl); LocalColor = Opponent(host); Changed?.Invoke();
     }
     private void ReceiveAction(Packet packet)
     {
@@ -177,7 +197,7 @@ public sealed class NetworkGoMatchController : IGoMatchController
         GridPoint? point = packet.Column == -1 ? null : new GridPoint(packet.Column, packet.Row);
         var result = LocalGoMatchController.Apply(_game, (GoActionKind)packet.ActionKind, point, remote);
         if (!result.IsSuccess) { Message?.Invoke($"房主拒绝远端操作：{result.Rejection}。"); return; }
-        Changed?.Invoke(); _ = Broadcast();
+        if(_game.Phase!=GoPhase.Finished)_clock.BeginTurn((int)_game.SideToMove);else _clock.IsRunning=false;Changed?.Invoke(); _ = Broadcast();
     }
     private void ReceiveState(Packet packet)
     {
@@ -194,16 +214,21 @@ public sealed class NetworkGoMatchController : IGoMatchController
             if (_game is not null)
             {
                 if (candidate.Snapshot.ActionNumber == _game.Snapshot.ActionNumber)
-                { if (!candidate.Actions.SequenceEqual(_game.Actions)) throw new InvalidDataException(); return; }
+                { if (!candidate.Actions.SequenceEqual(_game.Actions)) throw new InvalidDataException();
+                  if(packet.TimeoutSeat is 0 or 1)candidate.DeclareTimeout((GoStone)packet.TimeoutSeat.Value);
+                  if(packet.Clock is not null)_clock.Apply(new(packet.Clock.First,packet.Clock.Second,packet.Clock.Move,packet.Clock.Active));
+                  _game=candidate;_clock.IsRunning=candidate.Phase!=GoPhase.Finished;Changed?.Invoke();return; }
                 if (candidate.Snapshot.ActionNumber != _game.Snapshot.ActionNumber + 1) throw new InvalidDataException();
             }
-            _game = candidate; Changed?.Invoke();
+            if(packet.TimeoutSeat is 0 or 1)candidate.DeclareTimeout((GoStone)packet.TimeoutSeat.Value);
+            if(packet.Clock is not null)_clock.Apply(new(packet.Clock.First,packet.Clock.Second,packet.Clock.Move,packet.Clock.Active));
+            _game = candidate;_clock.IsRunning=candidate.Phase!=GoPhase.Finished; Changed?.Invoke();
         }
         catch (Exception exception) when (exception is JsonException or InvalidDataException or ArgumentException or FormatException)
         { Message?.Invoke("房主围棋状态无法通过重放验证。"); }
     }
-    private ValueTask Broadcast(CancellationToken cancellationToken = default) =>
-        Send(new(Protocol, "state", Snapshot.ActionNumber, 0, 0, 0, EncodeActions(_game!.Actions), null), cancellationToken);
+    private ValueTask Broadcast(CancellationToken cancellationToken = default){var c=_clock.Snapshot;int? loser=Snapshot.EndReason==GoEndReason.Timeout?Snapshot.Winner==GoStone.Black?1:0:null;return
+        Send(new(Protocol, "state", Snapshot.ActionNumber, 0, 0, 0, EncodeActions(_game!.Actions), null,TimeControl.GameSeconds,TimeControl.MoveSeconds,new(c.FirstGameSeconds,c.SecondGameSeconds,c.MoveSeconds,c.ActiveSeat),loser), cancellationToken);}
     private static string EncodeActions(IReadOnlyList<GoAction> actions)
     {
         var bytes = new byte[actions.Count * 4];
@@ -239,5 +264,7 @@ public sealed class NetworkGoMatchController : IGoMatchController
     }
     private static GoStone Opponent(GoStone color) => color == GoStone.Black ? GoStone.White : GoStone.Black;
     private sealed record Packet(int Version, string Kind, long Sequence, int ActionKind,
-        int Column, int Row, string? Data, string? Reserved);
+        int Column, int Row, string? Data, string? Reserved,int GameSeconds=0,int MoveSeconds=0,
+        SeatClockDto? Clock=null,int? TimeoutSeat=null);
+    private sealed record SeatClockDto(double First,double Second,double Move,int Active);
 }

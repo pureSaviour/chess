@@ -12,7 +12,7 @@ public partial class Main
     private void ShowGoGallery(ClassicGalleryEntry entry) => SwitchTo(new GoGalleryScreen(
         ShowGallery, StartGoLocal, StartGoLanHost, StartGoLanClient, StartGoSteamInvite, entry));
     private void StartGoLocal(GoRoomOptions options) => SwitchTo(new GoGameScreen(
-        new LocalGoMatchController(), "本地对决", ShowGallery, profiles: CreateOfflineProfiles("本地玩家 2")));
+        new LocalGoMatchController(options.TimeControl), "本地对决", ShowGallery, profiles: CreateOfflineProfiles("本地玩家 2")));
     private void StartGoLanHost(int port, GoRoomOptions options)
     {
         try
@@ -34,7 +34,7 @@ public partial class Main
         catch (Exception error) { ShowError(error.Message); }
     }
     private void StartGoSteamInvite(GoRoomOptions options) => StartSteamInvite(new NetworkMatchConfiguration(
-        TimeControl.Unlimited, options.HostColor == GoStone.Black ? PieceSide.Red : PieceSide.Black,
+        options.TimeControl, options.HostColor == GoStone.Black ? PieceSide.Red : PieceSide.Black,
         TwoPlayerGameMode.Go, GoGame.StandardBoardSize, 0));
     private void ShowGoRecords(bool saved) => SwitchTo(new GoRecordScreen(saved, ShowGallery,
         record => SwitchTo(new GoReplayScreen(record, () => ShowGoRecords(saved)))));

@@ -13,6 +13,7 @@ internal static class GoTests
         ("围棋数子将无归属空点双方均分", NeutralPointsAreShared),
         ("围棋手动数目估算隔离权威局面并按整块标死", ManualScorePreviewIsIsolated),
         ("围棋认输立即结束并指定对手获胜", Resignation),
+        ("围棋超时结果使用 SGF T 结果往返", TimeoutSgf),
         ("围棋 SGF GM[1] 往返虚着死子与结果", SgfRoundTrip),
         ("围棋 SGF 拒绝错误棋种尺寸与非法主线", SgfRejectsInvalid),
         ("围棋联机房主配置与语义操作可同步", NetworkRoundTrip),
@@ -75,6 +76,7 @@ internal static class GoTests
         Equal(GoStone.White, game.Winner);
         Equal(GoEndReason.Resignation, game.EndReason);
     }
+    private static void TimeoutSgf(){var game=new GoGame();True(game.DeclareTimeout(GoStone.Black));var text=GoSgfCodec.Write(GoGameRecord.FromGame(game));True(text.Contains("RE[W+T]"));True(GoSgfCodec.TryParse(text,out var record,out _));Equal(GoEndReason.Timeout,record!.Replay().Snapshot.EndReason);}
 
     private static void NeutralPointsAreShared()
     {
@@ -143,6 +145,9 @@ internal static class GoTests
         Equal(1L, client.Snapshot.ActionNumber);
         True(client.SubmitAsync(GoActionKind.Pass).AsTask().GetAwaiter().GetResult().Accepted);
         Equal(2L, host.Snapshot.ActionNumber); Equal(2L, client.Snapshot.ActionNumber);
+        True(host.SubmitAsync(GoActionKind.Resign).AsTask().GetAwaiter().GetResult().Accepted);
+        host.RequestRematchAsync().AsTask().GetAwaiter().GetResult();client.RequestRematchAsync().AsTask().GetAwaiter().GetResult();
+        Equal(GoStone.White,host.LocalColor);Equal(GoStone.Black,client.LocalColor);Equal(GoPhase.Playing,client.Snapshot.Phase);
         host.DisposeAsync().AsTask().GetAwaiter().GetResult();
         client.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }

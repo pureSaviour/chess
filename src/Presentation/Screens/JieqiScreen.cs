@@ -23,6 +23,7 @@ public partial class JieqiGameScreen : Control
     private readonly BoardView _board;
     private readonly Label _status = new();
     private readonly Button _save;
+    private readonly Button _rematch;
     private readonly GameplayAudioPlayer _audio = new();
     private readonly TwoPlayerProfileRow _topPlayer = new(false);
     private readonly TwoPlayerProfileRow _bottomPlayer = new(true);
@@ -68,6 +69,7 @@ public partial class JieqiGameScreen : Control
         var header = new HBoxContainer(); root.AddChild(header);
         var title = UiStyle.CreateTitle("揭棋", 30); title.SizeFlagsHorizontal = SizeFlags.ExpandFill; header.AddChild(title);
         _status.VerticalAlignment = VerticalAlignment.Center; header.AddChild(_status);
+        _rematch=UiStyle.CreateButton("再来一局");_rematch.Visible=_controller is IRematchableMatchController;_rematch.Pressed+=RequestRematch;header.AddChild(_rematch);
         var settingsButton = UiStyle.CreateButton("设置"); header.AddChild(settingsButton);
         var settingsDialog = new InGameSettingsDialog(themes); AddChild(settingsDialog);
         settingsButton.Pressed += () => settingsDialog.PopupFor(settings, "房间信息", roomTitle,
@@ -156,9 +158,11 @@ public partial class JieqiGameScreen : Control
     }
 
     private void OnMessage(string message) => _status.Text = message;
+    private async void RequestRematch(){if(_controller is not IRematchableMatchController value)return;try{await value.RequestRematchAsync();Render(_controller.Snapshot);}catch(Exception error){OnMessage(error.Message);}}
     private void OnMoveAnimationFinished(bool captured) => _audio.PlayLanding(captured);
     private void Render(GameSnapshot snapshot)
     {
+        if(!snapshot.IsFinished&&_recentSaved){_recentSaved=false;_save.Disabled=true;_save.Text="保存棋局";}
         UpdateClocks();
         _board.BottomSide = _controller.LocalSide ?? PieceSide.Red;
         if (!_board.IsAnimating) _board.SetPosition(snapshot, _selected, _legal);
@@ -166,6 +170,7 @@ public partial class JieqiGameScreen : Control
             : snapshot.IsFinished ? snapshot.Winner == PieceSide.Red ? "红方胜" : "黑方胜"
             : $"{(snapshot.SideToMove == PieceSide.Red ? "红方" : "黑方")}行棋" +
               (_controller.LocalSide is { } local ? $" · 你是{(local == PieceSide.Red ? "红方" : "黑方")}" : "");
+        if(_controller is IRematchableMatchController rematch){_rematch.Disabled=!rematch.CanRequestRematch;_rematch.Text=rematch.Rematch.LocalReady?"等待对手同意":"再来一局";}
         if (!snapshot.IsFinished) return;
         _save.Disabled = false;
         if (_recentSaved) return;

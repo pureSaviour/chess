@@ -54,7 +54,7 @@ public partial class Main
             new("xiangqi.jieqi"), new Version(1, 0), "揭棋", "暗子初行 · 揭开玄机",
             "res://assets/gallery/jieqi-card.png", common, 200),
         [
-            Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => StartJieqiLocal(TimeControl.Unlimited)),
+            Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => ShowJieqiGallery(ClassicGalleryEntry.Local)),
             Entry(Route("lan", "联机模式", "局域网联机", GameModuleCapabilities.LanPlay, 1), () => ShowJieqiGallery(ClassicGalleryEntry.Lan)),
             Entry(Route("steam", "联机模式", "Steam 邀请好友", GameModuleCapabilities.SteamPlay, 2), () => ShowJieqiGallery(ClassicGalleryEntry.Steam)),
             Entry(Route("recent", "对局记录", "最近对局", GameModuleCapabilities.RecentRecords, 0), () => ShowJieqiRecords(false)),
@@ -65,7 +65,7 @@ public partial class Main
             new("junqi.standard"), new Version(1, 0), "军旗", "铁路纵横 · 夺旗制胜",
             "res://assets/gallery/junqi-card.svg", common, 300),
         [
-            Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), StartJunqiLocal),
+            Entry(Route("local", "联机模式", "本地联机", GameModuleCapabilities.LocalPlay, 0), () => ShowJunqiGallery(ClassicGalleryEntry.Local)),
             Entry(Route("lan", "联机模式", "局域网联机", GameModuleCapabilities.LanPlay, 1), () => ShowJunqiGallery(ClassicGalleryEntry.Lan)),
             Entry(Route("steam", "联机模式", "Steam 邀请好友", GameModuleCapabilities.SteamPlay, 2), () => ShowJunqiGallery(ClassicGalleryEntry.Steam)),
             Entry(Route("recent", "对局记录", "最近对局", GameModuleCapabilities.RecentRecords, 0), () => ShowJunqiRecords(false)),

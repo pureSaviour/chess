@@ -10,7 +10,7 @@ public readonly record struct ChatCommand(RoomChatEntry Entry);
 public readonly record struct PlayerProfileCommand(
     string PlayerId, string DisplayName, int AvatarWidth, int AvatarHeight, byte[] AvatarRgba);
 
-public enum MatchOfferKind : byte { Undo = 1, Draw = 2 }
+public enum MatchOfferKind : byte { Undo = 1, Draw = 2, Rematch = 3 }
 
 public readonly record struct MatchOfferRequest(long RequestId, long PlyNumber, MatchOfferKind Kind);
 public readonly record struct MatchOfferResponse(
@@ -99,7 +99,7 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
     public event Action<MatchOfferRequest>? MatchOfferReceived;
     public event Action<MatchOfferResolution>? MatchOfferResolved;
     public event Action<bool>? MatchOfferPendingChanged;
-    public PieceSide LocalSide { get; }
+    public PieceSide LocalSide { get; private set; }
     /// <summary>Bounded message board shared with three-player rooms; transport IDs never become display names.</summary>
     public RoomChatManager Chat { get; }
     public bool HasPendingOffer => _outgoingOffer is not null || _incomingOffer is not null;
@@ -152,7 +152,8 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
     public async ValueTask RequestMatchOfferAsync(
         MatchOfferKind kind, CancellationToken cancellationToken = default)
     {
-        if (!_transport.IsConnected || _session.Snapshot.IsFinished)
+        if (!Enum.IsDefined(kind) || !_transport.IsConnected ||
+            (kind == MatchOfferKind.Rematch ? !_session.Snapshot.IsFinished : _session.Snapshot.IsFinished))
             throw new InvalidOperationException("当前不能发起对局申请。");
         if (HasPendingOffer) throw new InvalidOperationException("已有一项申请正在等待处理。");
         if (kind == MatchOfferKind.Undo && !CanRequestLocalUndo)
@@ -180,7 +181,7 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
             throw new InvalidOperationException("该申请已失效。");
 
         var canApply = request.PlyNumber == _session.Snapshot.PlyNumber &&
-                       !_session.Snapshot.IsFinished &&
+                       (request.Kind == MatchOfferKind.Rematch ? _session.Snapshot.IsFinished : !_session.Snapshot.IsFinished) &&
                        (request.Kind != MatchOfferKind.Undo ||
                         (_session.CanUndo && _session.Snapshot.SideToMove == LocalSide));
         var finalAccepted = accepted && canApply;
@@ -252,7 +253,8 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
 
     private void OnMatchOfferReceived(MatchOfferRequest request)
     {
-        var valid = !HasPendingOffer && !_session.Snapshot.IsFinished &&
+        var valid = !HasPendingOffer &&
+                    (request.Kind == MatchOfferKind.Rematch ? _session.Snapshot.IsFinished : !_session.Snapshot.IsFinished) &&
                     request.PlyNumber == _session.Snapshot.PlyNumber &&
                     (request.Kind != MatchOfferKind.Undo ||
                      (_session.CanUndo && _session.Snapshot.SideToMove == LocalSide));
@@ -304,8 +306,17 @@ public sealed class NetworkGameCoordinator : IAsyncDisposable
     {
         MatchOfferKind.Undo => _session.Undo(),
         MatchOfferKind.Draw => _session.DeclareDraw(),
+        MatchOfferKind.Rematch => BeginRematch(),
         _ => false
     };
+
+    private bool BeginRematch()
+    {
+        if (!_session.Snapshot.IsFinished) return false;
+        LocalSide = LocalSide.Opponent();
+        _session.NewGame();
+        return true;
+    }
 
     private void OnTimeoutReceived(TimeoutCommand command)
     {

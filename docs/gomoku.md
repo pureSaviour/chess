@@ -15,7 +15,7 @@
 
 `GomokuGame` 拥有占位、轮次、历史和终局；`TryPlace` 是唯一写入口，越界、重叠、错误行棋方和禁手均不修改局面。`GomokuSnapshot` 是展示快照，UI 不得反向修改权威聚合。
 
-`IGomokuMatchController` 是 UI 的实际注入边界。本地实现使用同一聚合；联机实现复用 `ITwoPlayerPacketTransport`，但使用独立 v1、16000 字节上限的房主权威协议。房主 hello 发布尺寸、禁手和席位；客户落子携带预期手数；房主发布主线，客户端逐手重放后才接受。未知版本、越界、错误角色、陈旧手数和畸形 JSON 失败关闭。这是可信 P2P 房主模型，尚无断线续局或中立裁判。所有实现还提供 `InitializeAsync` 和 `Poll`：本地/网络为空操作，AI 用前者探测引擎、用后者在 UI 主线程提交后台结果。
+`IGomokuMatchController` 是 UI 的实际注入边界。本地实现使用同一聚合；联机实现复用 `ITwoPlayerPacketTransport`，但使用独立 v1、16000 字节上限的房主权威协议。房主 hello 发布尺寸、禁手、席位和局时/步时；客户落子携带预期手数；房主发布主线与权威棋钟，客户端逐手重放后才接受。超时由应用控制器调用领域 `DeclareTimeout`，不伪造落子。未知版本、越界、错误角色、陈旧手数和畸形 JSON 失败关闭。这是可信 P2P 房主模型，尚无断线续局或中立裁判。终局不会释放 transport；双方对同一轮次均点击“再来一局”后新建棋局、重置棋钟并交换黑白，迟到轮次被拒绝。所有实现还提供 `InitializeAsync` 和 `Poll`：AI 用前者探测引擎、用后者在 UI 主线程提交后台结果。
 
 事件在 transport 驱动线程同步发布；Godot 适配器在主线程泵入。AI 后台任务不发布 UI 事件，而是写入有界于“每次一个搜索”的完成队列，`GomokuGameScreen._Process` 调用 `Poll` 后才复验和发布。联网房间通过共享 `RawTwoPlayerRoomChat`/`TwoPlayerChatPanel` 发送有界消息，接收者固定为唯一对手且不显示目标选择；聊天不进入五子棋权威主线。Screen 拥有 controller，退出时先解绑聊天/资料事件再幂等释放；controller 再释放 transport 或 AI 引擎。`GomokuBoardView` 只绘制、命中和播放落子动画；它占用左侧全部可用空间，双方昵称与无底色圆角头像位于右侧栏，联网聊天处于两张玩家卡之间，因此玩家卡不压缩棋盘高度。LAN 地址等房间信息移入局内设置。棋盘可按局内开关用棋子对比色显示仍在盘面上的落子手数。初始摆放子没有手数，手数显示也不进入棋谱或网络协议。
 
