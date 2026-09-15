@@ -12,10 +12,14 @@ namespace Xiangqi.Presentation.Boards;
 public partial class GoBoardView : Control
 {
     private GoSnapshot _snapshot = new GoGame().Snapshot;
+    private GoScoreEstimate? _scorePreview;
     private bool _showCoordinates = true;
     private bool _showMoveNumbers;
     public bool CoordinatesVisible => _showCoordinates;
     public bool MoveNumbersVisible => _showMoveNumbers;
+    public bool ScorePreviewVisible => _scorePreview is not null;
+    public bool HasLastMoveHighlight => _snapshot.LastAction is { Kind: GoActionKind.Place, Point: { } point } &&
+        _snapshot.Stones.Any(stone => stone.Point == point);
     public event Action<GridPoint>? PointPressed;
     public GoBoardView()
     {
@@ -25,6 +29,7 @@ public partial class GoBoardView : Control
         MouseDefaultCursorShape = CursorShape.PointingHand;
     }
     public void SetPosition(GoSnapshot snapshot) { _snapshot = snapshot; QueueRedraw(); }
+    public void SetScorePreview(GoScoreEstimate? estimate) { _scorePreview = estimate; QueueRedraw(); }
     public void SetCoordinatesVisible(bool visible) { _showCoordinates = visible; QueueRedraw(); }
     public void SetMoveNumbersVisible(bool visible) { _showMoveNumbers = visible; QueueRedraw(); }
 
@@ -65,11 +70,20 @@ public partial class GoBoardView : Control
             DrawCircle(origin + new Vector2(x, y) * spacing, Math.Max(2.5f, spacing * .075f), line);
         if (_showCoordinates) DrawCoordinates(origin, spacing, extent);
 
+        if (_scorePreview is { } preview)
+        {
+            foreach (var point in preview.BlackTerritory)
+                DrawTerritoryMarker(origin + new Vector2(point.Column, point.Row) * spacing, spacing, GoStone.Black);
+            foreach (var point in preview.WhiteTerritory)
+                DrawTerritoryMarker(origin + new Vector2(point.Column, point.Row) * spacing, spacing, GoStone.White);
+        }
+
         foreach (var stone in _snapshot.Stones)
         {
             var center = origin + new Vector2(stone.Point.Column, stone.Point.Row) * spacing;
             var radius = spacing * .44f;
-            var dead = _snapshot.DeadStones.Contains(stone.Point);
+            var previewDead = _scorePreview?.MarkedDeadStones.Contains(stone.Point) == true;
+            var dead = _snapshot.DeadStones.Contains(stone.Point) || previewDead;
             DrawCircle(center + new Vector2(1.5f, 2.1f), radius, new Color(0, 0, 0, .28f));
             var fill = stone.Color == GoStone.Black ? new Color("#171717") : new Color("#F5F1E8");
             if (dead) fill = new Color(fill, .42f);
@@ -78,18 +92,30 @@ public partial class GoBoardView : Control
                 stone.Color == GoStone.Black ? new Color("#585858") : new Color("#99938A"), 1.15f);
             if (dead)
             {
-                var mark = new Color("#B3312D");
+                var mark = previewDead ? new Color("#F0A83A") : new Color("#B3312D");
                 DrawLine(center - Vector2.One * radius * .55f, center + Vector2.One * radius * .55f, mark, 2.5f);
                 DrawLine(center + new Vector2(-1, 1) * radius * .55f, center + new Vector2(1, -1) * radius * .55f, mark, 2.5f);
             }
             var last = _snapshot.LastAction is { Kind: GoActionKind.Place, Point: { } lastPoint } && lastPoint == stone.Point;
+            if (last)
+            {
+                var highlight = stone.Color == GoStone.Black ? new Color("#F4CF5D") : new Color("#B72F27");
+                DrawArc(center, radius * .67f, 0, Mathf.Tau, 40, highlight, Math.Max(2.2f, spacing * .085f), true);
+            }
             if (_showMoveNumbers)
                 StoneMoveNumberPainter.Draw(this, center, radius, stone.MoveNumber,
                     last ? stone.Color == GoStone.Black ? new Color("#E4C067") : new Color("#A7382D")
                          : stone.Color == GoStone.Black ? new Color("#F5F1E8") : new Color("#28231E"));
-            else if (last)
-                DrawCircle(center, Math.Max(2.1f, spacing * .07f), stone.Color == GoStone.Black ? new Color("#E4C067") : new Color("#A7382D"));
         }
+    }
+
+    private void DrawTerritoryMarker(Vector2 center, float spacing, GoStone owner)
+    {
+        var half = spacing * .15f;
+        var fill = owner == GoStone.Black ? new Color(0.07f, 0.07f, 0.07f, .72f) : new Color(1, 1, 1, .82f);
+        DrawRect(new Rect2(center - Vector2.One * half, Vector2.One * half * 2), fill, true);
+        DrawRect(new Rect2(center - Vector2.One * half, Vector2.One * half * 2), new Color(0.2f, 0.13f, 0.07f, .78f), false,
+            Math.Max(1f, spacing * .025f));
     }
 
     private void DrawCoordinates(Vector2 origin, float spacing, float extent)

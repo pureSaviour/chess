@@ -703,7 +703,7 @@ public partial class Main : Control
             await goController.SubmitAsync(GoActionKind.Place, new GridPoint(9, 10));
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not GoGameScreen go || !go.AreCoordinatesVisible ||
-                go.BoardAreaSize.X < 700 || go.AreMoveNumbersVisible)
+                go.BoardAreaSize.X < 700 || go.AreMoveNumbersVisible || !go.HasLastMoveHighlight)
                 throw new InvalidOperationException("Go local screen or coordinate labels failed to instantiate.");
             go.SetCoordinateLabelsForSmoke(false);
             go.SetMoveNumbersForSmoke(true);
@@ -711,11 +711,23 @@ public partial class Main : Control
                 throw new InvalidOperationException("Go in-game coordinate setting did not update the board projection.");
             if (!go.AreMoveNumbersVisible)
                 throw new InvalidOperationException("Go in-game move-number setting did not update the board projection.");
+            go.ToggleScorePreviewForSmoke();
+            if (!go.IsScorePreviewActive || !go.ScorePreviewText.Contains("非正式") ||
+                !go.TogglePreviewDeadForSmoke(new GridPoint(9, 9)))
+                throw new InvalidOperationException("Go manual score preview did not enter or toggle a dead chain.");
             await ToSignal(GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
+            await goController.SubmitAsync(GoActionKind.Place, new GridPoint(10, 9));
+            await ToSignal(GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
+            if (go.IsScorePreviewActive || !go.ScorePreviewText.Contains("自动关闭") || !go.HasLastMoveHighlight)
+                throw new InvalidOperationException("Go score preview stayed stale after an authoritative move.");
             StartGoLanHost(EnetMatchTransport.DefaultPort + 2, new GoRoomOptions(GoStone.Black));
             await ToSignal(GetTree().CreateTimer(0.2), SceneTreeTimer.SignalName.Timeout);
-            if (_currentScreen is not GoGameScreen { IsChatFullyVisible: true })
+            if (_currentScreen is not GoGameScreen { IsChatFullyVisible: true } lanGo)
                 throw new InvalidOperationException($"Go LAN chat panel is outside the viewport: {(_currentScreen as GoGameScreen)?.ChatBounds ?? "screen missing"}.");
+            lanGo.ToggleScorePreviewForSmoke();
+            await ToSignal(GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
+            if (!lanGo.IsScorePreviewActive || !lanGo.IsChatFullyVisible)
+                throw new InvalidOperationException($"Go score preview obscured LAN chat: {lanGo.ChatBounds}.");
             StartJunqiLocal();
             await ToSignal(GetTree().CreateTimer(0.15), SceneTreeTimer.SignalName.Timeout);
             if (_currentScreen is not JunqiGameScreen junqi)

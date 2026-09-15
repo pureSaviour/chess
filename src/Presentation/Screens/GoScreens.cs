@@ -68,14 +68,21 @@ public partial class GoGameScreen : Control
     private readonly Label _status = new();
     private readonly Button _pass;
     private readonly Button _confirm;
+    private readonly Button _resign;
     private readonly Button _save;
+    private readonly Button _estimateButton;
+    private readonly Label _estimateLabel = new();
     private readonly MatchPlayerProfiles? _profiles;
     private readonly RawMatchProfileExchange? _profileExchange;
     private readonly RawTwoPlayerRoomChat? _roomChat;
     private readonly TwoPlayerChatPanel? _chatPanel;
+    private GoManualScoreSession? _scorePreview;
     private bool _recent;
     public bool AreCoordinatesVisible => _board.CoordinatesVisible;
     public bool AreMoveNumbersVisible => _board.MoveNumbersVisible;
+    public bool IsScorePreviewActive => _scorePreview is not null && _board.ScorePreviewVisible;
+    public bool HasLastMoveHighlight => _board.HasLastMoveHighlight;
+    public string ScorePreviewText => _estimateLabel.Text;
     public Vector2 BoardAreaSize => _board.Size;
     public string ChatBounds => _chatPanel is null ? "missing" :
         $"panel={_chatPanel.GetGlobalRect()} viewport={GetViewportRect()} board={_board.GetGlobalRect()} screen={GetGlobalRect()}";
@@ -92,6 +99,8 @@ public partial class GoGameScreen : Control
     }
     public void SetCoordinateLabelsForSmoke(bool visible) => _board.SetCoordinatesVisible(visible);
     public void SetMoveNumbersForSmoke(bool visible) => _board.SetMoveNumbersVisible(visible);
+    public void ToggleScorePreviewForSmoke() => ToggleScorePreview();
+    public bool TogglePreviewDeadForSmoke(GridPoint point) => TogglePreviewDead(point);
 
     public GoGameScreen(IGoMatchController controller, string roomTitle, Action back, Node? driver = null,
         MatchPlayerProfiles? profiles = null)
@@ -114,13 +123,18 @@ public partial class GoGameScreen : Control
         actions.AddThemeConstantOverride("separation", 7); root.AddChild(actions);
         _pass = UiStyle.CreateButton("虚着"); _pass.Pressed += () => Submit(GoActionKind.Pass); actions.AddChild(_pass);
         _confirm = UiStyle.CreateButton("确认数子"); _confirm.Pressed += () => Submit(GoActionKind.ConfirmScore); actions.AddChild(_confirm);
-        var resign = UiStyle.CreateButton("认输"); actions.AddChild(resign);
+        _estimateButton = UiStyle.CreateButton("数目估算");
+        _estimateButton.TooltipText = "本地手动标记预计死子并查看非正式面积估算，不会改变真实对局。";
+        _estimateButton.Pressed += ToggleScorePreview; actions.AddChild(_estimateButton);
+        _resign = UiStyle.CreateButton("认输"); actions.AddChild(_resign);
         var resignDialog = new ConfirmationDialog { Title = "认输", DialogText = "确定认输并结束本局围棋吗？",
             OkButtonText = "确认认输", CancelButtonText = "取消" };
-        AddChild(resignDialog); resign.Pressed += () => resignDialog.PopupCentered();
+        AddChild(resignDialog); _resign.Pressed += () => resignDialog.PopupCentered();
         resignDialog.Confirmed += () => Submit(GoActionKind.Resign);
         _save = UiStyle.CreateButton("保存棋谱"); _save.Disabled = true; _save.Pressed += Save; actions.AddChild(_save);
         var settings = UiStyle.CreateButton("局内设置"); actions.AddChild(settings);
+        foreach (var actionButton in new[] { _pass, _confirm, _estimateButton, _resign, _save, settings })
+            actionButton.CustomMinimumSize = new(140, 48);
         var settingsDialog = new AcceptDialog { Title = "围棋 · 局内设置", OkButtonText = "完成", MinSize = new(520, 220) }; AddChild(settingsDialog);
         var settingsMargin = new MarginContainer();
         foreach (var key in new[] { "margin_left", "margin_right", "margin_top", "margin_bottom" })
@@ -140,7 +154,11 @@ public partial class GoGameScreen : Control
             _chatPanel = new TwoPlayerChatPanel(_roomChat, () => _controller.LocalColor is { } color ? (int)color : null);
             body.AddChild(_chatPanel);
         }
-        var hint = new Label { Text = "SGF FF[4] / GM[1] · 行棋时点击落子；数子时点击整块棋标记或取消死子",
+        _estimateLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        _estimateLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _estimateLabel.Visible = false;
+        UiStyle.SetMuted(_estimateLabel, 13); root.AddChild(_estimateLabel);
+        var hint = new Label { Text = "SGF FF[4] / GM[1] · 数目估算仅修改本地临时标记，不会改变对局",
             HorizontalAlignment = HorizontalAlignment.Center };
         UiStyle.SetMuted(hint, 13); root.AddChild(hint);
         _board.PointPressed += OnPoint; _controller.Changed += OnChanged; _controller.Message += OnMessage;
@@ -152,6 +170,11 @@ public partial class GoGameScreen : Control
     public override void _Process(double delta) => _controller.Poll();
     private void OnPoint(GridPoint point)
     {
+        if (_scorePreview is not null)
+        {
+            if (!TogglePreviewDead(point)) OnMessage("数目估算时请点击棋子，空点不会改变标记。");
+            return;
+        }
         if (!_controller.CanAct) return;
         Submit(_controller.Snapshot.Phase == GoPhase.Scoring ? GoActionKind.MarkDead : GoActionKind.Place, point);
     }
@@ -164,9 +187,21 @@ public partial class GoGameScreen : Control
     private void OnChanged() => Render();
     private void Render()
     {
-        var snapshot = _controller.Snapshot; _board.SetPosition(snapshot);
-        _pass.Disabled = !_controller.CanAct || snapshot.Phase != GoPhase.Playing;
-        _confirm.Disabled = !_controller.CanAct || snapshot.Phase != GoPhase.Scoring;
+        var snapshot = _controller.Snapshot;
+        if (_scorePreview is not null && _scorePreview.SourceActionNumber != snapshot.ActionNumber)
+        {
+            _scorePreview = null;
+            _estimateButton.Text = "数目估算";
+            _estimateLabel.Text = "局面已经变化，旧的数目估算已自动关闭。";
+            _estimateLabel.Visible = true;
+            _board.SetScorePreview(null);
+        }
+        _board.SetPosition(snapshot);
+        var estimating = _scorePreview is not null;
+        _pass.Disabled = estimating || !_controller.CanAct || snapshot.Phase != GoPhase.Playing;
+        _confirm.Disabled = estimating || !_controller.CanAct || snapshot.Phase != GoPhase.Scoring;
+        _resign.Disabled = estimating || !_controller.CanAct;
+        _estimateButton.Disabled = !_controller.IsReady;
         _status.Text = !_controller.IsConnected ? "等待联机连接" : !_controller.IsReady ? "等待房主配置" :
             snapshot.Phase == GoPhase.Finished ? ResultText(snapshot) :
             snapshot.Phase == GoPhase.Scoring ? $"数子 · {StoneName(snapshot.SideToMove)}确认 · 已确认 {snapshot.ScoreConfirmations.Count}/2" :
@@ -177,6 +212,40 @@ public partial class GoGameScreen : Control
         _recent = true;
         try { GoRecordStore.SaveRecent(_controller.CreateRecord(), BuildPresentation(snapshot)); }
         catch (Exception error) { GD.PushWarning(error.Message); }
+    }
+    private void ToggleScorePreview()
+    {
+        if (_scorePreview is null)
+        {
+            _scorePreview = new GoManualScoreSession(_controller.Snapshot);
+            _estimateButton.Text = "结束估算";
+            RefreshScorePreview();
+        }
+        else
+        {
+            _scorePreview = null;
+            _estimateButton.Text = "数目估算";
+            _estimateLabel.Visible = false;
+            _board.SetScorePreview(null);
+        }
+        Render();
+    }
+    private bool TogglePreviewDead(GridPoint point)
+    {
+        if (_scorePreview is null || !_scorePreview.TryToggleDeadGroup(point)) return false;
+        RefreshScorePreview();
+        return true;
+    }
+    private void RefreshScorePreview()
+    {
+        if (_scorePreview is null) return;
+        var estimate = _scorePreview.Estimate;
+        _board.SetScorePreview(estimate);
+        var lead = estimate.Score.Winner is { } winner
+            ? $"{StoneName(winner)}暂时领先 {estimate.Score.Margin:0.0} 目"
+            : "暂时持平";
+        _estimateLabel.Text = $"非正式手动估算 · 黑 {estimate.Score.Black:0.0} / 白 {estimate.Score.White:0.0}（含贴目 {estimate.Score.Komi:0.0}）· {lead} · 点击棋链切换死子";
+        _estimateLabel.Visible = true;
     }
     private static string ResultText(GoSnapshot snapshot) => snapshot.EndReason == GoEndReason.Resignation
         ? $"{StoneName(snapshot.Winner!.Value)}胜 · 认输"

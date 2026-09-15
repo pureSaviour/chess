@@ -137,6 +137,8 @@ GameSession 是具体门面而非接口，其私有 ChessGame 防止 UI 直接�
 
 `IGoMatchController` 发布不可变 `GoSnapshot`，接受落子、虚着、整块死子标记、确认数子和认输等语义动作。`LocalGoMatchController.Apply` 只路由到 `GoGame`，不增加权限；网络实现以本地执色、期望操作序号和房主身份再次鉴权。房主广播至多 4096 项的操作日志，客户端从空局逐条重放后才替换快照。Screen 持有控制器、聊天和资料交换，退出时先解绑适配器，再由控制器幂等释放 transport。完整规则、错误和限制见 [围棋玩法](go.md)。
 
+`GoManualScoreSession` 是纯托管、线程内使用的非权威分析副本。构造输入必须是标准 19 路且棋子/死子标记一致的 `GoSnapshot`，类型会复制占位和已有死子标记；非法快照抛 `ArgumentException`。`TryToggleDeadGroup` 只切换副本中的整条同色棋链，空点或越界返回 false 且不改变结果。`Estimate` 输出黑白区域、中立点、临时死子及复用正式中国规则面积算法得到的含贴目比分；它不提交控制器动作、不改计时/协议/SGF，也不推断棋块生死。Screen 是唯一消费者和所有者，在主线程操作；无需释放，权威 `ActionNumber` 改变时立即丢弃实例。联机双方各自私有估算，当前没有共享提案协议。核心测试覆盖整块切换、空点拒绝、比分复用、权威状态隔离和畸形快照；Godot smoke 覆盖实际注入、覆盖层及最新一手提示。
+
 ## 7. 跨玩法房管消息板：RoomChatManager
 
 定义：[RoomChat.cs](../src/Xiangqi.Core/Application/RoomChat.cs)。RoomChatManager 是纯 C#、有界、进程内的消息板；经典 NetworkGameCoordinator、三国 IThreeMatchController，以及揭棋/军旗/五子棋/围棋的双人房适配器都实际使用同一契约。它不拥有 transport、文件、线程或 Godot 节点，也不负责平台认证、加密或决定谁是游戏权威。

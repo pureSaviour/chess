@@ -182,31 +182,7 @@ public sealed class GoGame
     }
 
     public GoScore CalculateScore()
-    {
-        var effective = _stones.Where(x => !_dead.Contains(x.Key)).ToDictionary(x => x.Key, x => x.Value);
-        double black = effective.Count(x => x.Value == GoStone.Black);
-        double white = effective.Count(x => x.Value == GoStone.White) + StandardKomi;
-        var visited = new HashSet<GridPoint>();
-        for (var row = 0; row < StandardBoardSize; row++)
-        for (var column = 0; column < StandardBoardSize; column++)
-        {
-            var start = new GridPoint(column, row);
-            if (effective.ContainsKey(start) || !visited.Add(start)) continue;
-            var area = new List<GridPoint> { start };
-            var border = new HashSet<GoStone>();
-            var queue = new Queue<GridPoint>(); queue.Enqueue(start);
-            while (queue.TryDequeue(out var current))
-            foreach (var neighbor in Neighbors(current))
-            {
-                if (effective.TryGetValue(neighbor, out var stone)) border.Add(stone);
-                else if (visited.Add(neighbor)) { area.Add(neighbor); queue.Enqueue(neighbor); }
-            }
-            if (border.SetEquals([GoStone.Black])) black += area.Count;
-            else if (border.SetEquals([GoStone.White])) white += area.Count;
-            else { black += area.Count / 2d; white += area.Count / 2d; }
-        }
-        return new(black, white, StandardKomi);
-    }
+        => GoAreaScoreCalculator.Calculate(StandardBoardSize, _stones, _dead, StandardKomi).Score;
 
     private GoRejection CommonRejection(GoAction action, GoPhase required) =>
         Phase == GoPhase.Finished ? GoRejection.Finished :

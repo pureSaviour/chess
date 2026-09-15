@@ -11,6 +11,7 @@ internal static class GoTests
         ("围棋禁止全局同形立即回提", PositionalSuperko),
         ("围棋双虚后标记死子并双方确认数子", PassAndAreaScoring),
         ("围棋数子将无归属空点双方均分", NeutralPointsAreShared),
+        ("围棋手动数目估算隔离权威局面并按整块标死", ManualScorePreviewIsIsolated),
         ("围棋认输立即结束并指定对手获胜", Resignation),
         ("围棋 SGF GM[1] 往返虚着死子与结果", SgfRoundTrip),
         ("围棋 SGF 拒绝错误棋种尺寸与非法主线", SgfRejectsInvalid),
@@ -81,6 +82,31 @@ internal static class GoTests
         Success(game.ConfirmScore()); Success(game.ConfirmScore());
         Equal(180.5d, game.Score!.Value.Black); Equal(188d, game.Score.Value.White);
         Equal(GoStone.White, game.Winner);
+    }
+
+    private static void ManualScorePreviewIsIsolated()
+    {
+        var game = new GoGame();
+        Success(game.Place(new(0, 0))); Success(game.Place(new(18, 18))); Success(game.Place(new(1, 0)));
+        var authoritative = game.Snapshot;
+        var preview = new GoManualScoreSession(authoritative);
+        Equal(authoritative.ActionNumber, preview.SourceActionNumber);
+        Equal(game.CalculateScore(), preview.Estimate.Score);
+        False(preview.TryToggleDeadGroup(new(5, 5)));
+        True(preview.TryToggleDeadGroup(new(0, 0)));
+        Equal(2, preview.Estimate.MarkedDeadStones.Count);
+        True(preview.Estimate.MarkedDeadStones.Contains(new(1, 0)));
+        Equal(368.5d, preview.Estimate.Score.White);
+        Equal(360, preview.Estimate.WhiteTerritory.Count);
+        Equal(0, preview.Estimate.BlackTerritory.Count);
+        Equal(0, game.Snapshot.DeadStones.Count);
+        Equal(authoritative.ActionNumber, game.Snapshot.ActionNumber);
+        True(preview.TryToggleDeadGroup(new(1, 0)));
+        Equal(0, preview.Estimate.MarkedDeadStones.Count);
+        Throws<ArgumentException>(() => new GoManualScoreSession(authoritative with
+        {
+            DeadStones = new HashSet<GridPoint> { new(9, 9) }
+        }));
     }
 
     private static void SgfRoundTrip()
