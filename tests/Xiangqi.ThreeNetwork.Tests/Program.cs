@@ -9,6 +9,19 @@ using Xiangqi.Transport;
 static void Check(bool ok, string reason) { if (!ok) throw new InvalidOperationException(reason); }
 static int C(int k, int f, int r) => 45 * k + 9 * r + f;
 static ThreeCommand Move(int k) => new(ThreeCommandKind.Move, (Kingdom)k, C(k, 0, 3), C(k, 0, 4));
+var waitingTransport = new WaitingRosterTransport();
+using (var waiting = new ThreeNetworkController(waitingTransport, TimeControl.Unlimited,
+           AdvisorConquestPolicy.SharedTerritory))
+{
+    Check(waiting.PlayerNames.SequenceEqual(new[] { "等待玩家", "等待玩家", "等待玩家" }),
+        "An empty joining roster did not project three waiting seats.");
+    Check(waiting.PlayerIds.Count == 3 && waiting.PlayerIds.All(string.IsNullOrEmpty),
+        "An empty joining roster did not project three empty player IDs.");
+    waitingTransport.SetRoster([new("host", "房主"), new("joiner", "加入者")]);
+    Check(waiting.PlayerNames.SequenceEqual(new[] { "房主", "加入者", "等待玩家" }),
+        "The waiting-seat projection did not refresh after the roster arrived.");
+}
+Console.WriteLine("PASS 加入房间时空名册投影为固定三席并在握手后刷新");
 var peers = new FakeMesh();
 var controllers = peers.Ends.Select((e, i) => new ThreeNetworkController(e, new TimeControl(600, 60),
     AdvisorConquestPolicy.SharedTerritory, new PlayerProfileCommand($"id-{i}", $"棋手 {i}", 1, 1, [(byte)i, 2, 3, 255]))).ToArray();
@@ -106,4 +119,18 @@ sealed class FakeMesh
         public void Poll(double delta) { while (_queue.TryDequeue(out var m)) Received?.Invoke(m.Item1, m.Item2); }
         public void Dispose() { }
     }
+}
+
+sealed class WaitingRosterTransport : IThreeRoomTransport
+{
+    private IReadOnlyList<ThreePeer> _roster = Array.Empty<ThreePeer>();
+    public string LocalId => "joiner";
+    public IReadOnlyList<ThreePeer> Roster => _roster;
+    public IReadOnlySet<string> Connected { get; } = new HashSet<string> { "joiner" };
+    public string Status => "waiting";
+    public event Action<string, byte[]>? Received { add { } remove { } }
+    public void SetRoster(IReadOnlyList<ThreePeer> roster) => _roster = roster;
+    public void Send(string peerId, byte[] packet) { }
+    public void Poll(double delta) { }
+    public void Dispose() { }
 }

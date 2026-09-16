@@ -49,7 +49,7 @@ public sealed class ThreeNetworkController : IThreeMatchController
     private string? _fault;
     public ThreeMatchSession Session { get; private set; }
     public Kingdom? LocalKingdom => Seat(_transport.LocalId) is var i && i >= 0 ? (Kingdom)i : null;
-    private string _nameCacheKey = "";
+    private string? _nameCacheKey;
     private IReadOnlyList<string> _names = Array.Empty<string>(), _ids = Array.Empty<string>();
     public IReadOnlyList<string> PlayerNames { get { CacheNames(); return _names; } }
     public IReadOnlyList<string> PlayerIds { get { CacheNames(); return _ids; } }
@@ -58,7 +58,7 @@ public sealed class ThreeNetworkController : IThreeMatchController
     {
         var roster = _transport.Roster;
         var key = string.Join('|', roster.Select(peer => peer.Id + "\u001f" + peer.Name));
-        if (_nameCacheKey == key) return;
+        if (_nameCacheKey == key && _names.Count == 3 && _ids.Count == 3) return;
         _nameCacheKey = key;
         _names = Array.AsReadOnly(Enumerable.Range(0, 3).Select(i =>
             _profiles[i]?.DisplayName ?? (i < roster.Count ? roster[i].Name : "等待玩家")).ToArray());
@@ -215,7 +215,7 @@ public sealed class ThreeNetworkController : IThreeMatchController
         if (localSeat >= 0 && _localProfile is { } profile)
         {
             _profiles[localSeat] = profile;
-            _nameCacheKey = "";
+            _nameCacheKey = null;
             Broadcast(new(Kind: "profile", Profile: profile));
         }
         if (_started) Broadcast(Configuration());
