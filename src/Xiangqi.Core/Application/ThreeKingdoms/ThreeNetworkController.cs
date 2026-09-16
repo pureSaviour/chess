@@ -320,7 +320,7 @@ public sealed class ThreeNetworkController : IThreeMatchController
                 if (p.Profile is not { } profile || !ValidProfile(profile)) return;
                 var profileSeat = Seat(sender);
                 _profiles[profileSeat] = CopyProfile(profile);
-                _nameCacheKey = "";
+                _nameCacheKey = null;
                 Changed?.Invoke();
                 break;
             case "chat":
