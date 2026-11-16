@@ -155,6 +155,8 @@ active 目录在加入画廊前由 `GamePackageReader.InspectInstalledDirectory`
 
 目录契约使用测试 fake，不启动 Godot。最低覆盖默认顺序、陈旧/重复偏好、移动边界、重复 ID、入口重复、能力不匹配和数量上限。Godot smoke 继续验证六张卡片、38 个入口、排序后的完整性与点击路由，并实例化围棋页面与坐标开关。
 
+`--smoke-ui` 的声明式测试模块由 `Main.CreateDeclarativeUiSmokeModule` 在主线程构造；卡片通过 `GD.Load<Texture2D>` 读取已导入资源，再用 `GetImage` / `SavePngToBuffer` 生成独立 PNG 字节，兼容编辑器目录与导出的 PCK。临时 `Image` 在方法退出时释放，资源缓存中的纹理不由测试夹具释放；加载或编码失败使 smoke 失败。不要用 `File.ReadAllBytes(ProjectSettings.GlobalizePath("res://..."))` 读取已导入图片，导出后源图片未必是磁盘文件。回归需同时运行编辑器版和实际 Windows Debug 导出程序的 `--smoke-ui`，不能靠把源 PNG 额外复制到导出目录通过测试。
+
 包层测试已覆盖正常扫描和安装、确认哈希变化、重复版本、载荷哈希/签名失败、越目录路径及纯资源代码扩展名。更新测试覆盖索引签名/篡改、语义版本筛选、官方固定指纹策略、HTTP Range 续传后的整包复验，以及 pending→active→rollback 的启动状态转换与持久化。声明式运行时测试覆盖安装目录复验、合法/重复/越界落子、胜利、终局拒绝、载荷篡改、failed 隔离、自动回滚和 schema 1 状态兼容；Godot UI smoke 物化外部卡片并实例化声明式对局页。还需补齐真实 HTTPS 服务器、Range 被代理改写、磁盘耗尽、索引密钥轮换/撤销、Android 真机图像/触控、记录浏览和权限变化 UI。真实第三方代码执行在隔离方案完成前不得描述成安全。
 
 ## 11. 下一步

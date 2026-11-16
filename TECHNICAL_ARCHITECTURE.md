@@ -1,6 +1,6 @@
 # 项目技术架构（Agent 与维护者入口）
 
-更新：2026-09-15。
+更新：2026-11-15。
 
 本文是仓库的架构地图，不重复收录每个玩法、协议或 UI 的实现细节。开发时先阅读 [AGENTS.md](AGENTS.md)，再按本文路由进入对应专题文档；代码与文档不一致时，以已验证的代码事实为准并同步修正文档。
 
@@ -56,7 +56,7 @@ Xiangqi.ThreeNetwork.Tests → Xiangqi.Core + Xiangqi.Transport
 | [Xiangqi.sln](Xiangqi.sln) | 应用、GameHost、Core、Transport 与两个控制台测试工程 |
 | [project.godot](project.godot) | Godot 主场景与渲染配置 |
 
-Steam 原生引用按 Windows 目标隔离。条件编译成功不能替代 Android 实机、跨设备 LAN 或 Steam 多账号验收；平台现状与构建依据见 [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md)。
+根目录 `global.json` 将构建 SDK 限定为稳定版 .NET 10（允许 `10.0.x` 新功能带与补丁，不滚动到预览版或更高主版本）；开发机需安装对应 x64 SDK。Steam 原生引用按 Windows 目标隔离。条件编译成功不能替代 Android 实机、跨设备 LAN 或 Steam 多账号验收；平台现状与构建依据见 [Godot 4.7 / .NET 10 迁移记录](docs/godot-4.7-migration.md)。
 
 ## 3. 稳定分层边界
 

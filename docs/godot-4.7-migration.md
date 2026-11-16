@@ -1,6 +1,20 @@
 # Godot 4.7 / .NET 10 迁移记录
 
-更新：2026-09-09。本文记录从 Godot 4.5.1 / .NET 8 到 Godot 4.7.2，以及桌面与测试升级到 .NET 10 的迁移边界、API 决策、验证证据和剩余平台风险。
+更新：2026-11-15。本文记录从 Godot 4.5.1 / .NET 8 到 Godot 4.7.2，以及桌面与测试升级到 .NET 10 的迁移边界、API 决策、验证证据和剩余平台风险。
+
+## Godot 编辑器构建的 SDK 选择
+
+2026-11-15 在仅安装 .NET SDK `11.0.100-rc.1.26425.128` 的机器上复现：`dotnet build Xiangqi.sln` 可以编译，但 Godot 4.7.2 的 `--editor --build-solutions --quit` 在 `GodotTools.ProjectEditor.ProjectUtils.Open` 与 `BuildSystem.AddLoggerArgument` 加载构建组件时抛出 `FileNotFoundException: System.Runtime, Version=11.0.0.0`，随后报告 build callback failed。因此命令行编译成功不能证明编辑器构建可用，单改主工程 TFM 为 `net9.0` 也不能解决 SDK 选择问题。
+
+修复在构建配置层完成，不新增业务抽象或改变棋规、协议、线程与资源所有权。根目录 [global.json](../global.json) 使用 `version=10.0.100`、`rollForward=latestFeature`、`allowPrerelease=false`，允许已安装的稳定版 `10.0.x` 功能带与补丁，拒绝自动选用 .NET 11 和预览版。SDK 选择独立于 TFM，匹配规则见 [Microsoft global.json 文档](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json)；桌面与测试保持 `net10.0`，Android 仍为 `net9.0`，共享库继续提供两个目标。
+
+开发机必须另行安装稳定版 .NET 10 x64 SDK；`global.json` 不负责下载安装，也不能用仅有的运行时代替 SDK。Windows 安装命令见 [README](../README.md)。安装后在仓库目录检查 `dotnet --version`，并重启原先已打开的 Godot 编辑器，让它重新选择运行时与 MSBuild。不要修改 Godot 安装目录的 DLL 或生成的 `runtimeconfig.json`，也不要通过启用跨主版本运行时滚动来掩盖工具链不匹配。
+
+实际 Windows 导出还发现本机缺少匹配的 `4.7.2.stable.mono` 模板。已从 [Godot 官方发布页](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable)下载 `Godot_v4.7.2-stable_mono_export_templates.tpz`，核对发布页 SHA-256 `92f8681e349ef1f90891b792da95e3b2b0bd1ed610b78018c58feb2d87e15a9d` 和包内版本后，只将 Windows x64 Debug/Release、两个控制台包装器、版本文件与中文等语言所需的 ICU 数据装入标准用户模板目录。使用 .NET 标准库 `ZipArchive` 按固定文件白名单提取，未引入依赖、替换 Godot 编辑器或把模板二进制加入仓库。其他开发机也需自行安装匹配模板，步骤见 [README 的 Windows 导出](../README.md#windows-导出)。
+
+导出后的 `--smoke-ui` 还暴露了测试夹具的磁盘路径假设：`CreateDeclarativeUiSmokeModule` 用 `File.ReadAllBytes` 读取已导入卡片，PCK 中没有对应的原始磁盘路径。该夹具现复用 Godot 的纹理加载和内存 PNG 编码，临时图像立即释放，未新增抽象或改变模块加载规则；调用与所有权见 [玩法模块测试](game-modules.md#10-兼容与测试)。
+
+验证入口包括解决方案构建、两个自运行测试、Android/Windows 串行条件构建，以及 Godot 自身的 `--headless --path . --editor --build-solutions --quit` 和 `--smoke-ui` / `--smoke-feedback` / `--smoke-three`。本次验证结果与未验证范围见文末；历史迁移证据保留如下。
 
 ## 已实施的 Godot 迁移
 
@@ -54,7 +68,7 @@ Android 未同步升级到 `net10.0`：使用 Godot 4.7.2 官方预编译模板�
 
 结论：在 Godot 4.7.2 下，Android `net10.0` **存在可试验的 Gradle 导出路径，但当前不能确认端到端可用或达到可发布支持级别**。继续迁移前需要准备官方要求的 Android SDK/JDK、在隔离分支安装 Godot 4.7.2 匹配的 Gradle build template，并依次验证 Debug APK、Release AAB、至少 arm64 真机启动、16 KiB 页兼容及现有 smoke；验证通过前保留 Android `net9.0`。
 
-## 本轮验证
+## 2026-09 迁移验证
 
 - `dotnet build .\Xiangqi.sln`：通过，0 警告、0 错误。
 - `dotnet run --project .\tests\Xiangqi.Core.Tests\Xiangqi.Core.Tests.csproj`：48/48 通过。
@@ -67,3 +81,17 @@ Android 未同步升级到 `net10.0`：使用 Godot 4.7.2 官方预编译模板�
 - Android `net10.0` arm64 托管 publish 探测：通过；最终 APK/AAB 导出因当前配置的 Android SDK 目录不存在而未执行。
 
 尚未验收：Android `net10.0` APK/AAB、Android 真机、Steam 双/三账号、跨设备 LAN、不同 GPU/分辨率人工视觉检查。构建成功、桌面运行通过都不替代这些平台验收。
+
+## 2026-11-15 构建修复验证
+
+- Windows x64 安装稳定版 SDK `10.0.404` / 运行时 `10.0.15`；保留已有 .NET 9 运行时与 .NET 11 预览 SDK。仓库内 `dotnet --version` 返回 `10.0.404`。
+- `dotnet build .\Xiangqi.sln`：通过，0 警告、0 错误。
+- 解决方案构建后，两个测试入口以 `--no-build --no-restore` 实际执行：核心 **108/108** 通过；三人网络的模拟与真实 TCP 三端签名握手、断线迁移、自动重连测试通过。
+- Android、Windows 条件构建按此顺序执行：均通过，0 警告、0 错误；运行 Godot 前最后构建 Windows。MSBuild 实际求值确认 Android 为 `net9.0` 且无 Steamworks.NET/SharpCompress，Windows 为 `net10.0` 且保留这两项桌面依赖。
+- 指定的 Godot `4.7.2.stable.mono.official.ed1daf0bf` 执行 `--headless --path . --editor --build-solutions --quit` 及 `--quit-after 10`：构建完成，退出码 0，未再出现 `System.Runtime 11.0.0.0` 加载异常。
+- 同一引擎依次执行 `--smoke-ui`、`--smoke-feedback`、`--smoke-three`：全部通过；覆盖六玩法入口、主题/反馈生命周期，以及三国三视角 405 次命中往返与 243 条拓扑边。
+- 修复测试夹具后重新执行 Android/Windows 条件构建和编辑器版 `--smoke-ui`：通过；实际 Windows Debug 导出到 `build/verification-dotnet10/Xiangqi.exe`，引擎进程退出码 0，产物自包含 .NET `10.0.15`。导出的 `Xiangqi.console.exe --headless -- --smoke-ui` 也通过，未在导出目录额外复制源 PNG。
+
+编辑器退出限制：带 Android 导出预设时，headless 编辑器退出仍会打印 `EditorSettings not instantiated yet ... export/android/shutdown_adb_on_exit`。本次用无脚本的最小项目验证：不带预设时不出现，复制同一导出预设后可复现，退出码仍为 0。这是独立于游戏 C# 代码的引擎编辑器退出问题；本次不修改引擎安装文件、不移除已有 Android 预设，也不把该日志表述为已修复。游戏内三个 smoke 没有此日志。
+
+尚未验收：Android APK/AAB 导出和真机运行、Steam 多账号、跨设备 LAN，以及 GPU/分辨率的人工视觉效果。本次 smoke 使用 headless，不等于视觉验收。

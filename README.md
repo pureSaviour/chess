@@ -10,9 +10,12 @@
 
 ## 运行
 
-环境变量 `GODOT_NEW_PATH` 应指向 Godot 4.7.2 .NET 发行版目录。用该目录中的 Godot 可执行文件打开本目录，或在 PowerShell 中运行：
+先安装 **.NET 10 稳定版 x64 SDK**（仅安装运行时不足以构建）。根目录 `global.json` 选择已安装的最新稳定版 `10.0.x` SDK，不接受 .NET 11 或预览版；SDK 与项目目标框架分别配置。Windows 可用 `winget install --id Microsoft.DotNet.SDK.10 --exact --source winget` 安装，然后在项目目录执行 `dotnet --version` 确认结果为 `10.0.x`。
+
+环境变量 `GODOT_NEW_PATH` 应指向 Godot 4.7.2 .NET 发行版目录。可只在当前 PowerShell 设置临时变量，用该目录中的 Godot 可执行文件打开本目录：
 
 ```powershell
+$env:GODOT_NEW_PATH = 'D:\Tools\godot\Godot_v4.7.2-stable_mono_win64\Godot_v4.7.2-stable_mono_win64'
 & (Join-Path $env:GODOT_NEW_PATH 'Godot_v4.7.2-stable_mono_win64.exe') --path .
 ```
 
@@ -22,6 +25,16 @@
 dotnet build .\Xiangqi.sln
 dotnet run --project .\tests\Xiangqi.Core.Tests\Xiangqi.Core.Tests.csproj
 dotnet run --project .\tests\Xiangqi.ThreeNetwork.Tests\Xiangqi.ThreeNetwork.Tests.csproj
+```
+
+### Windows 导出
+
+首次导出前，在 Godot 的“编辑器 → 管理导出模板”安装与引擎匹配的 **4.7.2 Mono/.NET 模板**。离线安装包是 [Godot 官方 4.7.2 发布页](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable)中的 `Godot_v4.7.2-stable_mono_export_templates.tpz`，不要使用不含 `mono` 的普通模板；安装位置为 `%APPDATA%\Godot\export_templates\4.7.2.stable.mono`。仅安装编辑器和 .NET SDK 不能代替导出模板；Windows x64 预设会检查 `windows_debug_x86_64.exe` 和 `windows_release_x86_64.exe`。
+
+```powershell
+New-Item -ItemType Directory .\build\windows -Force | Out-Null
+& (Join-Path $env:GODOT_NEW_PATH 'Godot_v4.7.2-stable_mono_win64_console.exe') `
+    --headless --path . --export-debug 'Windows Desktop' .\build\windows\Xiangqi.exe
 ```
 
 ### Android 导出

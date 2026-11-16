@@ -155,9 +155,15 @@ public partial class Main
         var package = new GamePackageManifest(1, module, [route], new Version(1, 0),
             GamePackageExecutionMode.Sandboxed, GamePackagePermissions.None, "内置 smoke",
             null, []);
-        var image = File.ReadAllBytes(ProjectSettings.GlobalizePath(
-            "res://assets/gallery/classic-xiangqi-card.png"));
-        return new(package, new(9, 9, 5, "黑方", "白方", 0), image, ".png");
+        // Imported textures live in the PCK after export, not at a globalized OS path.
+        // Keep the cached texture alive; only the temporary image copy belongs to this fixture.
+        var texture = GD.Load<Texture2D>("res://assets/gallery/classic-xiangqi-card.png")
+            ?? throw new InvalidDataException("UI smoke card texture could not be loaded.");
+        using var image = texture.GetImage();
+        var cardBytes = image.SavePngToBuffer();
+        if (cardBytes.Length == 0)
+            throw new InvalidDataException("UI smoke card texture could not be encoded as PNG.");
+        return new(package, new(9, 9, 5, "黑方", "白方", 0), cardBytes, ".png");
     }
 
     private void OnGameModuleUpdatesChecked(IReadOnlyList<GameModuleUpdateEntry> thirdParty)
